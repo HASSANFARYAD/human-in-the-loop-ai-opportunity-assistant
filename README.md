@@ -15,6 +15,7 @@ The app is intentionally human-in-the-loop. It helps you find and prioritize opp
 - Generates editable job application materials for job opportunities.
 - Tracks statuses, notes, deadlines, and reminders.
 - Runs optional scheduler jobs for Gmail alerts, public source discovery, reminders, and daily summaries.
+- Supports separate user accounts so each user only sees and deletes their own data.
 
 ## Safety Boundary
 
@@ -57,17 +58,47 @@ These sources are used because they expose structured public APIs or feeds. Dire
 
 ## App Workflow
 
-1. Open `Profile` and save your CV, skills, roles, locations, and preferences.
-2. Open `Ingest Opportunities`.
-3. Use one of the ingest methods:
+1. Register or log in.
+2. Open `Profile` and save your CV, skills, roles, locations, and preferences.
+3. Open `Ingest Opportunities`.
+4. Use one of the ingest methods:
    - `Manual / pasted`: paste a job, hackathon, webinar, competition, or URL text.
    - `Public discovery`: search public job APIs by keyword.
    - `CSV upload`: import structured opportunity lists.
    - `Gmail read-only`: import matching alert emails after OAuth setup.
-4. Open `Review Queue`.
-5. Click `Score all unscored opportunities`.
-6. Open `Opportunity Detail` to inspect scoring, update status, add notes, and generate job materials.
-7. Use `Reminders` for follow-ups, deadlines, interview dates, event dates, and registration deadlines.
+5. Open `Review Queue`.
+6. Click `Score all unscored opportunities`.
+7. Open `Opportunity Detail` to inspect scoring, update status, add notes, and generate job materials.
+8. Use `Reminders` for follow-ups, deadlines, interview dates, event dates, and registration deadlines.
+
+## Authentication And User Data
+
+Streamlit requires users to register or log in before using the app.
+
+Existing single-user data is migrated to a default local account:
+
+```text
+Email: local@example.com
+Password: ChangeMe123!
+```
+
+Set `LOCAL_USER_PASSWORD` before migration if you want a different default password.
+
+FastAPI exposes:
+
+- `POST /api/v1/auth/register`
+- `POST /api/v1/auth/login`
+- `GET /api/v1/auth/me`
+
+Protected API endpoints require a bearer token:
+
+```text
+Authorization: Bearer <access_token>
+```
+
+Data is scoped by `user_id`. Profiles, opportunities, evaluations, materials, applications, and reminders are only returned for the signed-in user.
+
+The privacy delete action is user-scoped. `Delete my stored data` removes only the signed-in user's profile, opportunities, evaluations, materials, statuses, and reminders. It does not delete other users' data.
 
 ## Automatic Mode
 
@@ -119,6 +150,8 @@ APP_DB_PATH=data/job_assistant.sqlite3
 GOOGLE_CREDENTIALS_FILE=credentials.json
 GOOGLE_TOKEN_FILE=token.json
 SCHEDULER_ENABLED=true
+JWT_SECRET_KEY=replace-this-with-a-long-random-secret
+LOCAL_USER_PASSWORD=replace-default-local-password
 ```
 
 `OPENAI_API_KEY` is optional. Without it, the app still runs with local rule-based scoring and fallback draft generation.
@@ -195,6 +228,7 @@ data/job_assistant.sqlite3
 
 Main tables:
 
+- `users`
 - `profile`
 - `jobs`
 - `evaluations`
@@ -206,18 +240,18 @@ The `jobs` table stores all opportunity types, not only jobs.
 
 ## Production Readiness
 
-This is still an MVP, not production-ready multi-user software.
+This is still an MVP, but user-level data isolation is now implemented.
 
 Known production gaps:
 
-- no real authentication/authorization on the API
 - permissive CORS in development config
 - SQLite/local file storage
 - local OAuth token handling
 - scheduler logs reminders but does not send push/email notifications
 - limited automated test coverage
+- default `JWT_SECRET_KEY` must be replaced before deployment
 
-Before production use, add auth, hardened configuration, managed database/storage, proper notification delivery, tests, monitoring, and deployment-specific secrets management.
+Before production use, harden configuration, use managed database/storage, replace all deployment secrets, add proper notification delivery, tests, monitoring, and rate limiting.
 
 ## Notes On Source Compliance
 

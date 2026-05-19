@@ -56,6 +56,7 @@ class Settings(BaseSettings):
         case_sensitive = False
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"
 
     @property
     def is_production(self) -> bool:

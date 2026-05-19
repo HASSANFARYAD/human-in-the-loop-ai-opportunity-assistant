@@ -7,9 +7,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from job_assistant.auth import authenticate_user, create_access_token, current_user, public_user, register_user
 from job_assistant.db import (
     create_reminder,
-    delete_all_data,
+    delete_user_data,
     due_reminders,
     get_evaluation,
     get_job,
@@ -64,15 +65,55 @@ class ReminderCreate(BaseModel):
     note: Optional[str] = None
 
 
+class UserRegister(BaseModel):
+    email: str
+    password: str
+    full_name: str = ""
+
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+
 @router.get("/health")
 async def health_check():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
 
-@router.get("/profile")
-async def get_user_profile():
+@router.post("/auth/register")
+async def register(user_data: UserRegister):
+    if len(user_data.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     try:
-        profile = get_profile()
+        user = register_user(user_data.email, user_data.password, user_data.full_name)
+        token = create_access_token(user)
+        return {"access_token": token, "token_type": "bearer", "user": public_user(user)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error registering user: {e}")
+        raise HTTPException(status_code=500, detail="Failed to register user")
+
+
+@router.post("/auth/login")
+async def login(login_data: UserLogin):
+    user = authenticate_user(login_data.email, login_data.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    token = create_access_token(user)
+    return {"access_token": token, "token_type": "bearer", "user": public_user(user)}
+
+
+@router.get("/auth/me")
+async def me(user: dict = Depends(current_user)):
+    return public_user(user)
+
+
+@router.get("/profile")
+async def get_user_profile(user: dict = Depends(current_user)):
+    try:
+        profile = get_profile(user["id"])
         return profile or {}
     except Exception as e:
         logger.error(f"Error getting profile: {e}")
@@ -80,9 +121,9 @@ async def get_user_profile():
 
 
 @router.post("/profile")
-async def update_profile(profile_data: ProfileCreate):
+async def update_profile(profile_data: ProfileCreate, user: dict = Depends(current_user)):
     try:
-        upsert_profile(profile_data.dict())
+        upsert_profile(profile_data.dict(), user["id"])
         return {"status": "success", "message": "Profile updated"}
     except Exception as e:
         logger.error(f"Error updating profile: {e}")
@@ -90,9 +131,9 @@ async def update_profile(profile_data: ProfileCreate):
 
 
 @router.get("/jobs")
-async def list_all_jobs():
+async def list_all_jobs(user: dict = Depends(current_user)):
     try:
-        jobs = list_jobs()
+        jobs = list_jobs(user["id"])
         return jobs
     except Exception as e:
         logger.error(f"Error listing jobs: {e}")
@@ -100,9 +141,9 @@ async def list_all_jobs():
 
 
 @router.post("/jobs")
-async def create_job(job_data: JobCreate):
+async def create_job(job_data: JobCreate, user: dict = Depends(current_user)):
     try:
-        job_id = insert_job(job_data.dict())
+        job_id = insert_job(job_data.dict(), user["id"])
         return {"id": job_id, "status": "success", "message": "Job created"}
     except Exception as e:
         logger.error(f"Error creating job: {e}")
@@ -110,9 +151,9 @@ async def create_job(job_data: JobCreate):
 
 
 @router.get("/jobs/{job_id}")
-async def get_job_detail(job_id: int):
+async def get_job_detail(job_id: int, user: dict = Depends(current_user)):
     try:
-        job = get_job(job_id)
+        job = get_job(job_id, user["id"])
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
         return job
@@ -124,18 +165,18 @@ async def get_job_detail(job_id: int):
 
 
 @router.post("/jobs/{job_id}/score")
-async def score_single_job(job_id: int):
+async def score_single_job(job_id: int, user: dict = Depends(current_user)):
     try:
-        profile = get_profile()
+        profile = get_profile(user["id"])
         if not profile:
             raise HTTPException(status_code=400, detail="Profile not configured")
 
-        job = get_job(job_id)
+        job = get_job(job_id, user["id"])
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
 
         evaluation = score_job(profile, job)
-        save_evaluation(job_id, evaluation)
+        save_evaluation(job_id, evaluation, user["id"])
         return evaluation
     except HTTPException:
         raise
@@ -145,23 +186,23 @@ async def score_single_job(job_id: int):
 
 
 @router.post("/jobs/{job_id}/generate-materials")
-async def generate_job_materials(job_id: int):
+async def generate_job_materials(job_id: int, user: dict = Depends(current_user)):
     try:
-        profile = get_profile()
+        profile = get_profile(user["id"])
         if not profile:
             raise HTTPException(status_code=400, detail="Profile not configured")
 
-        job = get_job(job_id)
+        job = get_job(job_id, user["id"])
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
 
-        evaluation = get_evaluation(job_id)
+        evaluation = get_evaluation(job_id, user["id"])
         if not evaluation:
             evaluation = score_job(profile, job)
-            save_evaluation(job_id, evaluation)
+            save_evaluation(job_id, evaluation, user["id"])
 
         materials = generate_materials(profile, job, evaluation)
-        save_materials(job_id, materials)
+        save_materials(job_id, materials, user["id"])
         return materials
     except HTTPException:
         raise
@@ -171,9 +212,9 @@ async def generate_job_materials(job_id: int):
 
 
 @router.get("/jobs/{job_id}/materials")
-async def get_job_materials(job_id: int):
+async def get_job_materials(job_id: int, user: dict = Depends(current_user)):
     try:
-        materials = get_materials(job_id)
+        materials = get_materials(job_id, user["id"])
         return materials or {}
     except Exception as e:
         logger.error(f"Error getting materials: {e}")
@@ -181,9 +222,9 @@ async def get_job_materials(job_id: int):
 
 
 @router.patch("/jobs/{job_id}/status")
-async def update_job_status(job_id: int, status: str, notes: str = ""):
+async def update_job_status(job_id: int, status: str, notes: str = "", user: dict = Depends(current_user)):
     try:
-        update_status(job_id, status, notes)
+        update_status(job_id, status, notes, user["id"])
         return {"status": "success", "message": "Job status updated"}
     except Exception as e:
         logger.error(f"Error updating status: {e}")
@@ -191,9 +232,9 @@ async def update_job_status(job_id: int, status: str, notes: str = ""):
 
 
 @router.get("/reminders")
-async def list_reminders():
+async def list_reminders(user: dict = Depends(current_user)):
     try:
-        reminders = due_reminders()
+        reminders = due_reminders(user["id"])
         return reminders
     except Exception as e:
         logger.error(f"Error listing reminders: {e}")
@@ -201,13 +242,14 @@ async def list_reminders():
 
 
 @router.post("/reminders")
-async def create_reminder_endpoint(reminder_data: ReminderCreate):
+async def create_reminder_endpoint(reminder_data: ReminderCreate, user: dict = Depends(current_user)):
     try:
         create_reminder(
             reminder_data.job_id,
             reminder_data.kind,
             reminder_data.remind_at,
-            reminder_data.note
+            reminder_data.note or "",
+            user["id"],
         )
         return {"status": "success", "message": "Reminder created"}
     except Exception as e:
@@ -216,10 +258,10 @@ async def create_reminder_endpoint(reminder_data: ReminderCreate):
 
 
 @router.post("/data/clear")
-async def clear_all_data():
+async def clear_my_data(user: dict = Depends(current_user)):
     try:
-        delete_all_data()
-        return {"status": "success", "message": "All data deleted"}
+        delete_user_data(user["id"])
+        return {"status": "success", "message": "Your data was deleted"}
     except Exception as e:
         logger.error(f"Error clearing data: {e}")
         raise HTTPException(status_code=500, detail="Failed to clear data")

@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 
 
 class JobAssistantScheduler:
-    def __init__(self):
+    def __init__(self, user_id: int = 1):
+        self.user_id = user_id
         self.scheduler = BackgroundScheduler()
         self.is_running = False
 
@@ -99,7 +100,7 @@ class JobAssistantScheduler:
                         opportunity_type="auto",
                     )
                     job["date_received"] = message.get("date_received", "")
-                    insert_job(job)
+                    insert_job(job, self.user_id)
                     count += 1
                 except Exception as e:
                     logger.error(f"Failed to process Gmail message: {e}")
@@ -110,7 +111,7 @@ class JobAssistantScheduler:
 
     def _check_public_sources(self):
         try:
-            profile = get_profile()
+            profile = get_profile(self.user_id)
             query = " ".join(
                 str(profile.get(key, ""))
                 for key in ["target_roles", "skills", "industries"]
@@ -128,7 +129,7 @@ class JobAssistantScheduler:
             )
             count = 0
             for opportunity in opportunities:
-                insert_job(opportunity)
+                insert_job(opportunity, self.user_id)
                 count += 1
             logger.info(f"Imported {count} public opportunity/opportunities")
         except Exception as e:
@@ -136,7 +137,7 @@ class JobAssistantScheduler:
 
     def _check_reminders(self):
         try:
-            reminders = due_reminders()
+            reminders = due_reminders(self.user_id)
             if reminders:
                 logger.info(f"Found {len(reminders)} due reminder(s)")
         except Exception as e:
@@ -144,8 +145,8 @@ class JobAssistantScheduler:
 
     def _daily_summary(self):
         try:
-            jobs = list_jobs()
-            profile = get_profile()
+            jobs = list_jobs(self.user_id)
+            profile = get_profile(self.user_id)
 
             if not profile:
                 logger.info("No profile configured, skipping daily summary")
@@ -172,22 +173,24 @@ class JobAssistantScheduler:
         )
 
 
-# Global scheduler instance
-_scheduler_instance = None
+# Global scheduler instances keyed by user id.
+_scheduler_instances: dict[int, JobAssistantScheduler] = {}
 
 
-def get_scheduler():
-    global _scheduler_instance
-    if _scheduler_instance is None:
-        _scheduler_instance = JobAssistantScheduler()
-    return _scheduler_instance
+def get_scheduler(user_id: int = 1):
+    if user_id not in _scheduler_instances:
+        _scheduler_instances[user_id] = JobAssistantScheduler(user_id)
+    return _scheduler_instances[user_id]
 
 
-def start_scheduler():
-    scheduler = get_scheduler()
+def start_scheduler(user_id: int = 1):
+    scheduler = get_scheduler(user_id)
     scheduler.start()
 
 
-def stop_scheduler():
-    scheduler = get_scheduler()
-    scheduler.stop()
+def stop_scheduler(user_id: int | None = None):
+    if user_id is not None:
+        get_scheduler(user_id).stop()
+        return
+    for scheduler in _scheduler_instances.values():
+        scheduler.stop()
