@@ -15,6 +15,20 @@ from .openai_client import ask_json
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 URL_RE = re.compile(r"https?://[^\s<>\)\]\"']+")
+OPPORTUNITY_TYPES = {"job", "hackathon", "competition", "webinar", "other"}
+
+
+def infer_opportunity_type(text: str, source: str = "") -> str:
+    haystack = f"{source} {text}".lower()
+    if any(word in haystack for word in ["hackathon", "devpost", "buildathon"]):
+        return "hackathon"
+    if any(word in haystack for word in ["webinar", "workshop", "seminar", "online event"]):
+        return "webinar"
+    if any(word in haystack for word in ["competition", "contest", "challenge", "championship"]):
+        return "competition"
+    if any(word in haystack for word in ["job", "role", "hiring", "recruiter", "apply", "career"]):
+        return "job"
+    return "other"
 
 
 def read_uploaded_cv(file) -> str:
@@ -36,6 +50,9 @@ def clean_html(text: str) -> str:
 
 def extract_job_from_text(raw: str, source: str = "Manual", opportunity_type: str = "job") -> Dict:
     text = clean_html(raw)
+    if opportunity_type == "auto":
+        opportunity_type = infer_opportunity_type(text, source)
+    opportunity_type = opportunity_type if opportunity_type in OPPORTUNITY_TYPES else "other"
     urls = URL_RE.findall(text)
     emails = EMAIL_RE.findall(text)
     lines = [l.strip() for l in text.splitlines() if l.strip()]

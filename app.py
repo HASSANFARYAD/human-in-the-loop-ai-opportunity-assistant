@@ -28,10 +28,19 @@ from job_assistant.db import (
 from job_assistant.services.generation import generate_materials
 from job_assistant.services.gmail_ingest import fetch_job_alert_messages
 from job_assistant.services.parsing import extract_job_from_text, jobs_from_csv, read_uploaded_cv
+from job_assistant.services.public_discovery import discover_public_opportunities
 from job_assistant.services.scoring import score_job
 
 load_dotenv()
 init_db()
+
+PUBLIC_DISCOVERY_SOURCES = [
+    "RemoteJobs.org",
+    "Arbeitnow",
+    "Remotive",
+    "Jobicy",
+    "Hacker News Who is hiring",
+]
 
 st.set_page_config(page_title="Human-in-the-loop Opportunity Assistant", layout="wide")
 st.title("Human-in-the-loop AI Opportunity Assistant")
@@ -39,6 +48,31 @@ st.caption("Track jobs, competitions, hackathons, and webinars. Safe by design: 
 
 with st.sidebar:
     page = st.radio("Navigate", ["Profile", "Ingest Opportunities", "Review Queue", "Opportunity Detail", "Reminders", "Privacy"])
+    st.divider()
+    st.write("**Automatic import**")
+    st.caption("Automatic import reads Gmail alerts only. It does not search LinkedIn or private sites.")
+    auto_col1, auto_col2 = st.columns(2)
+    with auto_col1:
+        if st.button("Start", key="start_scheduler"):
+            try:
+                from job_assistant.scheduler import start_scheduler
+
+                start_scheduler()
+                st.session_state["scheduler_started"] = True
+                st.success("Scheduler started.")
+            except Exception as exc:
+                st.error(f"Scheduler failed: {exc}")
+    with auto_col2:
+        if st.button("Stop", key="stop_scheduler"):
+            try:
+                from job_assistant.scheduler import stop_scheduler
+
+                stop_scheduler()
+                st.session_state["scheduler_started"] = False
+                st.success("Scheduler stopped.")
+            except Exception as exc:
+                st.error(f"Scheduler failed: {exc}")
+    st.caption("Status: running" if st.session_state.get("scheduler_started") else "Status: manual")
     st.divider()
     st.write("**Allowed workflow**")
     st.write("Process alerts, pasted descriptions, public/manual URLs, CSVs, and optional Gmail read-only messages.")
@@ -73,7 +107,7 @@ if page == "Profile":
 
 elif page == "Ingest Opportunities":
     st.header("2. Opportunity source ingestion")
-    source_tab, csv_tab, gmail_tab = st.tabs(["Manual / pasted", "CSV upload", "Gmail read-only"])
+    source_tab, public_tab, csv_tab, gmail_tab = st.tabs(["Manual / pasted", "Public discovery", "CSV upload", "Gmail read-only"])
 
     with source_tab:
         st.subheader("Manual URL or pasted opportunity text")
@@ -86,6 +120,33 @@ elif page == "Ingest Opportunities":
             st.success(f"Saved {opportunity_type} #{job_id}: {job.get('title')} at {job.get('company')}")
             st.json(job)
 
+    with public_tab:
+        st.subheader("Public job discovery")
+        st.write("Uses public no-auth job APIs. It avoids direct Indeed scraping and direct Devpost crawling.")
+        public_query = st.text_input("Search keywords", value=profile.get("target_roles", "") if (profile := get_profile()) else "")
+        public_sources = st.multiselect("Sources", PUBLIC_DISCOVERY_SOURCES, default=PUBLIC_DISCOVERY_SOURCES)
+        public_limit = st.slider("Max per source", 1, 50, 20)
+        if st.button("Find public jobs", disabled=not public_sources):
+            try:
+                found = discover_public_opportunities(public_query, public_sources, public_limit)
+                st.session_state["public_discovery_results"] = found
+                st.success(f"Found {len(found)} public job(s). Review before importing.")
+            except Exception as exc:
+                st.error(f"Public discovery failed: {exc}")
+
+        found = st.session_state.get("public_discovery_results", [])
+        if found:
+            found_df = pd.DataFrame(found)
+            st.dataframe(
+                found_df[[c for c in ["title", "company", "location", "source", "url", "description"] if c in found_df.columns]],
+                use_container_width=True,
+                hide_index=True,
+            )
+            if st.button("Import discovered jobs"):
+                ids = [insert_job(item) for item in found]
+                st.success(f"Imported {len(ids)} discovered job(s).")
+                st.session_state["public_discovery_results"] = []
+
     with csv_tab:
         st.subheader("CSV upload")
         st.write("Expected columns include title, company, location, remote_type, url, source, description, salary_min, salary_max, deadline, opportunity_type. Extra columns are ignored.")
@@ -97,20 +158,25 @@ elif page == "Ingest Opportunities":
             st.success(f"Imported {len(ids)} opportunity/opportunities.")
 
     with gmail_tab:
-        st.subheader("Gmail job alerts")
-        st.write("Uses Gmail read-only OAuth. This reads alert/recruiter emails only; it does not modify Gmail or apply anywhere.")
-        query = st.text_input("Gmail search query", value='("job alert" OR "new jobs" OR recruiter OR "is hiring") newer_than:30d')
+        st.subheader("Gmail alerts")
+        st.write("Use this after adding Google OAuth files. Fetch now imports matching Gmail alerts once; Start in the sidebar runs the same kind of import every 30 minutes.")
+        gmail_opportunity_type = st.selectbox("Classify Gmail results as", ["auto", *OPPORTUNITY_TYPES], index=0)
+        query = st.text_input("Gmail search query", value='("job alert" OR "new jobs" OR recruiter OR "is hiring" OR hackathon OR webinar OR competition OR contest OR challenge) newer_than:30d')
         max_results = st.slider("Max emails", 1, 50, 10)
         if st.button("Fetch Gmail alerts"):
             try:
                 messages = fetch_job_alert_messages(query=query, max_results=max_results)
                 count = 0
                 for m in messages:
-                    job = extract_job_from_text(f"Subject: {m['subject']}\nFrom: {m['from']}\n\n{m['body']}", source="Gmail")
+                    job = extract_job_from_text(
+                        f"Subject: {m['subject']}\nFrom: {m['from']}\n\n{m['body']}",
+                        source="Gmail",
+                        opportunity_type=gmail_opportunity_type,
+                    )
                     job["date_received"] = m.get("date_received", "")
                     insert_job(job)
                     count += 1
-                st.success(f"Imported {count} Gmail-derived job(s).")
+                st.success(f"Imported {count} Gmail-derived opportunity/opportunities.")
             except Exception as exc:
                 st.error(f"Gmail ingestion failed: {exc}")
 

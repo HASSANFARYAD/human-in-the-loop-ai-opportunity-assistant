@@ -11,6 +11,7 @@ from job_assistant.db import due_reminders, get_profile, list_jobs
 from job_assistant.services.gmail_ingest import fetch_job_alert_messages
 from job_assistant.services.parsing import extract_job_from_text
 from job_assistant.db import insert_job
+from job_assistant.services.public_discovery import discover_public_opportunities
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,16 @@ class JobAssistantScheduler:
             max_instances=1,
         )
 
+        # Pull public no-auth job APIs every 6 hours
+        self.scheduler.add_job(
+            self._check_public_sources,
+            trigger=IntervalTrigger(hours=6),
+            id="public_source_check",
+            name="Check public opportunity sources",
+            replace_existing=True,
+            max_instances=1,
+        )
+
         # Daily summary at 8 AM
         self.scheduler.add_job(
             self._daily_summary,
@@ -72,7 +83,7 @@ class JobAssistantScheduler:
     def _check_gmail_alerts(self):
         try:
             logger.info("Running Gmail check job")
-            query = '("job alert" OR "new jobs" OR recruiter OR "is hiring") newer_than:1d'
+            query = '("job alert" OR "new jobs" OR recruiter OR "is hiring" OR hackathon OR webinar OR competition OR contest OR challenge) newer_than:1d'
             messages = fetch_job_alert_messages(query=query, max_results=20)
 
             if not messages:
@@ -84,7 +95,8 @@ class JobAssistantScheduler:
                 try:
                     job = extract_job_from_text(
                         f"Subject: {message['subject']}\nFrom: {message['from']}\n\n{message['body']}",
-                        source="Gmail"
+                        source="Gmail",
+                        opportunity_type="auto",
                     )
                     job["date_received"] = message.get("date_received", "")
                     insert_job(job)
@@ -95,6 +107,32 @@ class JobAssistantScheduler:
             logger.info(f"Successfully imported {count} new job(s) from Gmail")
         except Exception as e:
             logger.error(f"Gmail check failed: {e}")
+
+    def _check_public_sources(self):
+        try:
+            profile = get_profile()
+            query = " ".join(
+                str(profile.get(key, ""))
+                for key in ["target_roles", "skills", "industries"]
+                if profile.get(key)
+            ).strip()
+            if not query:
+                logger.info("No profile keywords configured, skipping public source discovery")
+                return
+
+            logger.info("Running public source discovery")
+            opportunities = discover_public_opportunities(
+                query=query,
+                sources=["RemoteJobs.org", "Arbeitnow", "Remotive", "Jobicy", "Hacker News Who is hiring"],
+                limit_per_source=20,
+            )
+            count = 0
+            for opportunity in opportunities:
+                insert_job(opportunity)
+                count += 1
+            logger.info(f"Imported {count} public opportunity/opportunities")
+        except Exception as e:
+            logger.error(f"Public source discovery failed: {e}")
 
     def _check_reminders(self):
         try:
