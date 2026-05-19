@@ -1,0 +1,4 @@
+title,company,location,remote_type,url,source,description,salary_min,salary_max,deadline
+Senior Full Stack Engineer,Acme AI,Remote,Remote,https://example.com/jobs/1,CSV,"Build Python and React applications with AI features. Need 6+ years, PostgreSQL, cloud, APIs.",130000,170000,2026-06-15
+Product Engineer,Nova Health,London,Hybrid,https://example.com/jobs/2,CSV,"Work across product, backend, and frontend. Healthcare experience nice to have. Sponsorship not available.",90000,120000,
+AI Solutions Architect,DataBridge,New York,On-site,https://example.com/jobs/3,CSV,"Design AI workflows for enterprise clients. Requires architecture, Python, stakeholder management, and US work authorization.",150000,190000,2026-05-30
