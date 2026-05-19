@@ -43,44 +43,208 @@ PUBLIC_DISCOVERY_SOURCES = [
     "Hacker News Who is hiring",
 ]
 
-st.set_page_config(page_title="Human-in-the-loop Opportunity Assistant", layout="wide")
-st.title("Human-in-the-loop AI Opportunity Assistant")
-st.caption("Track jobs, competitions, hackathons, and webinars. Safe by design: no scraping, no auto-apply, no automatic submit clicks.")
-
+st.set_page_config(layout="wide")
 
 def require_streamlit_user() -> dict:
     if st.session_state.get("user"):
         return st.session_state["user"]
 
-    st.subheader("Sign in")
-    login_tab, register_tab = st.tabs(["Login", "Register"])
-    with login_tab:
-        with st.form("login_form"):
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            if st.form_submit_button("Login"):
-                user = authenticate_user(email, password)
-                if user:
-                    st.session_state["user"] = public_user(user)
-                    st.rerun()
-                st.error("Invalid email or password.")
-    with register_tab:
-        with st.form("register_form"):
-            full_name = st.text_input("Full name")
-            email = st.text_input("Email", key="register_email")
-            password = st.text_input("Password", type="password", key="register_password")
-            if st.form_submit_button("Create account"):
-                if len(password) < 8:
-                    st.error("Password must be at least 8 characters.")
-                else:
-                    try:
-                        user = register_user(email, password, full_name)
+    st.markdown(
+        """
+        <style>
+        .auth-container {
+            max-width: 980px;
+            margin: 0 auto;
+            padding-top: 1.5rem;
+        }
+
+        .auth-hero {
+            background: linear-gradient(135deg, #eef4ff 0%, #f8fbff 100%);
+            border: 1px solid #dbeafe;
+            border-radius: 22px;
+            padding: 2rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .auth-hero h1 {
+            color: #000000;
+            font-size: 2.1rem;
+            margin-bottom: 0.4rem;
+        }
+
+        .auth-hero p {
+            font-size: 1rem;
+            color: #475569;
+            margin-bottom: 0;
+        }
+
+        .security-card {
+            background: #ecfdf5;
+            border: 1px solid #bbf7d0;
+            border-left: 6px solid #22c55e;
+            border-radius: 16px;
+            padding: 1rem 1.2rem;
+            margin: 1rem 0;
+            color: #14532d;
+        }
+
+        .demo-card {
+            background: #fffbeb;
+            border: 1px solid #fde68a;
+            border-left: 6px solid #f59e0b;
+            border-radius: 16px;
+            padding: 1rem 1.2rem;
+            margin: 1rem 0;
+            color: #78350f;
+        }
+
+        .auth-note {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            padding: 1rem;
+            margin-top: 1rem;
+            color: #334155;
+        }
+
+        .small-muted {
+            color: #64748b;
+            font-size: 0.92rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="auth-container">', unsafe_allow_html=True)
+
+    st.markdown(
+        """
+        <div class="auth-hero">
+            <h1>Human-in-the-loop Opportunity Assistant</h1>
+            <p>
+                Sign in to manage your jobs, opportunities, reminders, profile, and generated materials safely.
+                Your account keeps your data separated from other users.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    
+
+    left_col, right_col = st.columns([1.1, 0.9], gap="large")
+
+    with left_col:
+        st.subheader("Welcome")
+        st.write(
+            """
+            This assistant helps you track jobs, competitions, hackathons, webinars, and other opportunities.
+            It is designed to keep you in control.
+            """
+        )
+
+        st.markdown(
+            """
+            <div class="auth-note">
+                <strong>Why registration is required</strong><br>
+                Registration makes sure that saved data belongs to the correct user.
+                This is especially important for the Privacy section, because deleting data should only delete
+                the records connected to the currently signed-in account.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            """
+            <div class="security-card">
+                <strong>Your data is secure and user-specific.</strong><br>
+                Your profile, saved opportunities, evaluations, generated materials, statuses, notes, and reminders
+                are linked to your registered account.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+        st.markdown(
+            """
+            <div class="demo-card">
+                <strong>This product is currently in demo phase.</strong><br>
+                You can test the assistant safely. If you want to remove your data completely, go to the
+                <strong>Privacy</strong> page after signing in and choose <strong>Delete my stored data</strong>.
+                This removes data for the currently signed-in user only.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            """
+            <p class="small-muted">
+                The app does not auto-apply to jobs, does not click submit buttons, and does not scrape private pages.
+            </p>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with right_col:
+        st.subheader("Access your workspace")
+
+        login_tab, register_tab = st.tabs(["Sign in", "Create account"])
+
+        with login_tab:
+            with st.form("login_form"):
+                email = st.text_input("Email", placeholder="you@example.com")
+                password = st.text_input("Password", type="password", placeholder="Enter your password")
+
+                submitted = st.form_submit_button("Sign in", use_container_width=True)
+
+                if submitted:
+                    user = authenticate_user(email, password)
+                    if user:
                         st.session_state["user"] = public_user(user)
                         st.rerun()
-                    except ValueError as exc:
-                        st.error(str(exc))
-    st.stop()
+                    else:
+                        st.error("Invalid email or password.")
 
+        with register_tab:
+            with st.form("register_form"):
+                full_name = st.text_input("Full name", placeholder="Your name")
+                email = st.text_input("Email", key="register_email", placeholder="you@example.com")
+                password = st.text_input(
+                    "Password",
+                    type="password",
+                    key="register_password",
+                    placeholder="At least 8 characters",
+                )
+
+                accepted_demo_notice = st.checkbox(
+                    "I understand this is a demo phase and I can delete my stored data from the Privacy page."
+                )
+
+                submitted = st.form_submit_button("Create account", use_container_width=True)
+
+                if submitted:
+                    if not full_name.strip():
+                        st.error("Please enter your full name.")
+                    elif not email.strip():
+                        st.error("Please enter your email address.")
+                    elif len(password) < 8:
+                        st.error("Password must be at least 8 characters.")
+                    elif not accepted_demo_notice:
+                        st.error("Please confirm that you understand the demo and data deletion notice.")
+                    else:
+                        try:
+                            user = register_user(email, password, full_name)
+                            st.session_state["user"] = public_user(user)
+                            st.rerun()
+                        except ValueError as exc:
+                            st.error(str(exc))
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.stop()
 
 current_user = require_streamlit_user()
 current_user_id = int(current_user["id"])
@@ -347,9 +511,46 @@ elif page == "Reminders":
 
 elif page == "Privacy":
     st.header("9. Privacy and security")
-    st.write("Data is stored in your local SQLite database. API keys and OAuth credentials are loaded from environment variables or local files and should not be committed to git.")
-    st.write("The app never submits applications, never clicks apply buttons, never logs into LinkedIn, and never scrapes private pages.")
-    st.warning("Danger zone: delete all local profile, jobs, evaluations, materials, statuses, and reminders.")
-    if st.button("Delete my stored data"):
+
+    st.info(
+        """
+        This app is currently in demo phase. Your saved profile, opportunities, evaluations,
+        generated materials, statuses, notes, and reminders are connected to your signed-in account.
+        """
+    )
+
+    st.success(
+        """
+        Your data is user-specific. When you delete stored data from this page, the app removes
+        data for the currently signed-in user only.
+        """
+    )
+
+    st.write(
+        """
+        Data is stored in your local SQLite database. API keys and OAuth credentials are loaded
+        from environment variables or local files and should not be committed to git.
+        """
+    )
+
+    st.write(
+        """
+        The app never submits applications, never clicks apply buttons, never logs into LinkedIn,
+        and never scrapes private pages.
+        """
+    )
+
+    st.warning(
+        """
+        Danger zone: this will delete your local profile, jobs, evaluations, generated materials,
+        statuses, notes, and reminders for this signed-in account.
+        """
+    )
+
+    confirm_delete = st.checkbox(
+        "I understand this will delete my stored data for the current user only."
+    )
+
+    if st.button("Delete my stored data", disabled=not confirm_delete):
         delete_all_data(current_user_id)
-        st.success("Your local app data was deleted.")
+        st.success("Your app data was deleted completely from our database.")
