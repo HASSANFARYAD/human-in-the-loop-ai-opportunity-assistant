@@ -70,6 +70,15 @@ def create_access_token(user: dict[str, Any]) -> str:
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
+def user_from_access_token(token: str) -> dict[str, Any]:
+    try:
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        user_id = int(payload.get("sub", "0"))
+    except (JWTError, ValueError):
+        return {}
+    return get_user(user_id)
+
+
 def _current_user_from_token(token: str) -> dict[str, Any]:
     if HTTPException is None or status is None:
         raise RuntimeError("FastAPI is required for API bearer-token authentication.")

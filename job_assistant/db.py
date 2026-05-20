@@ -54,6 +54,18 @@ def _run_migrations(con) -> None:
         )
         """
     )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS integration_settings (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            service TEXT NOT NULL,
+            api_key TEXT,
+            config_json TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(user_id, service)
+        )
+        """
+    )
     _ensure_default_user(con)
     _migrate_profile_table(con)
     _migrate_jobs_table(con)
@@ -417,6 +429,47 @@ def get_job(job_id: int, user_id: int = 1) -> dict[str, Any]:
         return dict(row) if row else {}
 
 
+def delete_job(job_id: int, user_id: int = 1) -> None:
+    with connect() as con:
+        con.execute("DELETE FROM jobs WHERE id=? AND user_id=?", (job_id, user_id))
+
+
+def save_integration_settings(user_id: int, service: str, api_key: str = "", config: Dict[str, Any] | None = None) -> None:
+    with connect() as con:
+        con.execute(
+            """
+            INSERT INTO integration_settings(user_id, service, api_key, config_json, updated_at)
+            VALUES (?,?,?,?,?)
+            ON CONFLICT(user_id, service) DO UPDATE SET
+                api_key=excluded.api_key,
+                config_json=excluded.config_json,
+                updated_at=excluded.updated_at
+            """,
+            (user_id, service, api_key, json.dumps(config or {}), utc_now()),
+        )
+
+
+def get_integration_settings(user_id: int, service: str) -> dict[str, Any]:
+    with connect() as con:
+        row = con.execute(
+            "SELECT * FROM integration_settings WHERE user_id=? AND service=?",
+            (user_id, service),
+        ).fetchone()
+    if not row:
+        return {}
+    settings = dict(row)
+    try:
+        settings["config"] = json.loads(settings.get("config_json") or "{}")
+    except json.JSONDecodeError:
+        settings["config"] = {}
+    return settings
+
+
+def delete_integration_settings(user_id: int, service: str) -> None:
+    with connect() as con:
+        con.execute("DELETE FROM integration_settings WHERE user_id=? AND service=?", (user_id, service))
+
+
 def save_evaluation(job_id: int, evaluation: Dict[str, Any], user_id: int = 1) -> None:
     now = utc_now()
     cols = [
@@ -562,6 +615,7 @@ def delete_user_data(user_id: int) -> None:
         con.execute("DELETE FROM applications WHERE job_id IN (SELECT id FROM jobs WHERE user_id=?)", (user_id,))
         con.execute("DELETE FROM jobs WHERE user_id=?", (user_id,))
         con.execute("DELETE FROM profile WHERE user_id=?", (user_id,))
+        con.execute("DELETE FROM integration_settings WHERE user_id=?", (user_id,))
 
 
 def delete_all_data(user_id: int = 1) -> None:

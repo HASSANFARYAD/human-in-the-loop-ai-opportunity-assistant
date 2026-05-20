@@ -56,6 +56,40 @@ The `Public discovery` tab currently supports:
 
 These sources are used because they expose structured public APIs or feeds. Direct scraping of sources like Indeed or Devpost is intentionally avoided unless an official/allowed API or feed is available.
 
+## LinkedIn And Apify Integrations
+
+The `Integrations` page supports user-owned credentials:
+
+- LinkedIn official API posting
+- Apify actor-based job scraping
+
+LinkedIn posting requires your own LinkedIn OAuth access token and an author URN such as:
+
+```text
+urn:li:person:...
+urn:li:organization:...
+```
+
+Your LinkedIn app/token must have the required posting scope, such as `w_member_social` for member posts. This app uses LinkedIn's official Posts API for publishing text posts. It does not use LinkedIn cookies, private endpoints, or browser automation.
+
+Apify scraping requires:
+
+- your Apify API token
+- an actor id
+- an input JSON template
+
+Default Apify input template:
+
+```json
+{
+  "startUrls": [{"url": "{{url}}"}]
+}
+```
+
+Different Apify actors use different input schemas. Update the template to match the actor you choose. The app runs the actor, previews mapped job results, and imports them only after you click `Import Apify jobs`.
+
+Use Apify actors only for sources where you have the right to collect the data and where the actor's behavior complies with the source terms.
+
 ## App Workflow
 
 1. Register or log in.
@@ -64,6 +98,7 @@ These sources are used because they expose structured public APIs or feeds. Dire
 4. Use one of the ingest methods:
    - `Manual / pasted`: paste a job, hackathon, webinar, competition, or URL text.
    - `Public discovery`: search public job APIs by keyword.
+   - `Apify scraper`: run your configured Apify actor against a URL.
    - `CSV upload`: import structured opportunity lists.
    - `Gmail read-only`: import matching alert emails after OAuth setup.
 5. Open `Review Queue`.

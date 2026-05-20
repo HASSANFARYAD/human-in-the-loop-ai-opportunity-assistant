@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from job_assistant.auth import authenticate_user, create_access_token, current_user, public_user, register_user
 from job_assistant.db import (
     create_reminder,
+    delete_job,
     delete_user_data,
     due_reminders,
     get_evaluation,
@@ -162,6 +163,16 @@ async def get_job_detail(job_id: int, user: dict = Depends(current_user)):
     except Exception as e:
         logger.error(f"Error getting job: {e}")
         raise HTTPException(status_code=500, detail="Failed to get job")
+
+
+@router.delete("/jobs/{job_id}")
+async def delete_job_endpoint(job_id: int, user: dict = Depends(current_user)):
+    try:
+        delete_job(job_id, user["id"])
+        return {"status": "success", "message": "Opportunity deleted"}
+    except Exception as e:
+        logger.error(f"Error deleting job: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete job")
 
 
 @router.post("/jobs/{job_id}/score")

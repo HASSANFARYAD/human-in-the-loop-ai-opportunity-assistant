@@ -7,14 +7,16 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
-from job_assistant.auth import authenticate_user, public_user, register_user
+from job_assistant.auth import authenticate_user, create_access_token, public_user, register_user, user_from_access_token
 from job_assistant.db import (
     OPPORTUNITY_TYPES,
     STATUSES,
     create_reminder,
     delete_all_data,
+    delete_job,
     due_reminders,
     get_evaluation,
+    get_integration_settings,
     get_job,
     get_materials,
     get_profile,
@@ -22,13 +24,30 @@ from job_assistant.db import (
     insert_job,
     list_jobs,
     save_evaluation,
+    save_integration_settings,
+    delete_integration_settings,
     save_materials,
     update_status,
     upsert_profile,
 )
+from job_assistant.services.apify_integration import apify_items_to_opportunities, build_run_input, run_actor_for_items
 from job_assistant.services.generation import generate_materials
 from job_assistant.services.gmail_ingest import fetch_job_alert_messages
-from job_assistant.services.parsing import extract_job_from_text, jobs_from_csv, read_uploaded_cv
+from job_assistant.services.linkedin_integration import publish_text_post
+from job_assistant.services.rapidapi_linkedin import (
+    DEFAULT_ENDPOINT as RAPIDAPI_LINKEDIN_ENDPOINT,
+    DEFAULT_HOST as RAPIDAPI_LINKEDIN_HOST,
+    rapidapi_items_to_opportunities,
+    search_linkedin_jobs,
+)
+from job_assistant.services.parsing import (
+    extract_job_from_text,
+    extract_profile_from_resume,
+    is_unsupported_listing_url,
+    jobs_from_csv,
+    read_uploaded_cv,
+    unsupported_listing_message,
+)
 from job_assistant.services.public_discovery import discover_public_opportunities
 from job_assistant.services.scoring import score_job
 
@@ -45,9 +64,52 @@ PUBLIC_DISCOVERY_SOURCES = [
 
 st.set_page_config(layout="wide")
 
+
+def get_cookie_manager():
+    if "cookie_manager" in st.session_state:
+        return st.session_state["cookie_manager"]
+    try:
+        import extra_streamlit_components as stx
+
+        manager = stx.CookieManager(key="job_assistant_cookie_manager")
+        st.session_state["cookie_manager"] = manager
+        return manager
+    except Exception:
+        return None
+
+
+cookie_manager = get_cookie_manager()
+
+
+def persist_login(user: dict) -> None:
+    token = create_access_token(user)
+    st.session_state["user"] = public_user(user)
+    st.session_state["access_token"] = token
+    if cookie_manager:
+        cookie_manager.set(
+            "job_assistant_token",
+            token,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+            same_site="lax",
+            secure=False,
+        )
+
+
 def require_streamlit_user() -> dict:
     if st.session_state.get("user"):
         return st.session_state["user"]
+    if cookie_manager:
+        cookies = cookie_manager.get_all()
+        token = cookies.get("job_assistant_token") or cookie_manager.get("job_assistant_token")
+        if token:
+            user = user_from_access_token(token)
+            if user:
+                st.session_state["user"] = public_user(user)
+                st.session_state["access_token"] = token
+                return st.session_state["user"]
+        if not st.session_state.get("cookie_probe_done"):
+            st.session_state["cookie_probe_done"] = True
+            st.rerun()
 
     st.markdown(
         """
@@ -117,6 +179,12 @@ def require_streamlit_user() -> dict:
     )
 
     st.markdown('<div class="auth-container">', unsafe_allow_html=True)
+
+    if not cookie_manager:
+        st.warning(
+            "Persistent login is not active because `extra-streamlit-components` is not installed "
+            "in the environment running Streamlit. Run `pip install -r requirements.txt` and restart the app."
+        )
 
     st.markdown(
         """
@@ -203,7 +271,7 @@ def require_streamlit_user() -> dict:
                 if submitted:
                     user = authenticate_user(email, password)
                     if user:
-                        st.session_state["user"] = public_user(user)
+                        persist_login(user)
                         st.rerun()
                     else:
                         st.error("Invalid email or password.")
@@ -237,7 +305,7 @@ def require_streamlit_user() -> dict:
                     else:
                         try:
                             user = register_user(email, password, full_name)
-                            st.session_state["user"] = public_user(user)
+                            persist_login(user)
                             st.rerun()
                         except ValueError as exc:
                             st.error(str(exc))
@@ -252,10 +320,12 @@ current_user_id = int(current_user["id"])
 with st.sidebar:
     st.write(f"**Signed in:** {current_user['email']}")
     if st.button("Logout"):
+        if cookie_manager:
+            cookie_manager.delete("job_assistant_token")
         st.session_state.clear()
         st.rerun()
     st.divider()
-    page = st.radio("Navigate", ["Profile", "Ingest Opportunities", "Review Queue", "Opportunity Detail", "Reminders", "Privacy"])
+    page = st.radio("Navigate", ["Profile", "Integrations", "Ingest Opportunities", "Review Queue", "Opportunity Detail", "Reminders", "Privacy"])
     st.divider()
     st.write("**Automatic import**")
     st.caption("Automatic import reads Gmail alerts only. It does not search LinkedIn or private sites.")
@@ -294,28 +364,124 @@ if page == "Profile":
     st.header("1. User profile setup")
     profile = get_profile(current_user_id)
     uploaded_cv = st.file_uploader("Upload CV/resume (.pdf, .docx, .txt)", type=["pdf", "docx", "txt"])
-    cv_text = profile.get("cv_text", "")
     if uploaded_cv:
         cv_text = read_uploaded_cv(uploaded_cv)
-        st.success("CV text extracted. Review/edit below before saving.")
+        st.session_state["profile_draft"] = {**profile, **extract_profile_from_resume(cv_text)}
+        st.success("Resume parsed. Review/edit the auto-filled fields below before saving.")
+    profile_values = {**profile, **st.session_state.get("profile_draft", {})}
     with st.form("profile_form"):
-        cv_text = st.text_area("CV / resume text", value=cv_text, height=220)
-        target_roles = st.text_input("Target roles", value=profile.get("target_roles", ""))
-        industries = st.text_input("Target industries", value=profile.get("industries", ""))
-        locations = st.text_input("Locations", value=profile.get("locations", ""))
-        remote_preference = st.text_input("Remote preference", value=profile.get("remote_preference", ""))
-        salary_expectations = st.text_input("Salary expectations", value=profile.get("salary_expectations", ""))
-        work_authorization = st.text_input("Visa/work authorization", value=profile.get("work_authorization", ""))
-        years_experience = st.text_input("Years of experience", value=profile.get("years_experience", ""))
-        skills = st.text_area("Skills", value=profile.get("skills", ""), height=90)
-        deal_breakers = st.text_area("Deal-breakers", value=profile.get("deal_breakers", ""), height=90)
+        cv_text = st.text_area("CV / resume text", value=profile_values.get("cv_text", ""), height=220)
+        target_roles = st.text_input("Target roles", value=profile_values.get("target_roles", ""))
+        industries = st.text_input("Target industries", value=profile_values.get("industries", ""))
+        locations = st.text_input("Locations", value=profile_values.get("locations", ""))
+        remote_preference = st.text_input("Remote preference", value=profile_values.get("remote_preference", ""))
+        salary_expectations = st.text_input("Salary expectations", value=profile_values.get("salary_expectations", ""))
+        work_authorization = st.text_input("Visa/work authorization", value=profile_values.get("work_authorization", ""))
+        years_experience = st.text_input("Years of experience", value=profile_values.get("years_experience", ""))
+        skills = st.text_area("Skills", value=profile_values.get("skills", ""), height=90)
+        deal_breakers = st.text_area("Deal-breakers", value=profile_values.get("deal_breakers", ""), height=90)
         if st.form_submit_button("Save profile"):
             upsert_profile(locals(), current_user_id)
+            st.session_state.pop("profile_draft", None)
             st.success("Profile saved locally.")
+
+elif page == "Integrations":
+    st.header("Integrations")
+    st.warning("API tokens are stored in your local SQLite database for this MVP. Use a dedicated token with the smallest permissions possible.")
+    linkedin_tab, rapidapi_tab, apify_tab = st.tabs(["LinkedIn posting", "RapidAPI LinkedIn jobs", "Apify scraping"])
+
+    with linkedin_tab:
+        st.subheader("LinkedIn official API posting")
+        st.write("This uses LinkedIn's official post API. Your LinkedIn app/token must have the required posting scope, such as `w_member_social` for member posts.")
+        linkedin = get_integration_settings(current_user_id, "linkedin")
+        linkedin_config = linkedin.get("config", {})
+        with st.form("linkedin_settings"):
+            linkedin_token = st.text_input("LinkedIn OAuth access token", value=linkedin.get("api_key", ""), type="password")
+            author_urn = st.text_input("Author URN", value=linkedin_config.get("author_urn", ""), placeholder="urn:li:person:... or urn:li:organization:...")
+            linkedin_version = st.text_input("LinkedIn API version", value=linkedin_config.get("linkedin_version", "202604"))
+            if st.form_submit_button("Save LinkedIn settings"):
+                save_integration_settings(
+                    current_user_id,
+                    "linkedin",
+                    linkedin_token,
+                    {"author_urn": author_urn, "linkedin_version": linkedin_version},
+                )
+                st.success("LinkedIn settings saved.")
+
+        post_text = st.text_area("Post text", height=180, placeholder="Write a LinkedIn post to publish through the official API.")
+        if st.button("Publish LinkedIn post", disabled=not post_text.strip()):
+            linkedin = get_integration_settings(current_user_id, "linkedin")
+            try:
+                result = publish_text_post(
+                    linkedin.get("api_key", ""),
+                    linkedin.get("config", {}).get("author_urn", ""),
+                    post_text,
+                    linkedin.get("config", {}).get("linkedin_version", "202604"),
+                )
+                st.success(f"Published. Post id: {result.get('post_id') or 'returned by LinkedIn headers'}")
+            except Exception as exc:
+                st.error(f"LinkedIn publish failed: {exc}")
+
+        if st.button("Remove LinkedIn settings"):
+            delete_integration_settings(current_user_id, "linkedin")
+            st.success("LinkedIn settings removed.")
+            st.rerun()
+
+    with rapidapi_tab:
+        st.subheader("RapidAPI LinkedIn jobs")
+        st.write("Use a third-party RapidAPI key to import LinkedIn job search results. Rotate any key that has been shared publicly.")
+        rapidapi = get_integration_settings(current_user_id, "rapidapi_linkedin")
+        rapidapi_config = rapidapi.get("config", {})
+        with st.form("rapidapi_linkedin_settings"):
+            rapidapi_key = st.text_input("RapidAPI key", value=rapidapi.get("api_key", ""), type="password")
+            rapidapi_host = st.text_input("RapidAPI host", value=rapidapi_config.get("host", RAPIDAPI_LINKEDIN_HOST))
+            rapidapi_endpoint = st.text_input("Endpoint URL", value=rapidapi_config.get("endpoint", RAPIDAPI_LINKEDIN_ENDPOINT))
+            if st.form_submit_button("Save RapidAPI settings"):
+                save_integration_settings(
+                    current_user_id,
+                    "rapidapi_linkedin",
+                    rapidapi_key,
+                    {"host": rapidapi_host, "endpoint": rapidapi_endpoint},
+                )
+                st.success("RapidAPI settings saved.")
+
+        if st.button("Remove RapidAPI settings"):
+            delete_integration_settings(current_user_id, "rapidapi_linkedin")
+            st.success("RapidAPI settings removed.")
+            st.rerun()
+
+    with apify_tab:
+        st.subheader("Apify actor settings")
+        st.write("Use your own Apify token and actor. Different actors expect different input JSON, so this app lets you configure the actor id and input template.")
+        apify = get_integration_settings(current_user_id, "apify")
+        apify_config = apify.get("config", {})
+        default_template = apify_config.get("input_template") or '{\n  "startUrls": [{"url": "{{url}}"]}\n}'
+        with st.form("apify_settings"):
+            apify_token = st.text_input("Apify API token", value=apify.get("api_key", ""), type="password")
+            actor_id = st.text_input("Actor id", value=apify_config.get("actor_id", ""), placeholder="username/actor-name or actor id")
+            input_template = st.text_area("Input JSON template", value=default_template, height=180)
+            st.caption("Use `{{url}}` where the pasted job/listing URL should be inserted.")
+            if st.form_submit_button("Save Apify settings"):
+                try:
+                    json.loads(input_template)
+                    save_integration_settings(
+                        current_user_id,
+                        "apify",
+                        apify_token,
+                        {"actor_id": actor_id, "input_template": input_template},
+                    )
+                    st.success("Apify settings saved.")
+                except json.JSONDecodeError as exc:
+                    st.error(f"Input template is not valid JSON: {exc}")
+
+        if st.button("Remove Apify settings"):
+            delete_integration_settings(current_user_id, "apify")
+            st.success("Apify settings removed.")
+            st.rerun()
 
 elif page == "Ingest Opportunities":
     st.header("2. Opportunity source ingestion")
-    source_tab, public_tab, csv_tab, gmail_tab = st.tabs(["Manual / pasted", "Public discovery", "CSV upload", "Gmail read-only"])
+    source_tab, public_tab, rapidapi_tab, apify_tab, csv_tab, gmail_tab = st.tabs(["Manual / pasted", "Public discovery", "LinkedIn API", "Apify scraper", "CSV upload", "Gmail read-only"])
 
     with source_tab:
         st.subheader("Manual URL or pasted opportunity text")
@@ -323,6 +489,9 @@ elif page == "Ingest Opportunities":
         source = st.selectbox("Source", ["Manual", "LinkedIn email/paste", "Indeed", "Company career page", "Recruiter", "Devpost", "Eventbrite", "Meetup", "Other"])
         raw = st.text_area("Paste opportunity URL, email, or description", height=260)
         if st.button("Extract and save opportunity", disabled=not raw.strip()):
+            if is_unsupported_listing_url(raw):
+                st.error(unsupported_listing_message(raw))
+                st.stop()
             job = extract_job_from_text(raw, source=source, opportunity_type=opportunity_type)
             job_id = insert_job(job, current_user_id)
             st.success(f"Saved {opportunity_type} #{job_id}: {job.get('title')} at {job.get('company')}")
@@ -354,6 +523,80 @@ elif page == "Ingest Opportunities":
                 ids = [insert_job(item, current_user_id) for item in found]
                 st.success(f"Imported {len(ids)} discovered job(s).")
                 st.session_state["public_discovery_results"] = []
+
+    with apify_tab:
+        st.subheader("Apify scraper import")
+        st.write("Runs your configured Apify actor against a URL, previews returned items, then imports them as jobs after review.")
+        apify = get_integration_settings(current_user_id, "apify")
+        apify_config = apify.get("config", {})
+        if not apify.get("api_key") or not apify_config.get("actor_id"):
+            st.info("Add your Apify API token and actor id in Integrations first.")
+        scrape_url = st.text_input("Job/listing URL to send to Apify", placeholder="https://...")
+        if st.button("Run Apify scraper", disabled=not scrape_url.strip() or not apify.get("api_key") or not apify_config.get("actor_id")):
+            try:
+                run_input = build_run_input(scrape_url, apify_config.get("input_template", ""))
+                items = run_actor_for_items(apify["api_key"], apify_config["actor_id"], run_input)
+                opportunities = apify_items_to_opportunities(items, source=f"Apify:{apify_config['actor_id']}")
+                st.session_state["apify_results"] = opportunities
+                st.success(f"Apify returned {len(items)} item(s); mapped {len(opportunities)} job(s). Review before importing.")
+            except Exception as exc:
+                st.error(f"Apify scraper failed: {exc}")
+
+        apify_results = st.session_state.get("apify_results", [])
+        if apify_results:
+            apify_df = pd.DataFrame(apify_results)
+            st.dataframe(
+                apify_df[[c for c in ["title", "company", "location", "source", "url", "description"] if c in apify_df.columns]],
+                use_container_width=True,
+                hide_index=True,
+            )
+            if st.button("Import Apify jobs"):
+                ids = [insert_job(item, current_user_id) for item in apify_results]
+                st.success(f"Imported {len(ids)} Apify job(s).")
+                st.session_state["apify_results"] = []
+
+    with rapidapi_tab:
+        st.subheader("LinkedIn job API import")
+        st.write("Uses your configured RapidAPI LinkedIn job search API. It imports API results, not direct LinkedIn page scraping.")
+        rapidapi = get_integration_settings(current_user_id, "rapidapi_linkedin")
+        rapidapi_config = rapidapi.get("config", {})
+        if not rapidapi.get("api_key"):
+            st.info("Add your RapidAPI key in Integrations first.")
+        col_a, col_b, col_c = st.columns([2, 2, 1])
+        with col_a:
+            title_filter = st.text_input("Title filter", value=get_profile(current_user_id).get("target_roles", ""))
+        with col_b:
+            location_filter = st.text_input("Location filter", value="United States OR United Kingdom")
+        with col_c:
+            offset = st.number_input("Offset", min_value=0, value=0, step=1)
+        if st.button("Search LinkedIn jobs API", disabled=not rapidapi.get("api_key") or not title_filter.strip()):
+            try:
+                items = search_linkedin_jobs(
+                    rapidapi["api_key"],
+                    title_filter,
+                    location_filter,
+                    int(offset),
+                    rapidapi_config.get("host", RAPIDAPI_LINKEDIN_HOST),
+                    rapidapi_config.get("endpoint", RAPIDAPI_LINKEDIN_ENDPOINT),
+                )
+                jobs = rapidapi_items_to_opportunities(items)
+                st.session_state["rapidapi_linkedin_results"] = jobs
+                st.success(f"API returned {len(items)} item(s); mapped {len(jobs)} job(s). Review before importing.")
+            except Exception as exc:
+                st.error(f"LinkedIn API search failed: {exc}")
+
+        rapidapi_results = st.session_state.get("rapidapi_linkedin_results", [])
+        if rapidapi_results:
+            rapidapi_df = pd.DataFrame(rapidapi_results)
+            st.dataframe(
+                rapidapi_df[[c for c in ["title", "company", "location", "source", "url", "description"] if c in rapidapi_df.columns]],
+                use_container_width=True,
+                hide_index=True,
+            )
+            if st.button("Import LinkedIn API jobs"):
+                ids = [insert_job(item, current_user_id) for item in rapidapi_results]
+                st.success(f"Imported {len(ids)} LinkedIn API job(s).")
+                st.session_state["rapidapi_linkedin_results"] = []
 
     with csv_tab:
         st.subheader("CSV upload")
@@ -396,7 +639,17 @@ elif page == "Review Queue":
     else:
         df = pd.DataFrame(jobs)
         visible_cols = ["id", "opportunity_type", "title", "company", "location", "source", "url", "match_score", "priority", "status", "deadline", "notes", "cover_letter", "screening_answers", "updated_at"]
-        st.dataframe(df[[c for c in visible_cols if c in df.columns]], use_container_width=True, hide_index=True)
+        table_df = df[[c for c in visible_cols if c in df.columns]].copy()
+        table_df.insert(0, "delete", False)
+        edited_df = st.data_editor(
+            table_df,
+            use_container_width=True,
+            hide_index=True,
+            disabled=[c for c in table_df.columns if c != "delete"],
+            column_config={"delete": st.column_config.CheckboxColumn("Select", help="Select rows to delete")},
+            key="review_queue_editor",
+        )
+        selected_delete_ids = edited_df.loc[edited_df["delete"], "id"].astype(int).tolist()
         st.divider()
         col1, col2 = st.columns(2)
         with col1:
@@ -414,7 +667,15 @@ elif page == "Review Queue":
                     st.success(f"Scored {n} opportunity/opportunities.")
                     st.rerun()
         with col2:
-            st.write("Open Opportunity Detail to generate/edit materials and change status.")
+            if selected_delete_ids:
+                st.warning(f"{len(selected_delete_ids)} selected for deletion.")
+                if st.button("Delete selected opportunities"):
+                    for selected_id in selected_delete_ids:
+                        delete_job(selected_id, current_user_id)
+                    st.success(f"Deleted {len(selected_delete_ids)} opportunity/opportunities.")
+                    st.rerun()
+            else:
+                st.write("Select rows in the table to delete, or open Opportunity Detail to edit one item.")
 
 elif page == "Opportunity Detail":
     st.header("4. Opportunity detail")
@@ -440,6 +701,10 @@ elif page == "Opportunity Detail":
             if job.get("url"):
                 st.link_button("Open URL for manual review", job["url"])
             st.text_area("Description", value=job.get("description", ""), height=220)
+            if st.button("Delete this opportunity"):
+                delete_job(job_id, current_user_id)
+                st.success("Opportunity deleted.")
+                st.rerun()
 
         with col2:
             st.subheader("Evaluation")
