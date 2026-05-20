@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
-from job_assistant.auth import authenticate_user, create_access_token, public_user, register_user, user_from_access_token
+from job_assistant.auth import authenticate_user, create_access_token, create_refresh_token, public_user, register_user, revoke_refresh_token, user_from_refresh_token
 from job_assistant.db import (
     OPPORTUNITY_TYPES,
     STATUSES,
@@ -15,14 +15,17 @@ from job_assistant.db import (
     delete_all_data,
     delete_job,
     due_reminders,
+    get_automation_preferences,
     get_evaluation,
     get_integration_settings,
     get_job,
     get_materials,
     get_profile,
     init_db,
+    list_activity_events,
     insert_job,
     list_jobs,
+    save_automation_preferences,
     save_evaluation,
     save_integration_settings,
     delete_integration_settings,
@@ -30,6 +33,9 @@ from job_assistant.db import (
     update_status,
     upsert_profile,
 )
+from job_assistant.config import settings
+from job_assistant.crypto import mask_secret
+from job_assistant.services.ai_providers import SUPPORTED_PROVIDERS
 from job_assistant.services.apify_integration import apify_items_to_opportunities, build_run_input, run_actor_for_items
 from job_assistant.services.generation import generate_materials
 from job_assistant.services.gmail_ingest import fetch_job_alert_messages
@@ -62,7 +68,22 @@ PUBLIC_DISCOVERY_SOURCES = [
     "Hacker News Who is hiring",
 ]
 
-st.set_page_config(layout="wide")
+st.set_page_config(page_title="Opportunity Assistant", page_icon="🚀", layout="wide")
+
+st.markdown(
+    """
+    <style>
+    .block-container {padding-top: 1.4rem; max-width: 1280px;}
+    [data-testid="stSidebar"] {background: #0f172a;}
+    [data-testid="stSidebar"] * {color: #e5e7eb;}
+    .stButton > button, .stDownloadButton > button {border-radius: 10px; font-weight: 600;}
+    div[data-testid="metric-container"] {background: #ffffff; border: 1px solid #e2e8f0; padding: 1rem; border-radius: 16px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);}
+    .section-card {background:#fff; border:1px solid #e2e8f0; border-radius:18px; padding:1rem 1.2rem; margin:.75rem 0; box-shadow:0 1px 2px rgba(15,23,42,.05);}
+    .muted-pill {display:inline-block; padding:.25rem .6rem; border-radius:999px; background:#eef2ff; color:#3730a3; font-size:.82rem; font-weight:600;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 def get_cookie_manager():
@@ -83,15 +104,16 @@ cookie_manager = get_cookie_manager()
 
 def persist_login(user: dict) -> None:
     token = create_access_token(user)
+    refresh_token = create_refresh_token(user, days=settings.refresh_token_expire_days)
     st.session_state["user"] = public_user(user)
     st.session_state["access_token"] = token
     if cookie_manager:
         cookie_manager.set(
-            "job_assistant_token",
-            token,
-            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
-            same_site="lax",
-            secure=False,
+            settings.session_cookie_name,
+            refresh_token,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days),
+            same_site="strict",
+            secure=settings.session_cookie_secure,
         )
 
 
@@ -100,12 +122,12 @@ def require_streamlit_user() -> dict:
         return st.session_state["user"]
     if cookie_manager:
         cookies = cookie_manager.get_all()
-        token = cookies.get("job_assistant_token") or cookie_manager.get("job_assistant_token")
-        if token:
-            user = user_from_access_token(token)
+        refresh_token = cookies.get(settings.session_cookie_name) or cookie_manager.get(settings.session_cookie_name)
+        if refresh_token:
+            user = user_from_refresh_token(refresh_token)
             if user:
                 st.session_state["user"] = public_user(user)
-                st.session_state["access_token"] = token
+                st.session_state["access_token"] = create_access_token(user)
                 return st.session_state["user"]
         if not st.session_state.get("cookie_probe_done"):
             st.session_state["cookie_probe_done"] = True
@@ -321,14 +343,18 @@ with st.sidebar:
     st.write(f"**Signed in:** {current_user['email']}")
     if st.button("Logout"):
         if cookie_manager:
-            cookie_manager.delete("job_assistant_token")
+            refresh_token = cookie_manager.get(settings.session_cookie_name)
+            if refresh_token:
+                revoke_refresh_token(refresh_token)
+            cookie_manager.delete(settings.session_cookie_name)
         st.session_state.clear()
         st.rerun()
     st.divider()
-    page = st.radio("Navigate", ["Profile", "Integrations", "Ingest Opportunities", "Review Queue", "Opportunity Detail", "Reminders", "Privacy"])
+    page = st.radio("Navigate", ["Profile", "Automation", "Integrations", "Ingest Opportunities", "Review Queue", "Opportunity Detail", "Reminders", "Privacy"])
     st.divider()
-    st.write("**Automatic import**")
-    st.caption("Automatic import reads Gmail alerts only. It does not search LinkedIn or private sites.")
+    prefs_sidebar = get_automation_preferences(current_user_id)
+    st.write("**Automation**")
+    st.caption("Configured from the Automation page. Private sites are never scraped or auto-applied.")
     auto_col1, auto_col2 = st.columns(2)
     with auto_col1:
         if st.button("Start", key="start_scheduler"):
@@ -350,7 +376,7 @@ with st.sidebar:
                 st.success("Scheduler stopped.")
             except Exception as exc:
                 st.error(f"Scheduler failed: {exc}")
-    st.caption("Status: running" if st.session_state.get("scheduler_started") else "Status: manual")
+    st.caption("Status: running" if st.session_state.get("scheduler_started") else ("Configured but stopped" if prefs_sidebar.get("enabled") else "Disabled"))
     st.divider()
     st.write("**Allowed workflow**")
     st.write("Process alerts, pasted descriptions, public/manual URLs, CSVs, and optional Gmail read-only messages.")
@@ -360,7 +386,59 @@ reminders = due_reminders(current_user_id)
 if reminders:
     st.warning(f"You have {len(reminders)} due reminder(s). Open Reminders to review them.")
 
-if page == "Profile":
+if page == "Automation":
+    st.header("Automation control center")
+    prefs = get_automation_preferences(current_user_id)
+    c1, c2, c3, c4 = st.columns(4)
+    jobs_count = len(list_jobs(current_user_id))
+    unread_events = len(list_activity_events(current_user_id, unread_only=True))
+    c1.metric("Automation", "Enabled" if prefs.get("enabled") else "Disabled")
+    c2.metric("Saved opportunities", jobs_count)
+    c3.metric("Unread updates", unread_events)
+    c4.metric("Min score", prefs.get("min_score_for_materials", 70))
+
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.subheader("Workflow preferences")
+    with st.form("automation_preferences"):
+        enabled = st.toggle("Enable scheduled automation", value=bool(prefs.get("enabled")))
+        gmail_enabled = st.toggle("Import Gmail alerts automatically", value=bool(prefs.get("gmail_enabled")))
+        public_sources_enabled = st.toggle("Discover public opportunities automatically", value=bool(prefs.get("public_sources_enabled")))
+        score_new = st.toggle("Score every new opportunity", value=bool(prefs.get("score_new")))
+        generate_materials_pref = st.toggle("Generate application materials for high-match jobs", value=bool(prefs.get("generate_materials")))
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            gmail_interval_minutes = st.number_input("Gmail interval minutes", min_value=5, max_value=1440, value=int(prefs.get("gmail_interval_minutes", 30)), step=5)
+        with col_b:
+            public_interval_hours = st.number_input("Public discovery interval hours", min_value=1, max_value=168, value=int(prefs.get("public_interval_hours", 6)), step=1)
+        with col_c:
+            daily_summary_hour = st.number_input("Daily summary hour", min_value=0, max_value=23, value=int(prefs.get("daily_summary_hour", 8)), step=1)
+        min_score_for_materials = st.slider("Generate materials only when score is at least", 0, 100, int(prefs.get("min_score_for_materials", 70)))
+        notify_in_app = st.toggle("Show in-app progress notifications", value=bool(prefs.get("notify_in_app")))
+        if st.form_submit_button("Save automation preferences", use_container_width=True):
+            save_automation_preferences(current_user_id, {
+                "enabled": enabled,
+                "gmail_enabled": gmail_enabled,
+                "public_sources_enabled": public_sources_enabled,
+                "score_new": score_new,
+                "generate_materials": generate_materials_pref,
+                "gmail_interval_minutes": gmail_interval_minutes,
+                "public_interval_hours": public_interval_hours,
+                "daily_summary_hour": daily_summary_hour,
+                "min_score_for_materials": min_score_for_materials,
+                "notify_in_app": notify_in_app,
+            })
+            st.success("Automation preferences saved. Restart the scheduler for interval changes to take effect.")
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.subheader("Recent progress updates")
+    events = list_activity_events(current_user_id, limit=20)
+    if events:
+        st.dataframe(pd.DataFrame(events)[["created_at", "level", "title", "message"]], use_container_width=True, hide_index=True)
+    else:
+        st.info("No automation updates yet. Start the scheduler after enabling automation.")
+
+elif page == "Profile":
     st.header("1. User profile setup")
     profile = get_profile(current_user_id)
     uploaded_cv = st.file_uploader("Upload CV/resume (.pdf, .docx, .txt)", type=["pdf", "docx", "txt"])
@@ -387,8 +465,42 @@ if page == "Profile":
 
 elif page == "Integrations":
     st.header("Integrations")
-    st.warning("API tokens are stored in your local SQLite database for this MVP. Use a dedicated token with the smallest permissions possible.")
-    linkedin_tab, rapidapi_tab, apify_tab = st.tabs(["LinkedIn posting", "RapidAPI LinkedIn jobs", "Apify scraping"])
+    st.success("API keys and sensitive integration settings are encrypted before they are stored. Use least-privilege keys and rotate them regularly.")
+    ai_tab, linkedin_tab, rapidapi_tab, apify_tab = st.tabs(["AI provider", "LinkedIn posting", "RapidAPI LinkedIn jobs", "Apify scraping"])
+
+    with ai_tab:
+        st.subheader("Multi-provider AI")
+        ai = get_integration_settings(current_user_id, "ai_provider")
+        ai_config = ai.get("config", {})
+        provider_keys = list(SUPPORTED_PROVIDERS.keys())
+        current_provider = ai_config.get("provider", settings.default_ai_provider)
+        with st.form("ai_provider_settings"):
+            provider = st.selectbox("Provider", provider_keys, index=provider_keys.index(current_provider) if current_provider in provider_keys else 0, format_func=lambda k: SUPPORTED_PROVIDERS[k])
+            model = st.text_input("Model / deployment", value=ai_config.get("model", settings.openai_model))
+            api_key = st.text_input("Provider API key", value=ai.get("api_key", ""), type="password")
+            base_url = st.text_input("Base URL (OpenAI-compatible/Grok optional)", value=ai_config.get("base_url", ""))
+            azure_endpoint = st.text_input("Azure endpoint", value=ai_config.get("endpoint", ""), placeholder="https://your-resource.openai.azure.com")
+            azure_api_version = st.text_input("Azure API version", value=ai_config.get("api_version", "2024-10-21"))
+            deployment = st.text_input("Azure deployment name", value=ai_config.get("deployment", ""))
+            hf_endpoint = st.text_input("Hugging Face endpoint override", value=ai_config.get("endpoint", "") if provider == "huggingface" else "")
+            if st.form_submit_button("Save AI provider", use_container_width=True):
+                config = {
+                    "provider": provider,
+                    "model": model,
+                    "base_url": base_url,
+                    "endpoint": hf_endpoint if provider == "huggingface" else azure_endpoint,
+                    "api_version": azure_api_version,
+                    "deployment": deployment,
+                }
+                save_integration_settings(current_user_id, "ai_provider", api_key, config)
+                st.success("AI provider settings saved securely.")
+                st.rerun()
+        st.caption(f"Stored key status: {mask_secret(ai.get('api_key', ''))}")
+
+        if st.button("Remove AI provider settings"):
+            delete_integration_settings(current_user_id, "ai_provider")
+            st.success("AI provider settings removed.")
+            st.rerun()
 
     with linkedin_tab:
         st.subheader("LinkedIn official API posting")
@@ -733,7 +845,7 @@ elif page == "Opportunity Detail":
                 if not evaluation:
                     evaluation = score_job(profile, job)
                     save_evaluation(job_id, evaluation, current_user_id)
-                materials = generate_materials(profile, job, evaluation)
+                materials = generate_materials(profile, job, evaluation, user_id=current_user_id)
                 save_materials(job_id, materials, current_user_id)
                 st.success("Generated materials saved. Edit before using.")
                 st.rerun()
@@ -793,8 +905,9 @@ elif page == "Privacy":
 
     st.write(
         """
-        Data is stored in your local SQLite database. API keys and OAuth credentials are loaded
-        from environment variables or local files and should not be committed to git.
+        Data is stored in SQLite for local deployments. API keys and sensitive integration settings
+        are encrypted at rest with the application encryption key. In production, serve the app only
+        over HTTPS so credentials are encrypted in transit too.
         """
     )
 

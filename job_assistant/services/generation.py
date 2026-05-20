@@ -5,7 +5,7 @@ from typing import Any, Dict
 from .openai_client import ask_json
 
 
-def generate_materials(profile: Dict[str, Any], job: Dict[str, Any], evaluation: Dict[str, Any]) -> Dict[str, Any]:
+def generate_materials(profile: Dict[str, Any], job: Dict[str, Any], evaluation: Dict[str, Any], user_id: int | None = None) -> Dict[str, Any]:
     fallback = {
         "professional_summary": f"Experienced professional targeting {job.get('title','this role')} at {job.get('company','the company')}, with relevant skills aligned to the job requirements.",
         "cover_letter": f"Dear Hiring Team,\n\nI am interested in the {job.get('title','role')} opportunity at {job.get('company','your company')}. My background aligns with the role through hands-on experience in {profile.get('skills','relevant technologies')}. I would welcome the chance to discuss how I can contribute.\n\nSincerely,",
@@ -25,7 +25,7 @@ JOB:\n{job}
 
 EVALUATION:\n{evaluation}
 """
-    data = ask_json(system, user, fallback)
+    data = ask_json(system, user, fallback, user_id=user_id)
     for k, v in fallback.items():
         data.setdefault(k, v)
     return data

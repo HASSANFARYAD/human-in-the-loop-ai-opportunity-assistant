@@ -299,3 +299,59 @@ Basic syntax check:
 ```bash
 python -m compileall app.py job_assistant
 ```
+
+## Production automation, security, sessions, and AI providers
+
+This version includes these production-readiness upgrades:
+
+### Encrypted secrets at rest
+
+User API keys and integration configs are encrypted before being written to `integration_settings` using Fernet authenticated encryption.
+
+Generate a production encryption key:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Then set it in your environment:
+
+```bash
+APP_ENCRYPTION_KEY=your-generated-fernet-key
+JWT_SECRET_KEY=your-long-random-jwt-secret
+SESSION_COOKIE_SECURE=true
+ENVIRONMENT=prod
+```
+
+Do not rotate `APP_ENCRYPTION_KEY` without re-encrypting existing rows, or previously stored keys will no longer decrypt.
+
+### Persistent login
+
+Streamlit now stores a long-lived opaque refresh/session token in a browser cookie and keeps the short-lived JWT in memory. Refresh/session tokens are hashed in the database, can be revoked on logout, and are not the same as access tokens.
+
+For production, serve the app behind HTTPS and set:
+
+```bash
+SESSION_COOKIE_SECURE=true
+REFRESH_TOKEN_EXPIRE_DAYS=30
+ACCESS_TOKEN_EXPIRE_MINUTES=1440
+```
+
+### Multi-provider AI
+
+The Integrations page now includes an AI Provider tab. Users can choose:
+
+- OpenAI-compatible providers
+- Azure OpenAI / Azure Foundry deployments
+- Grok / xAI
+- Anthropic Claude
+- Google Gemini
+- Hugging Face Inference endpoints
+
+The selected provider is used for application-material generation. If no provider key is configured, the app returns safe fallback drafts instead of failing.
+
+### Automation preferences and progress updates
+
+The new Automation page lets each user enable scheduled workflows, configure intervals, decide whether to score new opportunities, and optionally generate materials for high-match jobs. Scheduler runs now write progress updates to `activity_events`, which are shown in the app.
+
+Automation still respects the original safety boundary: the app imports/organizes/scorers/generates drafts, but it does not automatically submit job applications or scrape private pages.

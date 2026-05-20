@@ -212,7 +212,7 @@ async def generate_job_materials(job_id: int, user: dict = Depends(current_user)
             evaluation = score_job(profile, job)
             save_evaluation(job_id, evaluation, user["id"])
 
-        materials = generate_materials(profile, job, evaluation)
+        materials = generate_materials(profile, job, evaluation, user_id=user["id"])
         save_materials(job_id, materials, user["id"])
         return materials
     except HTTPException:

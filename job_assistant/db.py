@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 DEFAULT_DB_PATH = os.getenv("APP_DB_PATH", "data/job_assistant.sqlite3")
+from job_assistant.crypto import decrypt_text, encrypt_text
+
 STATUSES = ["New", "Reviewed", "Apply manually", "Applied", "Interview", "Rejected", "Offer", "Archived", "Skip"]
 OPPORTUNITY_TYPES = ["job", "hackathon", "competition", "webinar", "other"]
 DEFAULT_USER_EMAIL = "local@example.com"
@@ -63,6 +65,50 @@ def _run_migrations(con) -> None:
             config_json TEXT,
             updated_at TEXT NOT NULL,
             PRIMARY KEY(user_id, service)
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            revoked_at TEXT
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS automation_preferences (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            gmail_enabled INTEGER NOT NULL DEFAULT 1,
+            public_sources_enabled INTEGER NOT NULL DEFAULT 1,
+            score_new INTEGER NOT NULL DEFAULT 1,
+            generate_materials INTEGER NOT NULL DEFAULT 0,
+            gmail_interval_minutes INTEGER NOT NULL DEFAULT 30,
+            public_interval_hours INTEGER NOT NULL DEFAULT 6,
+            daily_summary_hour INTEGER NOT NULL DEFAULT 8,
+            notify_in_app INTEGER NOT NULL DEFAULT 1,
+            min_score_for_materials INTEGER NOT NULL DEFAULT 70,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS activity_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            level TEXT NOT NULL DEFAULT 'info',
+            title TEXT NOT NULL,
+            message TEXT,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL,
+            read_at TEXT
         )
         """
     )
@@ -319,6 +365,41 @@ def init_db() -> None:
                 note TEXT,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                revoked_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS automation_preferences (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                gmail_enabled INTEGER NOT NULL DEFAULT 1,
+                public_sources_enabled INTEGER NOT NULL DEFAULT 1,
+                score_new INTEGER NOT NULL DEFAULT 1,
+                generate_materials INTEGER NOT NULL DEFAULT 0,
+                gmail_interval_minutes INTEGER NOT NULL DEFAULT 30,
+                public_interval_hours INTEGER NOT NULL DEFAULT 6,
+                daily_summary_hour INTEGER NOT NULL DEFAULT 8,
+                notify_in_app INTEGER NOT NULL DEFAULT 1,
+                min_score_for_materials INTEGER NOT NULL DEFAULT 70,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS activity_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                level TEXT NOT NULL DEFAULT 'info',
+                title TEXT NOT NULL,
+                message TEXT,
+                metadata_json TEXT,
+                created_at TEXT NOT NULL,
+                read_at TEXT
+            );
             """
         )
         _run_migrations(con)
@@ -435,6 +516,13 @@ def delete_job(job_id: int, user_id: int = 1) -> None:
 
 
 def save_integration_settings(user_id: int, service: str, api_key: str = "", config: Dict[str, Any] | None = None) -> None:
+    """Save integration settings with secrets encrypted at rest.
+
+    Both api_key and config_json are encrypted because provider configs can hold
+    sensitive endpoints, deployment names, or account identifiers.
+    """
+    encrypted_key = encrypt_text(api_key or "")
+    encrypted_config = encrypt_text(json.dumps(config or {}))
     with connect() as con:
         con.execute(
             """
@@ -445,7 +533,7 @@ def save_integration_settings(user_id: int, service: str, api_key: str = "", con
                 config_json=excluded.config_json,
                 updated_at=excluded.updated_at
             """,
-            (user_id, service, api_key, json.dumps(config or {}), utc_now()),
+            (user_id, service, encrypted_key, encrypted_config, utc_now()),
         )
 
 
@@ -458,8 +546,9 @@ def get_integration_settings(user_id: int, service: str) -> dict[str, Any]:
     if not row:
         return {}
     settings = dict(row)
+    settings["api_key"] = decrypt_text(settings.get("api_key") or "")
     try:
-        settings["config"] = json.loads(settings.get("config_json") or "{}")
+        settings["config"] = json.loads(decrypt_text(settings.get("config_json") or "{}") or "{}")
     except json.JSONDecodeError:
         settings["config"] = {}
     return settings
@@ -607,6 +696,118 @@ def due_reminders(user_id: int = 1) -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_session_token(user_id: int, days: int = 30) -> str:
+    token = secrets.token_urlsafe(48)
+    now = utc_now()
+    from datetime import datetime, timezone, timedelta
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat(timespec="seconds")
+    with connect() as con:
+        con.execute(
+            "INSERT INTO user_sessions(user_id, token_hash, created_at, expires_at) VALUES (?,?,?,?)",
+            (user_id, _token_hash(token), now, expires_at),
+        )
+    return token
+
+
+def get_user_by_session_token(token: str) -> dict[str, Any]:
+    if not token:
+        return {}
+    with connect() as con:
+        row = con.execute(
+            """
+            SELECT u.* FROM user_sessions s
+            JOIN users u ON u.id = s.user_id
+            WHERE s.token_hash=?
+              AND s.revoked_at IS NULL
+              AND s.expires_at > ?
+              AND u.is_active=1
+            """,
+            (_token_hash(token), utc_now()),
+        ).fetchone()
+        return dict(row) if row else {}
+
+
+def revoke_session_token(token: str) -> None:
+    if not token:
+        return
+    with connect() as con:
+        con.execute("UPDATE user_sessions SET revoked_at=? WHERE token_hash=?", (utc_now(), _token_hash(token)))
+
+
+def get_automation_preferences(user_id: int) -> dict[str, Any]:
+    with connect() as con:
+        row = con.execute("SELECT * FROM automation_preferences WHERE user_id=?", (user_id,)).fetchone()
+    if row:
+        data = dict(row)
+    else:
+        data = {
+            "user_id": user_id,
+            "enabled": 0,
+            "gmail_enabled": 1,
+            "public_sources_enabled": 1,
+            "score_new": 1,
+            "generate_materials": 0,
+            "gmail_interval_minutes": 30,
+            "public_interval_hours": 6,
+            "daily_summary_hour": 8,
+            "notify_in_app": 1,
+            "min_score_for_materials": 70,
+            "updated_at": utc_now(),
+        }
+    for key in ["enabled", "gmail_enabled", "public_sources_enabled", "score_new", "generate_materials", "notify_in_app"]:
+        data[key] = bool(data.get(key))
+    return data
+
+
+def save_automation_preferences(user_id: int, prefs: Dict[str, Any]) -> None:
+    current = get_automation_preferences(user_id)
+    current.update(prefs or {})
+    fields = [
+        "enabled", "gmail_enabled", "public_sources_enabled", "score_new", "generate_materials",
+        "gmail_interval_minutes", "public_interval_hours", "daily_summary_hour", "notify_in_app",
+        "min_score_for_materials",
+    ]
+    values = {k: int(current[k]) if isinstance(current[k], bool) else current[k] for k in fields}
+    values["updated_at"] = utc_now()
+    with connect() as con:
+        con.execute(
+            f"""
+            INSERT INTO automation_preferences(user_id, {', '.join(values.keys())})
+            VALUES (?, {', '.join(['?'] * len(values))})
+            ON CONFLICT(user_id) DO UPDATE SET {', '.join([f'{k}=excluded.{k}' for k in values.keys()])}
+            """,
+            [user_id, *values.values()],
+        )
+
+
+def add_activity_event(user_id: int, title: str, message: str = "", level: str = "info", metadata: Dict[str, Any] | None = None) -> None:
+    with connect() as con:
+        con.execute(
+            "INSERT INTO activity_events(user_id, level, title, message, metadata_json, created_at) VALUES (?,?,?,?,?,?)",
+            (user_id, level, title, message, json.dumps(metadata or {}), utc_now()),
+        )
+
+
+def list_activity_events(user_id: int, limit: int = 50, unread_only: bool = False) -> list[dict[str, Any]]:
+    where = "WHERE user_id=?" + (" AND read_at IS NULL" if unread_only else "")
+    with connect() as con:
+        rows = con.execute(
+            f"SELECT * FROM activity_events {where} ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_activity_read(user_id: int) -> None:
+    with connect() as con:
+        con.execute("UPDATE activity_events SET read_at=? WHERE user_id=? AND read_at IS NULL", (utc_now(), user_id))
+
+
 def delete_user_data(user_id: int) -> None:
     with connect() as con:
         con.execute("DELETE FROM reminders WHERE job_id IN (SELECT id FROM jobs WHERE user_id=?)", (user_id,))
@@ -616,6 +817,8 @@ def delete_user_data(user_id: int) -> None:
         con.execute("DELETE FROM jobs WHERE user_id=?", (user_id,))
         con.execute("DELETE FROM profile WHERE user_id=?", (user_id,))
         con.execute("DELETE FROM integration_settings WHERE user_id=?", (user_id,))
+        con.execute("DELETE FROM automation_preferences WHERE user_id=?", (user_id,))
+        con.execute("DELETE FROM activity_events WHERE user_id=?", (user_id,))
 
 
 def delete_all_data(user_id: int = 1) -> None:

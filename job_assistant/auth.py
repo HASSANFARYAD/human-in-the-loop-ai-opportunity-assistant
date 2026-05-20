@@ -8,7 +8,7 @@ from typing import Any
 from jose import JWTError, jwt
 
 from job_assistant.config import settings
-from job_assistant.db import create_user, get_user, get_user_by_email
+from job_assistant.db import create_session_token, create_user, get_user, get_user_by_email, get_user_by_session_token, revoke_session_token
 
 PASSWORD_HASH_ITERATIONS = 600_000
 
@@ -116,3 +116,15 @@ def public_user(user: dict[str, Any]) -> dict[str, Any]:
         "full_name": user.get("full_name", ""),
         "created_at": user.get("created_at", ""),
     }
+
+
+def create_refresh_token(user: dict[str, Any], days: int = 30) -> str:
+    return create_session_token(int(user["id"]), days=days)
+
+
+def user_from_refresh_token(token: str) -> dict[str, Any]:
+    return get_user_by_session_token(token)
+
+
+def revoke_refresh_token(token: str) -> None:
+    revoke_session_token(token)

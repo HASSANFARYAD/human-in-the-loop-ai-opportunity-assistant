@@ -7,11 +7,21 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from job_assistant.db import due_reminders, get_profile, list_jobs
+from job_assistant.db import (
+    add_activity_event,
+    due_reminders,
+    get_automation_preferences,
+    get_profile,
+    insert_job,
+    list_jobs,
+    save_evaluation,
+    save_materials,
+)
+from job_assistant.services.generation import generate_materials
 from job_assistant.services.gmail_ingest import fetch_job_alert_messages
 from job_assistant.services.parsing import extract_job_from_text
-from job_assistant.db import insert_job
 from job_assistant.services.public_discovery import discover_public_opportunities
+from job_assistant.services.scoring import score_job
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +49,15 @@ class JobAssistantScheduler:
             logger.info("Job Assistant Scheduler stopped")
 
     def _register_jobs(self):
-        # Check Gmail every 30 minutes for new job alerts
+        prefs = get_automation_preferences(self.user_id)
+        gmail_minutes = max(5, int(prefs.get("gmail_interval_minutes", 30)))
+        public_hours = max(1, int(prefs.get("public_interval_hours", 6)))
+        summary_hour = min(23, max(0, int(prefs.get("daily_summary_hour", 8))))
+
+        # Check Gmail on the user's preferred interval
         self.scheduler.add_job(
             self._check_gmail_alerts,
-            trigger=IntervalTrigger(minutes=30),
+            trigger=IntervalTrigger(minutes=gmail_minutes),
             id="gmail_check",
             name="Check Gmail for job alerts",
             replace_existing=True,
@@ -59,20 +74,20 @@ class JobAssistantScheduler:
             max_instances=1,
         )
 
-        # Pull public no-auth job APIs every 6 hours
+        # Pull public no-auth job APIs on the user's preferred interval
         self.scheduler.add_job(
             self._check_public_sources,
-            trigger=IntervalTrigger(hours=6),
+            trigger=IntervalTrigger(hours=public_hours),
             id="public_source_check",
             name="Check public opportunity sources",
             replace_existing=True,
             max_instances=1,
         )
 
-        # Daily summary at 8 AM
+        # Daily summary at the user's preferred hour
         self.scheduler.add_job(
             self._daily_summary,
-            trigger=CronTrigger(hour=8, minute=0),
+            trigger=CronTrigger(hour=summary_hour, minute=0),
             id="daily_summary",
             name="Generate daily summary",
             replace_existing=True,
@@ -81,8 +96,24 @@ class JobAssistantScheduler:
 
         logger.info("Scheduler jobs registered")
 
+    def _process_new_opportunity(self, opportunity: dict) -> int:
+        job_id = insert_job(opportunity, self.user_id)
+        prefs = get_automation_preferences(self.user_id)
+        profile = get_profile(self.user_id)
+        if profile and prefs.get("score_new"):
+            evaluation = score_job(profile, opportunity)
+            save_evaluation(job_id, evaluation, self.user_id)
+            if prefs.get("generate_materials") and int(evaluation.get("match_score", 0)) >= int(prefs.get("min_score_for_materials", 70)) and opportunity.get("opportunity_type", "job") == "job":
+                materials = generate_materials(profile, opportunity, evaluation, user_id=self.user_id)
+                save_materials(job_id, materials, self.user_id)
+        return job_id
+
     def _check_gmail_alerts(self):
         try:
+            prefs = get_automation_preferences(self.user_id)
+            if not prefs.get("enabled") or not prefs.get("gmail_enabled"):
+                logger.info("Gmail automation disabled")
+                return
             logger.info("Running Gmail check job")
             query = '("job alert" OR "new jobs" OR recruiter OR "is hiring" OR hackathon OR webinar OR competition OR contest OR challenge) newer_than:1d'
             messages = fetch_job_alert_messages(query=query, max_results=20)
@@ -100,17 +131,23 @@ class JobAssistantScheduler:
                         opportunity_type="auto",
                     )
                     job["date_received"] = message.get("date_received", "")
-                    insert_job(job, self.user_id)
+                    self._process_new_opportunity(job)
                     count += 1
                 except Exception as e:
                     logger.error(f"Failed to process Gmail message: {e}")
 
+            add_activity_event(self.user_id, "Gmail import complete", f"Imported {count} new opportunity/opportunities from Gmail.")
             logger.info(f"Successfully imported {count} new job(s) from Gmail")
         except Exception as e:
+            add_activity_event(self.user_id, "Gmail import failed", str(e), level="error")
             logger.error(f"Gmail check failed: {e}")
 
     def _check_public_sources(self):
         try:
+            prefs = get_automation_preferences(self.user_id)
+            if not prefs.get("enabled") or not prefs.get("public_sources_enabled"):
+                logger.info("Public source automation disabled")
+                return
             profile = get_profile(self.user_id)
             query = " ".join(
                 str(profile.get(key, ""))
@@ -129,16 +166,19 @@ class JobAssistantScheduler:
             )
             count = 0
             for opportunity in opportunities:
-                insert_job(opportunity, self.user_id)
+                self._process_new_opportunity(opportunity)
                 count += 1
+            add_activity_event(self.user_id, "Public discovery complete", f"Imported {count} public opportunity/opportunities.")
             logger.info(f"Imported {count} public opportunity/opportunities")
         except Exception as e:
+            add_activity_event(self.user_id, "Public discovery failed", str(e), level="error")
             logger.error(f"Public source discovery failed: {e}")
 
     def _check_reminders(self):
         try:
             reminders = due_reminders(self.user_id)
             if reminders:
+                add_activity_event(self.user_id, "Reminders due", f"You have {len(reminders)} reminder(s) due.")
                 logger.info(f"Found {len(reminders)} due reminder(s)")
         except Exception as e:
             logger.error(f"Reminder check failed: {e}")
@@ -156,10 +196,9 @@ class JobAssistantScheduler:
             applied = sum(1 for j in jobs if j.get("status") == "Applied")
             interviews = sum(1 for j in jobs if j.get("status") == "Interview")
 
-            logger.info(
-                f"Daily Summary: {len(jobs)} total jobs, "
-                f"{unscored} unscored, {applied} applied, {interviews} interviews"
-            )
+            message = f"{len(jobs)} total opportunities, {unscored} unscored, {applied} applied, {interviews} interviews"
+            add_activity_event(self.user_id, "Daily summary", message)
+            logger.info(f"Daily Summary: {message}")
         except Exception as e:
             logger.error(f"Daily summary failed: {e}")
 
