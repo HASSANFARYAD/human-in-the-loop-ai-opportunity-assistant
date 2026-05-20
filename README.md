@@ -355,3 +355,91 @@ The selected provider is used for application-material generation. If no provide
 The new Automation page lets each user enable scheduled workflows, configure intervals, decide whether to score new opportunities, and optionally generate materials for high-match jobs. Scheduler runs now write progress updates to `activity_events`, which are shown in the app.
 
 Automation still respects the original safety boundary: the app imports/organizes/scorers/generates drafts, but it does not automatically submit job applications or scrape private pages.
+
+## Gmail integration: user flow and production notes
+
+Current implementation uses Gmail read-only OAuth for importing job-alert emails. The app searches Gmail for job-related alerts, recruiter messages, hackathons, webinars, contests, and challenges, then converts each matching email into an opportunity.
+
+### Local/development flow
+
+1. In Google Cloud Console, create a project and enable the Gmail API.
+2. Create OAuth client credentials for a Desktop app.
+3. Download the credentials file as `credentials.json` and place it in the project root.
+4. Start the app and go to `Ingest Opportunities -> Gmail read-only`.
+5. Click `Fetch Gmail alerts` once. Google will open a consent flow.
+6. After approval, the app stores `token.json` locally and can refresh Gmail access automatically.
+7. Enable `Automation -> Import Gmail alerts automatically` and start the scheduler.
+
+The Gmail scope is intentionally read-only:
+
+```text
+https://www.googleapis.com/auth/gmail.readonly
+```
+
+### Production recommendation
+
+For a multi-user SaaS product, replace the local desktop OAuth flow with a web OAuth callback. Store each user's Google refresh token encrypted in `integration_settings`, never in a shared `token.json` file. The scheduler should then load the encrypted token for the active user, refresh it server-side, and run the Gmail import for that user only.
+
+## LinkedIn post assistance
+
+The AI does not need to post automatically to be useful. It can generate:
+
+- a professional LinkedIn post about the user's job search,
+- a role-specific networking/recruiter message,
+- a short application follow-up message,
+- a post announcing availability or portfolio work,
+- a tailored message for each high-match opportunity.
+
+The app currently generates a short `linkedin_message` in application materials. The `LinkedIn posting` integration can publish a text post with the user's official LinkedIn OAuth access token and author URN. For production, keep a human approval step before publishing so the user reviews the AI-generated text before it goes live.
+
+## Automated LinkedIn job API search
+
+The app now supports scheduled LinkedIn API imports through the configured RapidAPI LinkedIn job-search integration.
+
+1. Go to `Integrations -> RapidAPI LinkedIn jobs`.
+2. Add the RapidAPI key, host, endpoint, default title/search filter, default location filter, and number of offsets per scheduled run.
+3. Go to `Automation`.
+4. Enable `Search LinkedIn jobs API automatically`.
+5. Set `LinkedIn API interval hours`.
+6. Start the scheduler.
+
+On each scheduled run, the app calls the configured LinkedIn jobs API, maps returned items into opportunities, scores them if scoring is enabled, optionally generates materials for high-match jobs, and writes progress to the activity feed.
+
+## Multi-user Gmail OAuth
+
+The app now supports Gmail for multiple users. The old `token.json` approach is only a local-development fallback and should not be used for production SaaS because it represents a single shared mailbox.
+
+Production flow:
+
+1. Create a Google Cloud OAuth **Web application** client.
+2. Enable the Gmail API.
+3. Add the app URL as an authorized redirect URI. For local Streamlit this is usually:
+
+   ```text
+   http://localhost:8501
+   ```
+
+   In production this should be your public app URL, for example:
+
+   ```text
+   https://your-domain.com
+   ```
+
+4. Configure environment variables:
+
+   ```bash
+   APP_BASE_URL=https://your-domain.com
+   GOOGLE_CLIENT_ID=your-google-oauth-client-id
+   GOOGLE_CLIENT_SECRET=your-google-oauth-client-secret
+   ```
+
+5. Each logged-in user goes to `Ingest Opportunities -> Gmail read-only` and clicks **Connect Gmail**.
+6. The returned Google OAuth refresh token is stored encrypted under that user's `integration_settings` row.
+7. The scheduler calls Gmail with the logged-in user's own encrypted credentials, so every user imports job alerts from their own Gmail account.
+
+Security notes:
+
+- Gmail uses the read-only scope: `https://www.googleapis.com/auth/gmail.readonly`.
+- OAuth tokens are encrypted at rest using `APP_ENCRYPTION_KEY`.
+- Tokens are refreshed server-side and never exposed in the UI.
+- Users can disconnect Gmail from the Gmail tab, which removes their stored Gmail credentials.

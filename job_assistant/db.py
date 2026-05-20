@@ -87,10 +87,12 @@ def _run_migrations(con) -> None:
             enabled INTEGER NOT NULL DEFAULT 0,
             gmail_enabled INTEGER NOT NULL DEFAULT 1,
             public_sources_enabled INTEGER NOT NULL DEFAULT 1,
+            linkedin_api_enabled INTEGER NOT NULL DEFAULT 0,
             score_new INTEGER NOT NULL DEFAULT 1,
             generate_materials INTEGER NOT NULL DEFAULT 0,
             gmail_interval_minutes INTEGER NOT NULL DEFAULT 30,
             public_interval_hours INTEGER NOT NULL DEFAULT 6,
+            linkedin_interval_hours INTEGER NOT NULL DEFAULT 6,
             daily_summary_hour INTEGER NOT NULL DEFAULT 8,
             notify_in_app INTEGER NOT NULL DEFAULT 1,
             min_score_for_materials INTEGER NOT NULL DEFAULT 70,
@@ -115,6 +117,14 @@ def _run_migrations(con) -> None:
     _ensure_default_user(con)
     _migrate_profile_table(con)
     _migrate_jobs_table(con)
+
+
+    cursor = con.execute("PRAGMA table_info(automation_preferences)")
+    automation_columns = {row[1] for row in cursor.fetchall()}
+    if "linkedin_api_enabled" not in automation_columns:
+        con.execute("ALTER TABLE automation_preferences ADD COLUMN linkedin_api_enabled INTEGER NOT NULL DEFAULT 0")
+    if "linkedin_interval_hours" not in automation_columns:
+        con.execute("ALTER TABLE automation_preferences ADD COLUMN linkedin_interval_hours INTEGER NOT NULL DEFAULT 6")
 
     cursor = con.execute("PRAGMA table_info(jobs)")
     columns = {row[1] for row in cursor.fetchall()}
@@ -380,10 +390,12 @@ def init_db() -> None:
                 enabled INTEGER NOT NULL DEFAULT 0,
                 gmail_enabled INTEGER NOT NULL DEFAULT 1,
                 public_sources_enabled INTEGER NOT NULL DEFAULT 1,
+                linkedin_api_enabled INTEGER NOT NULL DEFAULT 0,
                 score_new INTEGER NOT NULL DEFAULT 1,
                 generate_materials INTEGER NOT NULL DEFAULT 0,
                 gmail_interval_minutes INTEGER NOT NULL DEFAULT 30,
                 public_interval_hours INTEGER NOT NULL DEFAULT 6,
+                linkedin_interval_hours INTEGER NOT NULL DEFAULT 6,
                 daily_summary_hour INTEGER NOT NULL DEFAULT 8,
                 notify_in_app INTEGER NOT NULL DEFAULT 1,
                 min_score_for_materials INTEGER NOT NULL DEFAULT 70,
@@ -750,16 +762,18 @@ def get_automation_preferences(user_id: int) -> dict[str, Any]:
             "enabled": 0,
             "gmail_enabled": 1,
             "public_sources_enabled": 1,
+            "linkedin_api_enabled": 0,
             "score_new": 1,
             "generate_materials": 0,
             "gmail_interval_minutes": 30,
             "public_interval_hours": 6,
+            "linkedin_interval_hours": 6,
             "daily_summary_hour": 8,
             "notify_in_app": 1,
             "min_score_for_materials": 70,
             "updated_at": utc_now(),
         }
-    for key in ["enabled", "gmail_enabled", "public_sources_enabled", "score_new", "generate_materials", "notify_in_app"]:
+    for key in ["enabled", "gmail_enabled", "public_sources_enabled", "linkedin_api_enabled", "score_new", "generate_materials", "notify_in_app"]:
         data[key] = bool(data.get(key))
     return data
 
@@ -768,8 +782,8 @@ def save_automation_preferences(user_id: int, prefs: Dict[str, Any]) -> None:
     current = get_automation_preferences(user_id)
     current.update(prefs or {})
     fields = [
-        "enabled", "gmail_enabled", "public_sources_enabled", "score_new", "generate_materials",
-        "gmail_interval_minutes", "public_interval_hours", "daily_summary_hour", "notify_in_app",
+        "enabled", "gmail_enabled", "public_sources_enabled", "linkedin_api_enabled", "score_new", "generate_materials",
+        "gmail_interval_minutes", "public_interval_hours", "linkedin_interval_hours", "daily_summary_hour", "notify_in_app",
         "min_score_for_materials",
     ]
     values = {k: int(current[k]) if isinstance(current[k], bool) else current[k] for k in fields}

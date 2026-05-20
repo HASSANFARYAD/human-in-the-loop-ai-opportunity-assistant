@@ -11,6 +11,7 @@ from job_assistant.db import (
     add_activity_event,
     due_reminders,
     get_automation_preferences,
+    get_integration_settings,
     get_profile,
     insert_job,
     list_jobs,
@@ -21,6 +22,12 @@ from job_assistant.services.generation import generate_materials
 from job_assistant.services.gmail_ingest import fetch_job_alert_messages
 from job_assistant.services.parsing import extract_job_from_text
 from job_assistant.services.public_discovery import discover_public_opportunities
+from job_assistant.services.rapidapi_linkedin import (
+    DEFAULT_ENDPOINT as RAPIDAPI_LINKEDIN_ENDPOINT,
+    DEFAULT_HOST as RAPIDAPI_LINKEDIN_HOST,
+    rapidapi_items_to_opportunities,
+    search_linkedin_jobs,
+)
 from job_assistant.services.scoring import score_job
 
 logger = logging.getLogger(__name__)
@@ -52,6 +59,7 @@ class JobAssistantScheduler:
         prefs = get_automation_preferences(self.user_id)
         gmail_minutes = max(5, int(prefs.get("gmail_interval_minutes", 30)))
         public_hours = max(1, int(prefs.get("public_interval_hours", 6)))
+        linkedin_hours = max(1, int(prefs.get("linkedin_interval_hours", 6)))
         summary_hour = min(23, max(0, int(prefs.get("daily_summary_hour", 8))))
 
         # Check Gmail on the user's preferred interval
@@ -60,6 +68,16 @@ class JobAssistantScheduler:
             trigger=IntervalTrigger(minutes=gmail_minutes),
             id="gmail_check",
             name="Check Gmail for job alerts",
+            replace_existing=True,
+            max_instances=1,
+        )
+
+        # Pull LinkedIn jobs from the configured API on the user's preferred interval
+        self.scheduler.add_job(
+            self._check_linkedin_api,
+            trigger=IntervalTrigger(hours=linkedin_hours),
+            id="linkedin_api_check",
+            name="Check LinkedIn jobs API",
             replace_existing=True,
             max_instances=1,
         )
@@ -116,7 +134,7 @@ class JobAssistantScheduler:
                 return
             logger.info("Running Gmail check job")
             query = '("job alert" OR "new jobs" OR recruiter OR "is hiring" OR hackathon OR webinar OR competition OR contest OR challenge) newer_than:1d'
-            messages = fetch_job_alert_messages(query=query, max_results=20)
+            messages = fetch_job_alert_messages(user_id=self.user_id, query=query, max_results=20)
 
             if not messages:
                 logger.info("No new Gmail job alerts")
@@ -173,6 +191,50 @@ class JobAssistantScheduler:
         except Exception as e:
             add_activity_event(self.user_id, "Public discovery failed", str(e), level="error")
             logger.error(f"Public source discovery failed: {e}")
+
+
+    def _check_linkedin_api(self):
+        try:
+            prefs = get_automation_preferences(self.user_id)
+            if not prefs.get("enabled") or not prefs.get("linkedin_api_enabled"):
+                logger.info("LinkedIn API automation disabled")
+                return
+
+            rapidapi = get_integration_settings(self.user_id, "rapidapi_linkedin")
+            rapidapi_key = rapidapi.get("api_key", "")
+            rapidapi_config = rapidapi.get("config", {})
+            if not rapidapi_key:
+                add_activity_event(self.user_id, "LinkedIn API skipped", "Add a RapidAPI LinkedIn key in Integrations first.", level="warning")
+                return
+
+            profile = get_profile(self.user_id) or {}
+            title_filter = rapidapi_config.get("title_filter") or profile.get("target_roles") or profile.get("skills") or "software engineer"
+            location_filter = rapidapi_config.get("location_filter") or profile.get("locations") or "Remote"
+            max_offsets = max(1, int(rapidapi_config.get("max_offsets", 1)))
+
+            imported = 0
+            for offset in range(max_offsets):
+                items = search_linkedin_jobs(
+                    rapidapi_key,
+                    title_filter,
+                    location_filter,
+                    offset,
+                    rapidapi_config.get("host", RAPIDAPI_LINKEDIN_HOST),
+                    rapidapi_config.get("endpoint", RAPIDAPI_LINKEDIN_ENDPOINT),
+                )
+                for opportunity in rapidapi_items_to_opportunities(items):
+                    self._process_new_opportunity(opportunity)
+                    imported += 1
+
+            add_activity_event(
+                self.user_id,
+                "LinkedIn API import complete",
+                f"Imported {imported} LinkedIn opportunity/opportunities for '{title_filter}' in '{location_filter}'.",
+            )
+            logger.info("Imported %s LinkedIn API opportunity/opportunities", imported)
+        except Exception as e:
+            add_activity_event(self.user_id, "LinkedIn API import failed", str(e), level="error")
+            logger.error(f"LinkedIn API import failed: {e}")
 
     def _check_reminders(self):
         try:

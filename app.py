@@ -38,7 +38,7 @@ from job_assistant.crypto import mask_secret
 from job_assistant.services.ai_providers import SUPPORTED_PROVIDERS
 from job_assistant.services.apify_integration import apify_items_to_opportunities, build_run_input, run_actor_for_items
 from job_assistant.services.generation import generate_materials
-from job_assistant.services.gmail_ingest import fetch_job_alert_messages
+from job_assistant.services.gmail_ingest import build_gmail_authorization_url, disconnect_gmail, exchange_gmail_code, fetch_job_alert_messages, get_gmail_connection
 from job_assistant.services.linkedin_integration import publish_text_post
 from job_assistant.services.rapidapi_linkedin import (
     DEFAULT_ENDPOINT as RAPIDAPI_LINKEDIN_ENDPOINT,
@@ -67,6 +67,25 @@ PUBLIC_DISCOVERY_SOURCES = [
     "Jobicy",
     "Hacker News Who is hiring",
 ]
+
+
+def _app_base_url() -> str:
+    """Public URL used as the Google OAuth redirect URI."""
+    try:
+        configured_url = st.secrets.get("APP_BASE_URL")
+    except st.errors.StreamlitSecretNotFoundError:
+        configured_url = None
+    return configured_url or __import__("os").getenv("APP_BASE_URL", f"http://localhost:{settings.streamlit_port}")
+
+
+def _query_param_value(name: str) -> str:
+    try:
+        value = st.query_params.get(name, "")
+    except Exception:
+        return ""
+    if isinstance(value, list):
+        return value[0] if value else ""
+    return value or ""
 
 st.set_page_config(page_title="Opportunity Assistant", page_icon="🚀", layout="wide")
 
@@ -102,19 +121,24 @@ def get_cookie_manager():
 cookie_manager = get_cookie_manager()
 
 
+def _set_refresh_cookie(refresh_token: str) -> None:
+    if not cookie_manager or not refresh_token:
+        return
+    cookie_manager.set(
+        settings.session_cookie_name,
+        refresh_token,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days),
+        same_site="lax",
+        secure=settings.session_cookie_secure,
+    )
+
+
 def persist_login(user: dict) -> None:
     token = create_access_token(user)
     refresh_token = create_refresh_token(user, days=settings.refresh_token_expire_days)
     st.session_state["user"] = public_user(user)
     st.session_state["access_token"] = token
-    if cookie_manager:
-        cookie_manager.set(
-            settings.session_cookie_name,
-            refresh_token,
-            expires_at=datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days),
-            same_site="strict",
-            secure=settings.session_cookie_secure,
-        )
+    _set_refresh_cookie(refresh_token)
 
 
 def require_streamlit_user() -> dict:
@@ -128,6 +152,7 @@ def require_streamlit_user() -> dict:
             if user:
                 st.session_state["user"] = public_user(user)
                 st.session_state["access_token"] = create_access_token(user)
+                _set_refresh_cookie(refresh_token)
                 return st.session_state["user"]
         if not st.session_state.get("cookie_probe_done"):
             st.session_state["cookie_probe_done"] = True
@@ -403,14 +428,17 @@ if page == "Automation":
         enabled = st.toggle("Enable scheduled automation", value=bool(prefs.get("enabled")))
         gmail_enabled = st.toggle("Import Gmail alerts automatically", value=bool(prefs.get("gmail_enabled")))
         public_sources_enabled = st.toggle("Discover public opportunities automatically", value=bool(prefs.get("public_sources_enabled")))
+        linkedin_api_enabled = st.toggle("Search LinkedIn jobs API automatically", value=bool(prefs.get("linkedin_api_enabled")))
         score_new = st.toggle("Score every new opportunity", value=bool(prefs.get("score_new")))
         generate_materials_pref = st.toggle("Generate application materials for high-match jobs", value=bool(prefs.get("generate_materials")))
-        col_a, col_b, col_c = st.columns(3)
+        col_a, col_b, col_c, col_d = st.columns(4)
         with col_a:
             gmail_interval_minutes = st.number_input("Gmail interval minutes", min_value=5, max_value=1440, value=int(prefs.get("gmail_interval_minutes", 30)), step=5)
         with col_b:
             public_interval_hours = st.number_input("Public discovery interval hours", min_value=1, max_value=168, value=int(prefs.get("public_interval_hours", 6)), step=1)
         with col_c:
+            linkedin_interval_hours = st.number_input("LinkedIn API interval hours", min_value=1, max_value=168, value=int(prefs.get("linkedin_interval_hours", 6)), step=1)
+        with col_d:
             daily_summary_hour = st.number_input("Daily summary hour", min_value=0, max_value=23, value=int(prefs.get("daily_summary_hour", 8)), step=1)
         min_score_for_materials = st.slider("Generate materials only when score is at least", 0, 100, int(prefs.get("min_score_for_materials", 70)))
         notify_in_app = st.toggle("Show in-app progress notifications", value=bool(prefs.get("notify_in_app")))
@@ -419,10 +447,12 @@ if page == "Automation":
                 "enabled": enabled,
                 "gmail_enabled": gmail_enabled,
                 "public_sources_enabled": public_sources_enabled,
+                "linkedin_api_enabled": linkedin_api_enabled,
                 "score_new": score_new,
                 "generate_materials": generate_materials_pref,
                 "gmail_interval_minutes": gmail_interval_minutes,
                 "public_interval_hours": public_interval_hours,
+                "linkedin_interval_hours": linkedin_interval_hours,
                 "daily_summary_hour": daily_summary_hour,
                 "min_score_for_materials": min_score_for_materials,
                 "notify_in_app": notify_in_app,
@@ -548,12 +578,23 @@ elif page == "Integrations":
             rapidapi_key = st.text_input("RapidAPI key", value=rapidapi.get("api_key", ""), type="password")
             rapidapi_host = st.text_input("RapidAPI host", value=rapidapi_config.get("host", RAPIDAPI_LINKEDIN_HOST))
             rapidapi_endpoint = st.text_input("Endpoint URL", value=rapidapi_config.get("endpoint", RAPIDAPI_LINKEDIN_ENDPOINT))
+            title_filter_default = rapidapi_config.get("title_filter", "")
+            location_filter_default = rapidapi_config.get("location_filter", "Remote")
+            title_filter_saved = st.text_input("Default automated title/search filter", value=title_filter_default, placeholder="Software Engineer OR Data Analyst")
+            location_filter_saved = st.text_input("Default automated location filter", value=location_filter_default, placeholder="Remote OR United States")
+            max_offsets_saved = st.number_input("Automated API offsets per run", min_value=1, max_value=20, value=int(rapidapi_config.get("max_offsets", 1)), step=1)
             if st.form_submit_button("Save RapidAPI settings"):
                 save_integration_settings(
                     current_user_id,
                     "rapidapi_linkedin",
                     rapidapi_key,
-                    {"host": rapidapi_host, "endpoint": rapidapi_endpoint},
+                    {
+                        "host": rapidapi_host,
+                        "endpoint": rapidapi_endpoint,
+                        "title_filter": title_filter_saved,
+                        "location_filter": location_filter_saved,
+                        "max_offsets": int(max_offsets_saved),
+                    },
                 )
                 st.success("RapidAPI settings saved.")
 
@@ -722,13 +763,43 @@ elif page == "Ingest Opportunities":
 
     with gmail_tab:
         st.subheader("Gmail alerts")
-        st.write("Use this after adding Google OAuth files. Fetch now imports matching Gmail alerts once; Start in the sidebar runs the same kind of import every 30 minutes.")
+        st.write("Each user connects their own Gmail account. OAuth tokens are encrypted per user and the scheduler only reads the Gmail mailbox connected by the currently logged-in user.")
+
+        redirect_uri = _app_base_url().rstrip("/")
+        oauth_code = _query_param_value("code")
+        oauth_state = _query_param_value("state")
+        if oauth_code and oauth_state and not st.session_state.get("gmail_oauth_done"):
+            try:
+                exchange_gmail_code(current_user_id, oauth_code, redirect_uri, oauth_state)
+                st.session_state["gmail_oauth_done"] = True
+                st.query_params.clear()
+                st.success("Gmail connected for your account.")
+            except Exception as exc:
+                st.error(f"Gmail connection failed: {exc}")
+
+        gmail_connection = get_gmail_connection(current_user_id)
+        if gmail_connection.get("connected"):
+            connected_as = gmail_connection.get("connected_email") or "connected Gmail account"
+            st.success(f"Gmail connected: {connected_as}")
+            if st.button("Disconnect Gmail"):
+                disconnect_gmail(current_user_id)
+                st.success("Gmail disconnected for your account.")
+                st.rerun()
+        else:
+            st.info("Gmail is not connected for this user yet.")
+            try:
+                auth_url = build_gmail_authorization_url(current_user_id, redirect_uri)
+                st.link_button("Connect Gmail", auth_url)
+                st.caption(f"Google OAuth redirect URI: `{redirect_uri}`. Add this exact URL to the Google Cloud OAuth client.")
+            except Exception as exc:
+                st.warning(f"Gmail OAuth is not configured yet: {exc}")
+
         gmail_opportunity_type = st.selectbox("Classify Gmail results as", ["auto", *OPPORTUNITY_TYPES], index=0)
         query = st.text_input("Gmail search query", value='("job alert" OR "new jobs" OR recruiter OR "is hiring" OR hackathon OR webinar OR competition OR contest OR challenge) newer_than:30d')
         max_results = st.slider("Max emails", 1, 50, 10)
         if st.button("Fetch Gmail alerts"):
             try:
-                messages = fetch_job_alert_messages(query=query, max_results=max_results)
+                messages = fetch_job_alert_messages(user_id=current_user_id, query=query, max_results=max_results)
                 count = 0
                 for m in messages:
                     job = extract_job_from_text(
