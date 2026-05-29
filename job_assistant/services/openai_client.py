@@ -2,16 +2,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from .ai_providers import ask_json as ask_json_multi_provider
+from job_assistant.ai_orchestrator import ai_orchestrator
+from job_assistant.db import has_integration_api_key
 
 
-def has_openai() -> bool:
-    # Backward-compatible helper. Multi-provider generation now checks the
-    # selected user's provider settings inside ask_json_multi_provider.
-    import os
-
-    return bool(os.getenv("OPENAI_API_KEY"))
+def has_openai(user_id: Optional[int] = None) -> bool:
+    return bool(user_id and has_integration_api_key(user_id, "ai_provider"))
 
 
-def ask_json(system: str, user: str, fallback: Dict[str, Any], user_id: Optional[int] = None) -> Dict[str, Any]:
-    return ask_json_multi_provider(system, user, fallback, user_id=user_id)
+def ask_json(system: str, user: str, fallback: Dict[str, Any], user_id: Optional[int] = None, task_type: str = "general", prompt_version: str = "") -> Dict[str, Any]:
+    return ai_orchestrator.ask_json(system, user, fallback, user_id=user_id, task_type=task_type, prompt_version=prompt_version)

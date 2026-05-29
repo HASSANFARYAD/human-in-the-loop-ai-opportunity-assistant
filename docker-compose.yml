@@ -1,0 +1,117 @@
+name: job-assistant
+
+x-common-env: &common-env
+  ENVIRONMENT: ${ENVIRONMENT:-dev}
+  DEPLOYMENT_PROFILE: ${DEPLOYMENT_PROFILE:-local}
+  APP_DATA_DIR: /app/data
+  LOG_DIR: /app/logs
+  APP_DB_PATH: /app/data/job_assistant.sqlite3
+  LOG_FILE: /app/logs/job_assistant.log
+  DEFAULT_AI_PROVIDER: ${DEFAULT_AI_PROVIDER:-openai}
+  OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+  SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+  RATE_LIMITS_ENABLED: ${RATE_LIMITS_ENABLED:-true}
+  RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-sqlite}
+  REDIS_URL: ${REDIS_URL:-}
+  RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+  RATE_LIMIT_AI_PER_HOUR: ${RATE_LIMIT_AI_PER_HOUR:-60}
+  RATE_LIMIT_FEEDBACK_PER_HOUR: ${RATE_LIMIT_FEEDBACK_PER_HOUR:-20}
+  RATE_LIMIT_PUBLISH_PER_HOUR: ${RATE_LIMIT_PUBLISH_PER_HOUR:-20}
+  OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-true}
+  TRACING_ENABLED: ${TRACING_ENABLED:-true}
+  METRICS_RETENTION_DAYS: ${METRICS_RETENTION_DAYS:-14}
+  ERROR_ALERT_THRESHOLD_PER_HOUR: ${ERROR_ALERT_THRESHOLD_PER_HOUR:-10}
+  LATENCY_ALERT_THRESHOLD_MS: ${LATENCY_ALERT_THRESHOLD_MS:-3000}
+  WORKER_BACKEND: ${WORKER_BACKEND:-sqlite}
+  WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-5}
+  WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
+  PUBLISHING_REQUIRE_APPROVAL: ${PUBLISHING_REQUIRE_APPROVAL:-true}
+  PUBLISHING_DRY_RUN: ${PUBLISHING_DRY_RUN:-true}
+  AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-365}
+  EXPORT_RETENTION_DAYS: ${EXPORT_RETENTION_DAYS:-7}
+  APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-key-change-in-prod}
+  SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+  CORS_ORIGINS: ${CORS_ORIGINS:-*}
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      <<: *common-env
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:8000}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8501}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - app_data:/app/data
+      - app_logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    env_file:
+      - .env
+    environment:
+      <<: *common-env
+      STREAMLIT_PORT: 8501
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8501}
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-http://api:8000}
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    volumes:
+      - app_data:/app/data
+      - app_logs:/app/logs
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["production", "redis"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["production", "postgres"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-job_assistant}
+      POSTGRES_USER: ${POSTGRES_USER:-job_assistant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  app_data:
+  app_logs:
+  redis_data:
+  postgres_data:

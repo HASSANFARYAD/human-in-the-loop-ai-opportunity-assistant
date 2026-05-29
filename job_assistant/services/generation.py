@@ -25,7 +25,7 @@ JOB:\n{job}
 
 EVALUATION:\n{evaluation}
 """
-    data = ask_json(system, user, fallback, user_id=user_id)
+    data = ask_json(system, user, fallback, user_id=user_id, task_type="materials_generation")
     for k, v in fallback.items():
         data.setdefault(k, v)
     return data

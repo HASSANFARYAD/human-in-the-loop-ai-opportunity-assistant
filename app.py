@@ -15,6 +15,10 @@ from job_assistant.db import (
     delete_all_data,
     delete_job,
     due_reminders,
+    FEEDBACK_CATEGORIES,
+    FEEDBACK_SEVERITIES,
+    FEEDBACK_STATUSES,
+    create_feedback,
     get_automation_preferences,
     get_evaluation,
     get_integration_settings,
@@ -24,17 +28,46 @@ from job_assistant.db import (
     init_db,
     list_activity_events,
     insert_job,
+    list_audit_logs,
+    create_automation_rule,
+    delete_automation_rule,
+    list_ai_generations,
+    list_automation_errors,
+    list_automation_rules,
+    list_automation_runs,
+    list_prompt_versions,
+    update_automation_rule,
+    upsert_prompt_version,
+    list_feedback,
     list_jobs,
     save_automation_preferences,
     save_evaluation,
     save_integration_settings,
+    delete_provider_config,
+    list_provider_configs,
+    save_provider_config,
     delete_integration_settings,
     save_materials,
+    update_feedback_status,
+    add_workspace_member,
+    create_organization,
+    create_workspace,
+    enterprise_summary,
+    ensure_user_workspace,
+    list_permissions,
+    list_role_permissions,
+    list_roles,
+    list_shared_resources,
+    list_user_workspaces,
+    list_workspace_members,
+    share_resource,
+    user_has_permission,
     update_status,
     upsert_profile,
 )
 from job_assistant.config import settings
 from job_assistant.crypto import mask_secret
+from job_assistant.automation_engine import automation_engine
 from job_assistant.services.ai_providers import SUPPORTED_PROVIDERS
 from job_assistant.services.apify_integration import apify_items_to_opportunities, build_run_input, run_actor_for_items
 from job_assistant.services.generation import generate_materials
@@ -75,7 +108,7 @@ def _app_base_url() -> str:
         configured_url = st.secrets.get("APP_BASE_URL")
     except st.errors.StreamlitSecretNotFoundError:
         configured_url = None
-    return configured_url or __import__("os").getenv("APP_BASE_URL", f"http://localhost:{settings.streamlit_port}")
+    return configured_url or settings.app_base_url
 
 
 def _query_param_value(name: str) -> str:
@@ -375,7 +408,27 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
     st.divider()
-    page = st.radio("Navigate", ["Profile", "Automation", "Integrations", "Ingest Opportunities", "Review Queue", "Opportunity Detail", "Reminders", "Privacy"])
+    page = st.radio("Navigate", ["Profile", "Automation", "AI Orchestration", "Integrations", "Team", "Ingest Opportunities", "Review Queue", "Opportunity Detail", "Reminders", "Feedback", "Privacy"])
+    st.divider()
+    with st.expander("Quick feedback"):
+        with st.form("quick_feedback_form"):
+            q_category = st.selectbox("Category", FEEDBACK_CATEGORIES, index=FEEDBACK_CATEGORIES.index("General Suggestion"))
+            q_title = st.text_input("Title", placeholder="Short summary")
+            q_description = st.text_area("Details", height=90, placeholder="What happened or what should improve?")
+            q_severity = st.selectbox("Severity", FEEDBACK_SEVERITIES, index=FEEDBACK_SEVERITIES.index("medium"))
+            if st.form_submit_button("Submit feedback"):
+                try:
+                    create_feedback(current_user_id, {
+                        "category": q_category,
+                        "title": q_title,
+                        "description": q_description,
+                        "severity": q_severity,
+                        "app_version": settings.app_version,
+                        "metadata": {"source": "sidebar", "page": page},
+                    })
+                    st.success("Feedback submitted.")
+                except Exception as exc:
+                    st.error(f"Feedback failed: {exc}")
     st.divider()
     prefs_sidebar = get_automation_preferences(current_user_id)
     st.write("**Automation**")
@@ -474,7 +527,7 @@ elif page == "Profile":
     uploaded_cv = st.file_uploader("Upload CV/resume (.pdf, .docx, .txt)", type=["pdf", "docx", "txt"])
     if uploaded_cv:
         cv_text = read_uploaded_cv(uploaded_cv)
-        st.session_state["profile_draft"] = {**profile, **extract_profile_from_resume(cv_text)}
+        st.session_state["profile_draft"] = {**profile, **extract_profile_from_resume(cv_text, user_id=current_user_id)}
         st.success("Resume parsed. Review/edit the auto-filled fields below before saving.")
     profile_values = {**profile, **st.session_state.get("profile_draft", {})}
     with st.form("profile_form"):
@@ -493,10 +546,83 @@ elif page == "Profile":
             st.session_state.pop("profile_draft", None)
             st.success("Profile saved locally.")
 
+elif page == "AI Orchestration":
+    st.header("AI Orchestration & Workflow Automation")
+    st.write("Phase 4 and 5 controls for AI generation logging, prompt versions, and safe automation rules.")
+    ai_log_tab, prompt_tab, rules_tab, runs_tab = st.tabs(["AI usage", "Prompt versions", "Automation rules", "Automation runs"])
+
+    with ai_log_tab:
+        generations = list_ai_generations(current_user_id, limit=100)
+        if generations:
+            st.dataframe(pd.DataFrame(generations), use_container_width=True, hide_index=True)
+        else:
+            st.info("No AI generations logged yet. AI calls will appear here with provider, model, task type, latency, and status.")
+
+    with prompt_tab:
+        with st.form("prompt_version_form"):
+            name = st.text_input("Prompt name", value="opportunity_summary")
+            version = st.text_input("Version", value="v1")
+            description = st.text_input("Description", value="Reusable prompt template")
+            template = st.text_area("Template", value="Summarize this opportunity as JSON.", height=180)
+            is_active = st.checkbox("Active", value=True)
+            if st.form_submit_button("Save prompt version"):
+                upsert_prompt_version(name, version, template, description, is_active)
+                st.success("Prompt version saved.")
+                st.rerun()
+        prompts = list_prompt_versions()
+        if prompts:
+            st.dataframe(pd.DataFrame(prompts), use_container_width=True, hide_index=True)
+
+    with rules_tab:
+        existing_rules = list_automation_rules(current_user_id, include_inactive=True)
+        if existing_rules:
+            st.dataframe(pd.DataFrame(existing_rules), use_container_width=True, hide_index=True)
+        else:
+            st.info("No automation rules yet. Create one below. Human approval is enabled by default.")
+        with st.form("automation_rule_form"):
+            rule_name = st.text_input("Rule name", value="Notify on high score opportunity")
+            trigger_event = st.selectbox("Trigger event", ["manual", "feedback.created", "opportunity.created", "high_score_opportunity", "provider.failed", "ai.generated"], index=0)
+            action_type = st.selectbox("Action type", ["notify", "draft", "webhook"], index=0)
+            message = st.text_input("Notification message", value="Automation matched. Review before taking action.")
+            human_approval_required = st.checkbox("Require human approval", value=True)
+            is_active = st.checkbox("Rule active", value=True)
+            if st.form_submit_button("Create automation rule"):
+                create_automation_rule(current_user_id, {"name": rule_name, "trigger_event": trigger_event, "action_type": action_type, "action_config": {"message": message}, "is_active": is_active, "human_approval_required": human_approval_required})
+                st.success("Automation rule created.")
+                st.rerun()
+        if existing_rules:
+            labels = {f"#{r['id']} {r['name']}": r for r in existing_rules}
+            selected = st.selectbox("Delete automation rule", ["Select..."] + list(labels.keys()))
+            if selected != "Select..." and st.button("Delete selected automation rule"):
+                delete_automation_rule(int(labels[selected]["id"]), current_user_id)
+                st.success("Automation rule deleted.")
+                st.rerun()
+        with st.form("manual_trigger_form"):
+            manual_event = st.text_input("Trigger event to test", value="manual")
+            payload_json = st.text_area("Payload JSON", value='{"source":"manual_test"}', height=120)
+            if st.form_submit_button("Run trigger"):
+                try:
+                    results = automation_engine.trigger(current_user_id, manual_event, json.loads(payload_json or "{}"))
+                    st.success("Automation trigger executed.")
+                    st.json(results)
+                except Exception as exc:
+                    st.error(f"Automation trigger failed: {exc}")
+
+    with runs_tab:
+        runs = list_automation_runs(current_user_id, limit=100)
+        errors = list_automation_errors(current_user_id, limit=100)
+        if runs:
+            st.dataframe(pd.DataFrame(runs), use_container_width=True, hide_index=True)
+        else:
+            st.info("No automation runs yet.")
+        if errors:
+            st.subheader("Automation errors")
+            st.dataframe(pd.DataFrame(errors), use_container_width=True, hide_index=True)
+
 elif page == "Integrations":
     st.header("Integrations")
     st.success("API keys and sensitive integration settings are encrypted before they are stored. Use least-privilege keys and rotate them regularly.")
-    ai_tab, linkedin_tab, rapidapi_tab, apify_tab = st.tabs(["AI provider", "LinkedIn posting", "RapidAPI LinkedIn jobs", "Apify scraping"])
+    ai_tab, providers_tab, linkedin_tab, rapidapi_tab, apify_tab = st.tabs(["AI provider", "Provider registry", "LinkedIn posting", "RapidAPI LinkedIn jobs", "Apify scraping"])
 
     with ai_tab:
         st.subheader("Multi-provider AI")
@@ -507,7 +633,7 @@ elif page == "Integrations":
         with st.form("ai_provider_settings"):
             provider = st.selectbox("Provider", provider_keys, index=provider_keys.index(current_provider) if current_provider in provider_keys else 0, format_func=lambda k: SUPPORTED_PROVIDERS[k])
             model = st.text_input("Model / deployment", value=ai_config.get("model", settings.openai_model))
-            api_key = st.text_input("Provider API key", value=ai.get("api_key", ""), type="password")
+            api_key = st.text_input("Provider API key", value="", type="password", placeholder="Leave blank to keep the saved key")
             base_url = st.text_input("Base URL (OpenAI-compatible/Grok optional)", value=ai_config.get("base_url", ""))
             azure_endpoint = st.text_input("Azure endpoint", value=ai_config.get("endpoint", ""), placeholder="https://your-resource.openai.azure.com")
             azure_api_version = st.text_input("Azure API version", value=ai_config.get("api_version", "2024-10-21"))
@@ -522,7 +648,7 @@ elif page == "Integrations":
                     "api_version": azure_api_version,
                     "deployment": deployment,
                 }
-                save_integration_settings(current_user_id, "ai_provider", api_key, config)
+                save_integration_settings(current_user_id, "ai_provider", api_key, config, keep_existing_api_key_if_blank=True)
                 st.success("AI provider settings saved securely.")
                 st.rerun()
         st.caption(f"Stored key status: {mask_secret(ai.get('api_key', ''))}")
@@ -532,13 +658,81 @@ elif page == "Integrations":
             st.success("AI provider settings removed.")
             st.rerun()
 
+    with providers_tab:
+        st.subheader("Provider abstraction registry")
+        st.write("Register user-owned providers by platform, priority, and auth type. Credentials are encrypted per user and can be used for fallback routing as integrations are migrated to provider adapters.")
+        current_providers = list_provider_configs(current_user_id)
+        if current_providers:
+            display_rows = []
+            for item in current_providers:
+                display_rows.append({
+                    "platform": item.get("platform"),
+                    "provider_name": item.get("provider_name"),
+                    "auth_type": item.get("auth_type"),
+                    "priority": item.get("priority"),
+                    "active": item.get("is_active"),
+                    "health": item.get("health_status"),
+                    "has_credentials": item.get("has_credentials"),
+                    "success_count": item.get("success_count"),
+                    "failure_count": item.get("failure_count"),
+                    "updated_at": item.get("updated_at"),
+                })
+            st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No provider-registry records yet. Add one below. Existing legacy integrations continue to work while provider adapters are introduced.")
+
+        with st.form("provider_registry_form"):
+            st.markdown("**Add or update provider**")
+            col_a, col_b, col_c = st.columns([1, 1, 1])
+            with col_a:
+                platform = st.text_input("Platform", value="ai", placeholder="ai, linkedin, reddit, custom_cms")
+            with col_b:
+                provider_name = st.text_input("Provider name", value="openai", placeholder="openai, rapidapi, apify, custom_proxy")
+            with col_c:
+                auth_type = st.selectbox("Auth type", ["api_key", "bearer_token", "oauth2", "custom_headers", "webhook_secret", "basic_auth"], index=0)
+            credential_value = st.text_input("Secret / token / API key", value="", type="password", placeholder="Leave blank to keep saved credentials")
+            priority = st.number_input("Priority", min_value=1, max_value=1000, value=100, step=1, help="Lower number is tried first during fallback.")
+            is_active = st.checkbox("Active", value=True)
+            config_json = st.text_area("Provider config JSON", value='{\n  "supported_actions": ["health_check"]\n}', height=130)
+            if st.form_submit_button("Save provider registry record", use_container_width=True):
+                try:
+                    parsed_config = json.loads(config_json or "{}")
+                    credential_key = "access_token" if auth_type in {"bearer_token", "oauth2"} else "api_key"
+                    credentials = {credential_key: credential_value} if credential_value.strip() else {}
+                    save_provider_config(
+                        current_user_id,
+                        platform,
+                        provider_name,
+                        auth_type=auth_type,
+                        credentials=credentials,
+                        config=parsed_config,
+                        priority=int(priority),
+                        is_active=is_active,
+                        keep_existing_credentials_if_blank=True,
+                    )
+                    st.success("Provider registry record saved securely.")
+                    st.rerun()
+                except json.JSONDecodeError as exc:
+                    st.error(f"Provider config JSON is invalid: {exc}")
+                except Exception as exc:
+                    st.error(f"Could not save provider: {exc}")
+
+        if current_providers:
+            labels = {f"{p['platform']} / {p['provider_name']}": p for p in current_providers}
+            selected_label = st.selectbox("Remove provider", ["Select..."] + list(labels.keys()))
+            if selected_label != "Select..." and st.button("Delete selected provider registry record"):
+                item = labels[selected_label]
+                delete_provider_config(current_user_id, item["platform"], item["provider_name"])
+                st.success("Provider registry record deleted.")
+                st.rerun()
+
     with linkedin_tab:
         st.subheader("LinkedIn official API posting")
         st.write("This uses LinkedIn's official post API. Your LinkedIn app/token must have the required posting scope, such as `w_member_social` for member posts.")
         linkedin = get_integration_settings(current_user_id, "linkedin")
         linkedin_config = linkedin.get("config", {})
         with st.form("linkedin_settings"):
-            linkedin_token = st.text_input("LinkedIn OAuth access token", value=linkedin.get("api_key", ""), type="password")
+            linkedin_token = st.text_input("LinkedIn OAuth access token", value="", type="password", placeholder="Leave blank to keep the saved token")
             author_urn = st.text_input("Author URN", value=linkedin_config.get("author_urn", ""), placeholder="urn:li:person:... or urn:li:organization:...")
             linkedin_version = st.text_input("LinkedIn API version", value=linkedin_config.get("linkedin_version", "202604"))
             if st.form_submit_button("Save LinkedIn settings"):
@@ -547,6 +741,7 @@ elif page == "Integrations":
                     "linkedin",
                     linkedin_token,
                     {"author_urn": author_urn, "linkedin_version": linkedin_version},
+                    keep_existing_api_key_if_blank=True,
                 )
                 st.success("LinkedIn settings saved.")
 
@@ -575,7 +770,7 @@ elif page == "Integrations":
         rapidapi = get_integration_settings(current_user_id, "rapidapi_linkedin")
         rapidapi_config = rapidapi.get("config", {})
         with st.form("rapidapi_linkedin_settings"):
-            rapidapi_key = st.text_input("RapidAPI key", value=rapidapi.get("api_key", ""), type="password")
+            rapidapi_key = st.text_input("RapidAPI key", value="", type="password", placeholder="Leave blank to keep the saved key")
             rapidapi_host = st.text_input("RapidAPI host", value=rapidapi_config.get("host", RAPIDAPI_LINKEDIN_HOST))
             rapidapi_endpoint = st.text_input("Endpoint URL", value=rapidapi_config.get("endpoint", RAPIDAPI_LINKEDIN_ENDPOINT))
             title_filter_default = rapidapi_config.get("title_filter", "")
@@ -595,6 +790,7 @@ elif page == "Integrations":
                         "location_filter": location_filter_saved,
                         "max_offsets": int(max_offsets_saved),
                     },
+                    keep_existing_api_key_if_blank=True,
                 )
                 st.success("RapidAPI settings saved.")
 
@@ -610,7 +806,7 @@ elif page == "Integrations":
         apify_config = apify.get("config", {})
         default_template = apify_config.get("input_template") or '{\n  "startUrls": [{"url": "{{url}}"]}\n}'
         with st.form("apify_settings"):
-            apify_token = st.text_input("Apify API token", value=apify.get("api_key", ""), type="password")
+            apify_token = st.text_input("Apify API token", value="", type="password", placeholder="Leave blank to keep the saved token")
             actor_id = st.text_input("Actor id", value=apify_config.get("actor_id", ""), placeholder="username/actor-name or actor id")
             input_template = st.text_area("Input JSON template", value=default_template, height=180)
             st.caption("Use `{{url}}` where the pasted job/listing URL should be inserted.")
@@ -622,6 +818,7 @@ elif page == "Integrations":
                         "apify",
                         apify_token,
                         {"actor_id": actor_id, "input_template": input_template},
+                        keep_existing_api_key_if_blank=True,
                     )
                     st.success("Apify settings saved.")
                 except json.JSONDecodeError as exc:
@@ -631,6 +828,126 @@ elif page == "Integrations":
             delete_integration_settings(current_user_id, "apify")
             st.success("Apify settings removed.")
             st.rerun()
+
+
+elif page == "Team":
+    st.header("Team, Workspaces & RBAC")
+    try:
+        ensure_user_workspace(current_user_id)
+        summary = enterprise_summary(current_user_id)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Workspaces", summary.get("workspaces", 0))
+        c2.metric("Members", summary.get("members", 0))
+        c3.metric("Shared resources", summary.get("shared_resources", 0))
+        c4.metric("Permissions", summary.get("permissions", 0))
+
+        tab_ws, tab_members, tab_share, tab_rbac, tab_admin = st.tabs(["Workspaces", "Members", "Shared resources", "RBAC", "Admin summary"])
+
+        with tab_ws:
+            st.subheader("Your workspaces")
+            workspaces = list_user_workspaces(current_user_id)
+            if workspaces:
+                st.dataframe(pd.DataFrame(workspaces), use_container_width=True, hide_index=True)
+            else:
+                st.info("No workspaces yet.")
+            st.divider()
+            st.subheader("Create organization")
+            with st.form("create_org_form"):
+                org_name = st.text_input("Organization name")
+                if st.form_submit_button("Create organization"):
+                    try:
+                        org = create_organization(current_user_id, org_name)
+                        st.success(f"Created organization: {org['name']}")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(str(exc))
+            st.subheader("Create workspace")
+            org_options = {f"{w['organization_name']} #{w['organization_id']}": int(w['organization_id']) for w in workspaces}
+            with st.form("create_workspace_form"):
+                if org_options:
+                    selected_org = st.selectbox("Organization", list(org_options.keys()))
+                    ws_name = st.text_input("Workspace name")
+                    ws_desc = st.text_area("Description", height=80)
+                    if st.form_submit_button("Create workspace"):
+                        try:
+                            ws = create_workspace(current_user_id, org_options[selected_org], ws_name, ws_desc)
+                            st.success(f"Created workspace: {ws['name']}")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(str(exc))
+                else:
+                    st.info("Create an organization first.")
+
+        with tab_members:
+            st.subheader("Workspace members")
+            workspaces = list_user_workspaces(current_user_id)
+            ws_options = {f"{w['name']} / {w['organization_name']} #{w['id']}": int(w['id']) for w in workspaces}
+            if ws_options:
+                selected_ws = st.selectbox("Workspace", list(ws_options.keys()), key="members_workspace")
+                workspace_id = ws_options[selected_ws]
+                try:
+                    members = list_workspace_members(current_user_id, workspace_id)
+                    st.dataframe(pd.DataFrame(members), use_container_width=True, hide_index=True)
+                except Exception as exc:
+                    st.warning(str(exc))
+                st.divider()
+                st.subheader("Add existing user")
+                with st.form("add_member_form"):
+                    member_email = st.text_input("User email")
+                    role_names = [r["name"] for r in list_roles()]
+                    member_role = st.selectbox("Role", role_names, index=role_names.index("viewer") if "viewer" in role_names else 0)
+                    if st.form_submit_button("Add/update member"):
+                        try:
+                            added = add_workspace_member(current_user_id, workspace_id, member_email, member_role)
+                            st.success(f"Member saved as {added['role']}")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(str(exc))
+            else:
+                st.info("No workspace available.")
+
+        with tab_share:
+            st.subheader("Share resources into a workspace")
+            workspaces = list_user_workspaces(current_user_id)
+            ws_options = {f"{w['name']} / {w['organization_name']} #{w['id']}": int(w['id']) for w in workspaces}
+            if ws_options:
+                with st.form("share_resource_form"):
+                    selected_ws = st.selectbox("Workspace", list(ws_options.keys()), key="share_workspace")
+                    resource_type = st.selectbox("Resource type", ["job", "feedback", "post", "workflow", "report", "dashboard", "document", "other"])
+                    resource_id = st.text_input("Resource ID")
+                    access_level = st.selectbox("Access level", ["read", "comment", "edit", "admin"])
+                    expires_at = st.text_input("Expires at ISO timestamp", placeholder="optional")
+                    if st.form_submit_button("Share resource"):
+                        try:
+                            share_resource(current_user_id, ws_options[selected_ws], resource_type, resource_id, access_level, expires_at)
+                            st.success("Resource shared.")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(str(exc))
+                st.subheader("Shared resources")
+                try:
+                    resources = list_shared_resources(current_user_id)
+                    if resources:
+                        st.dataframe(pd.DataFrame(resources), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No shared resources yet.")
+                except Exception as exc:
+                    st.warning(str(exc))
+
+        with tab_rbac:
+            st.subheader("Roles")
+            st.dataframe(pd.DataFrame(list_roles()), use_container_width=True, hide_index=True)
+            st.subheader("Role permissions")
+            st.dataframe(pd.DataFrame(list_role_permissions()), use_container_width=True, hide_index=True)
+            st.subheader("Permission catalog")
+            st.dataframe(pd.DataFrame(list_permissions()), use_container_width=True, hide_index=True)
+
+        with tab_admin:
+            st.subheader("Enterprise readiness snapshot")
+            st.json(summary)
+            st.caption("This is a foundation for team/enterprise administration. Full billing, SSO, and organization-wide policy enforcement remain future work.")
+    except Exception as exc:
+        st.error(f"Team workspace setup failed: {exc}")
 
 elif page == "Ingest Opportunities":
     st.header("2. Opportunity source ingestion")
@@ -645,7 +962,7 @@ elif page == "Ingest Opportunities":
             if is_unsupported_listing_url(raw):
                 st.error(unsupported_listing_message(raw))
                 st.stop()
-            job = extract_job_from_text(raw, source=source, opportunity_type=opportunity_type)
+            job = extract_job_from_text(raw, source=source, opportunity_type=opportunity_type, user_id=current_user_id)
             job_id = insert_job(job, current_user_id)
             st.success(f"Saved {opportunity_type} #{job_id}: {job.get('title')} at {job.get('company')}")
             st.json(job)
@@ -806,6 +1123,7 @@ elif page == "Ingest Opportunities":
                         f"Subject: {m['subject']}\nFrom: {m['from']}\n\n{m['body']}",
                         source="Gmail",
                         opportunity_type=gmail_opportunity_type,
+                        user_id=current_user_id,
                     )
                     job["date_received"] = m.get("date_received", "")
                     insert_job(job, current_user_id)
@@ -844,7 +1162,7 @@ elif page == "Review Queue":
                     n = 0
                     for row in jobs:
                         if row.get("match_score") is None:
-                            evaluation = score_job(profile, row)
+                            evaluation = score_job(profile, row, user_id=current_user_id)
                             save_evaluation(row["id"], evaluation, current_user_id)
                             n += 1
                     st.success(f"Scored {n} opportunity/opportunities.")
@@ -895,7 +1213,7 @@ elif page == "Opportunity Detail":
                 if not profile:
                     st.error("Create your profile first.")
                 else:
-                    evaluation = score_job(profile, job)
+                    evaluation = score_job(profile, job, user_id=current_user_id)
                     save_evaluation(job_id, evaluation, current_user_id)
                     st.success("Score saved.")
                     st.rerun()
@@ -914,7 +1232,7 @@ elif page == "Opportunity Detail":
                 st.error("Create your profile first.")
             else:
                 if not evaluation:
-                    evaluation = score_job(profile, job)
+                    evaluation = score_job(profile, job, user_id=current_user_id)
                     save_evaluation(job_id, evaluation, current_user_id)
                 materials = generate_materials(profile, job, evaluation, user_id=current_user_id)
                 save_materials(job_id, materials, current_user_id)

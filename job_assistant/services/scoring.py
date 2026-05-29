@@ -225,7 +225,7 @@ def _score_webinar(profile: Dict[str, Any], webinar: Dict[str, Any]) -> Dict[str
     }
 
 
-def score_opportunity(profile: Dict[str, Any], opportunity: Dict[str, Any], opp_type: str = "job") -> Dict[str, Any]:
+def score_opportunity(profile: Dict[str, Any], opportunity: Dict[str, Any], opp_type: str = "job", user_id: int | None = None) -> Dict[str, Any]:
     """Route to appropriate scoring function based on opportunity type"""
     if opp_type == "hackathon":
         fallback = _score_hackathon(profile, opportunity)
@@ -255,12 +255,12 @@ USER PROFILE:\n{profile}
 
 OPPORTUNITY:\n{opportunity}
 """
-    data = ask_json(system, user, fallback)
+    data = ask_json(system, user, fallback, user_id=user_id, task_type="opportunity_scoring")
     for k, v in fallback.items():
         data.setdefault(k, v)
     return data
 
 
-def score_job(profile: Dict[str, Any], job: Dict[str, Any]) -> Dict[str, Any]:
+def score_job(profile: Dict[str, Any], job: Dict[str, Any], user_id: int | None = None) -> Dict[str, Any]:
     """Backward compatible wrapper - score a job"""
-    return score_opportunity(profile, job, opp_type=job.get("opportunity_type") or "job")
+    return score_opportunity(profile, job, opp_type=job.get("opportunity_type") or "job", user_id=user_id)

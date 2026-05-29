@@ -176,20 +176,19 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Create a local `.env` file if needed:
+Create a local `.env` file for app-level configuration only:
 
 ```bash
-OPENAI_API_KEY=sk-your-key
-OPENAI_MODEL=gpt-5.5
 APP_DB_PATH=data/job_assistant.sqlite3
 GOOGLE_CREDENTIALS_FILE=credentials.json
 GOOGLE_TOKEN_FILE=token.json
 SCHEDULER_ENABLED=true
 JWT_SECRET_KEY=replace-this-with-a-long-random-secret
 LOCAL_USER_PASSWORD=replace-default-local-password
+APP_ENCRYPTION_KEY=replace-with-fernet-key-in-production
 ```
 
-`OPENAI_API_KEY` is optional. Without it, the app still runs with local rule-based scoring and fallback draft generation.
+Provider API keys are not configured globally in `.env`. Each signed-in user adds their own AI, LinkedIn, RapidAPI, Apify, and other provider keys from the `Integrations` page. Those keys are encrypted and stored per user in the SQLite database. If a user has not configured an AI provider key, the app still runs with local rule-based scoring and fallback draft generation.
 
 ## Run The Streamlit App
 
@@ -306,7 +305,7 @@ This version includes these production-readiness upgrades:
 
 ### Encrypted secrets at rest
 
-User API keys and integration configs are encrypted before being written to `integration_settings` using Fernet authenticated encryption.
+User API keys and integration configs are encrypted before being written to `integration_settings` using Fernet authenticated encryption. Provider keys are resolved from the signed-in user's database row, not from shared environment variables.
 
 Generate a production encryption key:
 
@@ -348,7 +347,7 @@ The Integrations page now includes an AI Provider tab. Users can choose:
 - Google Gemini
 - Hugging Face Inference endpoints
 
-The selected provider is used for application-material generation. If no provider key is configured, the app returns safe fallback drafts instead of failing.
+The selected provider is used for resume extraction, opportunity extraction, scoring, and application-material generation for that signed-in user. If no provider key is configured for that user, the app returns safe fallback data instead of failing.
 
 ### Automation preferences and progress updates
 
@@ -443,3 +442,315 @@ Security notes:
 - OAuth tokens are encrypted at rest using `APP_ENCRYPTION_KEY`.
 - Tokens are refreshed server-side and never exposed in the UI.
 - Users can disconnect Gmail from the Gmail tab, which removes their stored Gmail credentials.
+
+## Technical Plan Implementation Status
+
+This build starts the MVP-to-production technical plan while preserving the current lightweight Streamlit + FastAPI + SQLite architecture.
+
+Implemented foundations:
+
+- per-user encrypted integration key storage in the database
+- user-owned AI/provider credentials instead of shared environment keys
+- feedback database table and service functions
+- in-app Feedback page and sidebar quick feedback form
+- FastAPI feedback endpoints
+- user-scoped audit log table and audit log viewer
+- database health endpoint
+- storage and AI health endpoints
+- local SQLite-backed API rate limiting
+- provider configuration health endpoint
+- Dockerfile for FastAPI
+- Dockerfile.streamlit for the Streamlit UI
+- docker-compose.yml with persistent SQLite/log volumes
+- .dockerignore and expanded .env.example
+
+New FastAPI endpoints:
+
+```text
+GET  /api/v1/health
+GET  /api/v1/health/db
+GET  /api/v1/health/storage
+GET  /api/v1/health/ai
+GET  /api/v1/health/providers
+GET  /api/v1/usage
+POST /api/v1/feedback
+GET  /api/v1/feedback
+GET  /api/v1/feedback/{feedback_id}
+PATCH /api/v1/feedback/{feedback_id}/status
+GET  /api/v1/audit-logs
+```
+
+## Docker Run
+
+Copy the environment template and set production secrets before deploying:
+
+```bash
+cp .env.example .env
+```
+
+Run locally with Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+Services:
+
+```text
+FastAPI:   http://localhost:8000
+Streamlit: http://localhost:8501
+```
+
+SQLite data is persisted in the `app_data` Docker volume.
+
+## Feedback System
+
+Users can submit feedback from:
+
+- the sidebar quick feedback form
+- the dedicated `Feedback` page
+- the FastAPI `/api/v1/feedback` endpoint
+
+Feedback categories include bug reports, feature requests, AI quality issues, UI/UX feedback, provider/API problems, performance issues, security concerns, automation failures, integration requests, and general suggestions.
+
+## Audit Logging
+
+The first audit events now cover:
+
+- feedback creation
+- feedback status updates
+- integration upserts
+- integration deletion
+
+The `Feedback` page shows the signed-in user's recent audit activity. Additional audit events should be added as more production features are implemented.
+
+---
+
+## Phase 2 Implementation Status — Deployment Readiness
+
+Phase 2 adds the production-lite deployment foundation while keeping the MVP SQLite-first architecture intact.
+
+### Added in Phase 2
+
+- Deployment profiles via `DEPLOYMENT_PROFILE`:
+  - `local`
+  - `mvp`
+  - `self_hosted`
+  - `staging`
+  - `production`
+- Centralized runtime settings for:
+  - app URLs
+  - API URLs
+  - data directory
+  - log directory
+  - SQLite path
+  - CORS origins
+  - deployment profile
+- Runtime startup validation for production-sensitive settings.
+- New runtime health endpoint:
+
+```text
+GET /api/v1/health/runtime
+```
+
+- Docker Compose improvements:
+  - persistent app data volume
+  - persistent logs volume
+  - FastAPI health check
+  - Streamlit health check
+  - restart policies
+  - production override file
+- Secret generation helper:
+
+```bash
+python scripts/generate_secrets.py
+```
+
+- SQLite backup helper:
+
+```bash
+python scripts/backup_sqlite.py --db data/job_assistant.sqlite3 --out-dir backups
+```
+
+- SQLite restore helper:
+
+```bash
+python scripts/restore_sqlite.py backups/<backup-file>.sqlite3
+```
+
+- Smoke test helper:
+
+```bash
+python scripts/smoke_test.py
+```
+
+- Makefile shortcuts:
+
+```bash
+make setup
+make secrets
+make smoke
+make docker-up
+make docker-down
+make backup
+make restore BACKUP=backups/<backup-file>.sqlite3
+```
+
+See `docs/PHASE2_DEPLOYMENT.md` for the deployment guide.
+
+### Production-Lite Deployment
+
+Create `.env`:
+
+```bash
+cp .env.example .env
+python scripts/generate_secrets.py
+```
+
+Paste the generated values into `.env`, then set:
+
+```env
+ENVIRONMENT=prod
+DEPLOYMENT_PROFILE=production
+APP_BASE_URL=https://your-app.example.com
+API_PUBLIC_URL=https://your-api.example.com
+CORS_ORIGINS=https://your-app.example.com
+SESSION_COOKIE_SECURE=true
+```
+
+Run:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.production.yml up --build -d
+```
+
+### Important Security Note
+
+Provider keys are still user-owned and stored encrypted in the database through the Integrations UI. `.env` should only contain app-level deployment secrets such as `APP_ENCRYPTION_KEY`, `JWT_SECRET_KEY`, public URLs, and runtime configuration.
+
+---
+
+## Phase 3 Implementation Status — Provider Abstraction MVP
+
+Phase 3 adds the first provider-agnostic integration layer while keeping the existing MVP workflows backward compatible.
+
+### Added in Phase 3
+
+- New provider abstraction module:
+
+```text
+job_assistant/provider_registry.py
+```
+
+- New encrypted per-user provider table:
+
+```text
+provider_configs
+```
+
+- Provider registry capabilities:
+  - base provider interface
+  - generic configured-provider adapter
+  - manual provider registration
+  - provider priority ordering
+  - active/inactive providers
+  - health status tracking
+  - fallback execution
+  - audit logging for provider changes
+
+- New FastAPI endpoints:
+
+```text
+GET    /api/v1/providers
+POST   /api/v1/providers
+GET    /api/v1/providers/{platform}/{provider_name}
+PUT    /api/v1/providers/{platform}/{provider_name}
+DELETE /api/v1/providers/{platform}/{provider_name}
+GET    /api/v1/providers/health
+POST   /api/v1/providers/execute
+```
+
+- Updated health endpoint:
+
+```text
+GET /api/v1/health/providers
+```
+
+This now returns both legacy integrations and new provider-registry records.
+
+- Updated Streamlit Integrations page:
+  - added **Provider registry** tab
+  - add/update provider records
+  - set platform, provider name, auth type, priority, active status, and config JSON
+  - delete provider records
+  - view provider health metadata without exposing secrets
+
+- Updated smoke test:
+
+```bash
+python scripts/smoke_test.py
+```
+
+The smoke test now verifies feedback, database health, provider save, provider health check, and fallback routing.
+
+### Milestone Verification
+
+See:
+
+```text
+docs/MILESTONE_VERIFICATION.md
+```
+
+Current milestone status:
+
+| Milestone | Status |
+|---|---|
+| Milestone 1 — MVP Hardening | Achieved |
+| Milestone 2 — Docker and Deployment Readiness | Achieved |
+| Milestone 3 — Provider Abstraction MVP | Achieved |
+
+### Important Compatibility Note
+
+The older `integration_settings` table remains active so current AI, LinkedIn, RapidAPI, Apify, and Gmail workflows continue working. The new `provider_configs` table is the forward-compatible provider abstraction foundation. Future adapters should gradually migrate real provider execution into `ProviderRegistry`.
+
+## Technical Plan Status - Phase 4, 5, and 6
+
+Implemented in this package:
+
+- Phase 4 AI orchestration MVP with route resolution, AI generation logs, prompt versions, and `/api/v1/ai/*` endpoints.
+- Phase 5 automation engine MVP with rules, runs, errors, approval-first execution, and `/api/v1/automation/*` endpoints.
+- Phase 6 PostgreSQL migration readiness with Alembic config, first migration, SQLite-to-PostgreSQL migration helper, and migration documentation.
+
+See:
+
+- `docs/PHASE4_AI_ORCHESTRATION.md`
+- `docs/PHASE5_AUTOMATION_ENGINE.md`
+- `docs/PHASE6_POSTGRES_MIGRATION.md`
+- `docs/MILESTONE_4_5_6_VERIFICATION.md`
+
+## Phase 7 status — Team and enterprise foundation
+
+Implemented Milestone 7 foundations:
+
+- organizations
+- workspaces
+- workspace members
+- seeded roles and permissions
+- permission checks
+- shared resources
+- workspace/organization-scoped audit fields
+- Team page in Streamlit
+- enterprise summary API
+
+See:
+
+- `docs/PHASE7_TEAM_ENTERPRISE_FOUNDATION.md`
+- `docs/MILESTONE_7_VERIFICATION.md`
+
+## Workspace-Aware Resource Layer
+
+The team/enterprise foundation now extends into the core resource layer. Opportunities, feedback, integrations, provider configs, AI logs, automation rules/runs/errors, and publishing drafts all carry `workspace_id` and `organization_id` ownership.
+
+Requests may pass `workspace_id` explicitly. If omitted, the user's personal workspace is used. Existing SQLite data is backfilled into each user's personal workspace during startup migration.
+
+A minimal publishing storage layer is included through `posts` and `post_targets`. External publishing execution remains a later publishing-engine milestone.

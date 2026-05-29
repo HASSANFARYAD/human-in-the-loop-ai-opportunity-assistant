@@ -1,0 +1,18 @@
+name: job-assistant-production
+
+services:
+  api:
+    environment:
+      ENVIRONMENT: prod
+      DEPLOYMENT_PROFILE: production
+      SESSION_COOKIE_SECURE: "true"
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS to your HTTPS Streamlit/app domain}
+    restart: always
+
+  streamlit:
+    environment:
+      ENVIRONMENT: prod
+      DEPLOYMENT_PROFILE: production
+      SESSION_COOKIE_SECURE: "true"
+    restart: always

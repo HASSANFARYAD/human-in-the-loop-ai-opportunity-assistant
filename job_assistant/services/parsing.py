@@ -77,7 +77,7 @@ def clean_html(text: str) -> str:
         return re.sub(r"<[^>]+>", "\n", text or "")
 
 
-def extract_profile_from_resume(cv_text: str) -> Dict:
+def extract_profile_from_resume(cv_text: str, user_id: int | None = None) -> Dict:
     text = cv_text or ""
     fallback = _fallback_profile_from_resume(text)
     system = "Extract a job-search profile from a resume. Return only compact JSON. Do not invent missing facts."
@@ -97,7 +97,7 @@ Rules:
 RESUME:
 {text[:16000]}
 """
-    data = ask_json(system, user, fallback)
+    data = ask_json(system, user, fallback, user_id=user_id, task_type="opportunity_parsing")
     for key, value in fallback.items():
         if not data.get(key):
             data[key] = value
@@ -318,7 +318,7 @@ def _field_is_explicit_in_resume(value: str, text: str) -> bool:
     return any(token in normalized_text for token in normalized_value.split(",")[:2] if len(token.strip()) > 5)
 
 
-def extract_job_from_text(raw: str, source: str = "Manual", opportunity_type: str = "job") -> Dict:
+def extract_job_from_text(raw: str, source: str = "Manual", opportunity_type: str = "job", user_id: int | None = None) -> Dict:
     text = clean_html(raw)
     if opportunity_type == "auto":
         opportunity_type = infer_opportunity_type(text, source)
@@ -344,7 +344,7 @@ def extract_job_from_text(raw: str, source: str = "Manual", opportunity_type: st
 Fields: title, company, location, remote_type, url, source, date_received, description, recruiter_email, salary_min, salary_max, deadline, opportunity_type, raw_text.
 Source is {source}. Text:\n{text[:12000]}
 """
-    data = ask_json(system, user, fallback)
+    data = ask_json(system, user, fallback, user_id=user_id, task_type="opportunity_parsing")
     for k, v in fallback.items():
         data.setdefault(k, v)
     data["source"] = source

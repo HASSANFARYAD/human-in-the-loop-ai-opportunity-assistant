@@ -1,0 +1,15 @@
+[Unit]
+Description=Job Assistant Streamlit
+After=network.target job-assistant-api.service
+
+[Service]
+WorkingDirectory=/opt/job-assistant
+EnvironmentFile=/opt/job-assistant/.env
+ExecStart=/opt/job-assistant/.venv/bin/streamlit run app.py --server.address=0.0.0.0 --server.port=8501
+Restart=always
+RestartSec=5
+User=jobassistant
+Group=jobassistant
+
+[Install]
+WantedBy=multi-user.target

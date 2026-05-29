@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Dict, Optional
 
 import requests
@@ -46,8 +45,8 @@ def _openai_compatible(api_key: str, model: str, system: str, user: str, base_ur
 def _azure_openai(api_key: str, model: str, system: str, user: str, config: dict[str, Any]) -> str:
     from openai import AzureOpenAI
 
-    endpoint = config.get("endpoint") or os.getenv("AZURE_OPENAI_ENDPOINT", "")
-    api_version = config.get("api_version") or os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
+    endpoint = config.get("endpoint") or ""
+    api_version = config.get("api_version") or "2024-10-21"
     deployment = config.get("deployment") or model
     client = AzureOpenAI(api_key=api_key, azure_endpoint=endpoint, api_version=api_version)
     response = client.chat.completions.create(model=deployment, messages=_messages(system, user), temperature=0.2)
@@ -112,14 +111,15 @@ def _huggingface(api_key: str, model: str, system: str, user: str, config: dict[
 
 
 def get_user_ai_settings(user_id: Optional[int]) -> dict[str, Any]:
+    """Load the signed-in user's AI provider settings from the database only."""
     if user_id:
         saved = get_integration_settings(user_id, "ai_provider")
         if saved:
             return saved
     return {
         "service": "ai_provider",
-        "api_key": os.getenv("OPENAI_API_KEY", ""),
-        "config": {"provider": DEFAULT_PROVIDER, "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini")},
+        "api_key": "",
+        "config": {"provider": DEFAULT_PROVIDER, "model": "gpt-4o-mini"},
     }
 
 
@@ -134,8 +134,8 @@ def ask_json(
     settings = provider_settings or get_user_ai_settings(user_id)
     config = settings.get("config", {}) or {}
     provider = (config.get("provider") or DEFAULT_PROVIDER).strip().lower()
-    api_key = (settings.get("api_key") or os.getenv("OPENAI_API_KEY") or "").strip()
-    model = (config.get("model") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini").strip()
+    api_key = (settings.get("api_key") or "").strip()
+    model = (config.get("model") or "gpt-4o-mini").strip()
     if not api_key:
         return dict(fallback)
 

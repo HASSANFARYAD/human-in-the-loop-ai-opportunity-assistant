@@ -1,0 +1,15 @@
+[Unit]
+Description=Job Assistant FastAPI
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/job-assistant
+EnvironmentFile=/opt/job-assistant/.env
+ExecStart=/opt/job-assistant/.venv/bin/uvicorn api_server:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+User=jobassistant
+Group=jobassistant
+
+[Install]
+WantedBy=multi-user.target

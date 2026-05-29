@@ -119,7 +119,7 @@ class JobAssistantScheduler:
         prefs = get_automation_preferences(self.user_id)
         profile = get_profile(self.user_id)
         if profile and prefs.get("score_new"):
-            evaluation = score_job(profile, opportunity)
+            evaluation = score_job(profile, opportunity, user_id=self.user_id)
             save_evaluation(job_id, evaluation, self.user_id)
             if prefs.get("generate_materials") and int(evaluation.get("match_score", 0)) >= int(prefs.get("min_score_for_materials", 70)) and opportunity.get("opportunity_type", "job") == "job":
                 materials = generate_materials(profile, opportunity, evaluation, user_id=self.user_id)
@@ -147,6 +147,7 @@ class JobAssistantScheduler:
                         f"Subject: {message['subject']}\nFrom: {message['from']}\n\n{message['body']}",
                         source="Gmail",
                         opportunity_type="auto",
+                        user_id=self.user_id,
                     )
                     job["date_received"] = message.get("date_received", "")
                     self._process_new_opportunity(job)
