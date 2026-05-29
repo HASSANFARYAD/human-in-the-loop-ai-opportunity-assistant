@@ -42,7 +42,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }, [bootstrap.data, setActiveWorkspace]);
 
   return (
-    <div className="flex min-h-screen bg-background">
+    <div className="flex min-h-screen bg-transparent">
       <Suspense fallback={null}>
         <Sidebar />
       </Suspense>

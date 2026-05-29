@@ -14,7 +14,7 @@ export function Topbar() {
   const { user, clear } = useAuthStore();
 
   return (
-    <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b bg-background/90 px-4 backdrop-blur">
+    <header className="glass-strong sticky top-0 z-20 flex h-16 items-center gap-3 border-b px-4">
       <div className="relative max-w-xl flex-1">
         <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
         <Input className="pl-9" placeholder="Search opportunities, automations, providers..." />

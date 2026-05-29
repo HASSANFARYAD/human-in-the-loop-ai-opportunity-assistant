@@ -87,8 +87,8 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="sticky top-0 hidden h-dvh w-72 shrink-0 flex-col overflow-hidden border-r bg-card/70 lg:flex">
-      <Link href="/dashboard" className="flex h-16 shrink-0 items-center gap-3 border-b px-6">
+    <aside className="glass-strong sticky top-0 hidden h-dvh w-72 shrink-0 flex-col overflow-hidden border-r lg:flex">
+      <Link href="/dashboard" className="glass-subtle flex h-16 shrink-0 items-center gap-3 border-b px-6">
         <span className="grid h-9 w-9 place-items-center rounded-md bg-primary text-primary-foreground"><Sparkles className="h-5 w-5" /></span>
         <span className="font-semibold">Opportunity AI</span>
       </Link>
@@ -97,7 +97,7 @@ export function Sidebar() {
           <section key={group.label}>
             <button
               type="button"
-              className="flex h-9 w-full items-center justify-between rounded-md px-2 text-xs font-semibold uppercase text-muted-foreground transition hover:bg-muted hover:text-foreground"
+              className="flex h-9 w-full items-center justify-between rounded-md px-2 text-xs font-semibold uppercase text-muted-foreground transition hover:bg-white/30 hover:text-foreground dark:hover:bg-white/10"
               aria-expanded={Boolean(openGroups[group.label])}
               onClick={() => toggleGroup(group.label)}
             >
@@ -110,7 +110,7 @@ export function Sidebar() {
                   const active = currentHref === item.href || (item.href === pathname && !searchParams.toString());
                   const Icon = item.icon;
                   return (
-                    <Link key={`${group.label}-${item.label}`} href={item.href} className={cn("flex h-9 items-center gap-3 rounded-md px-2 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground", active && "bg-muted text-foreground")}>
+                    <Link key={`${group.label}-${item.label}`} href={item.href} className={cn("flex h-9 items-center gap-3 rounded-md px-2 text-sm text-muted-foreground transition hover:bg-white/30 hover:text-foreground dark:hover:bg-white/10", active && "glass-subtle text-foreground")}>
                       <Icon className="h-4 w-4 shrink-0" />
                       <span className="truncate">{item.label}</span>
                     </Link>
