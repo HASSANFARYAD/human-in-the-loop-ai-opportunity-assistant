@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpDown, Filter, Plus, Search, Sparkles } from "lucide-react";
+import { ArrowUpDown, Filter, Plus, Search, Sparkles, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { opportunityService } from "@/services/opportunity.service";
 import { formatDate, scoreTone } from "@/lib/utils";
+import type { Opportunity } from "@/types/api";
+
+const PUBLIC_SOURCES = ["RemoteJobs.org", "Arbeitnow", "Remotive", "Jobicy", "Hacker News Who is hiring"];
+const OPPORTUNITY_TYPES = ["auto", "job", "internship", "hackathon", "competition", "webinar", "other"];
+const MANUAL_SOURCES = ["Manual", "LinkedIn email/paste", "Indeed", "Company career page", "Recruiter", "Devpost", "Eventbrite", "Meetup", "Other"];
 
 export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boolean }) {
   const searchParams = useSearchParams();
@@ -39,12 +44,13 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
       .filter((item) => status === "all" || (item.status ?? "new") === status)
       .filter((item) => `${item.title} ${item.company} ${item.source}`.toLowerCase().includes(query.toLowerCase()))
       .sort((a, b) => Number(b.match_score ?? b.score ?? 0) - Number(a.match_score ?? a.score ?? 0));
-  }, [jobs.data, query, reviewOnly, status]);
+  }, [jobs.data, query, reviewOnly, source, status]);
   const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize);
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
 
   if (mode === "manual") return <ManualImportView />;
   if (mode === "csv") return <CsvImportView />;
+  if (source === "public") return <PublicDiscoveryView />;
   if (showMaterials) return <MaterialsView />;
   if (showReminders) return <RemindersView />;
 
@@ -115,30 +121,139 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
 
 function ManualImportView() {
   const qc = useQueryClient();
-  const [form, setForm] = useState({ title: "", company: "", source: "manual", opportunity_type: "job", description: "" });
+  const [source, setSource] = useState("Manual");
+  const [opportunityType, setOpportunityType] = useState("auto");
+  const [raw, setRaw] = useState("");
+  const [preview, setPreview] = useState<Opportunity | null>(null);
+  const extract = useMutation({
+    mutationFn: () => opportunityService.extract({ raw, source, opportunity_type: opportunityType }),
+    onSuccess: (data) => {
+      setPreview(data.opportunity);
+      toast.success("Opportunity extracted. Review it before importing.");
+    },
+    onError: (error) => toast.error(error.message),
+  });
   const create = useMutation({
-    mutationFn: () => opportunityService.create(form),
+    mutationFn: () => opportunityService.importDiscovered(preview ? [preview] : []),
     onSuccess: () => {
       toast.success("Opportunity imported");
-      setForm({ title: "", company: "", source: "manual", opportunity_type: "job", description: "" });
+      setRaw("");
+      setPreview(null);
       qc.invalidateQueries({ queryKey: ["opportunities"] });
     },
     onError: (error) => toast.error(error.message),
   });
   return (
     <div className="space-y-5">
-      <div><h1 className="text-2xl font-semibold">Manual Import</h1><p className="text-sm text-muted-foreground">Create a single opportunity using the existing FastAPI `/jobs` contract.</p></div>
+      <div><h1 className="text-2xl font-semibold">Manual Import</h1><p className="text-sm text-muted-foreground">Paste a URL, email, or description from LinkedIn, Indeed, Devpost, Eventbrite, company career pages, or recruiter messages. The backend extracts structured opportunity data first, then you approve import.</p></div>
       <Card><CardContent className="grid gap-4 p-5 md:grid-cols-2">
-        <Input placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-        <Input placeholder="Company" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} />
-        <Input placeholder="Source" value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })} />
-        <select className="h-10 rounded-md border bg-background px-3 text-sm" value={form.opportunity_type} onChange={(e) => setForm({ ...form, opportunity_type: e.target.value })}>
-          <option value="job">Job</option><option value="hackathon">Hackathon</option><option value="competition">Competition</option><option value="webinar">Webinar</option><option value="career">Career</option>
+        <select className="h-10 rounded-md border bg-background/70 px-3 text-sm" value={source} onChange={(e) => setSource(e.target.value)}>
+          {MANUAL_SOURCES.map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
-        <Textarea className="md:col-span-2" placeholder="Description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-        <Button className="md:col-span-2" disabled={!form.title || !form.description || create.isPending} onClick={() => create.mutate()}><Plus className="h-4 w-4" /> Import opportunity</Button>
+        <select className="h-10 rounded-md border bg-background/70 px-3 text-sm" value={opportunityType} onChange={(e) => setOpportunityType(e.target.value)}>
+          {OPPORTUNITY_TYPES.map((item) => <option key={item} value={item}>{item}</option>)}
+        </select>
+        <Textarea className="md:col-span-2" placeholder="Paste opportunity URL, email, or full description..." value={raw} onChange={(e) => setRaw(e.target.value)} />
+        <Button disabled={!raw.trim() || extract.isPending} onClick={() => extract.mutate()}><Sparkles className="h-4 w-4" /> Extract preview</Button>
+        <Button variant="secondary" disabled={!preview || create.isPending} onClick={() => create.mutate()}><Plus className="h-4 w-4" /> Import approved preview</Button>
       </CardContent></Card>
+      {preview ? <DiscoveryPreview opportunities={[preview]} onImport={(items) => create.mutate()} importing={create.isPending} /> : null}
     </div>
+  );
+}
+
+function PublicDiscoveryView() {
+  const qc = useQueryClient();
+  const [query, setQuery] = useState("");
+  const [keywords, setKeywords] = useState("");
+  const [location, setLocation] = useState("");
+  const [remoteType, setRemoteType] = useState("all");
+  const [opportunityType, setOpportunityType] = useState("auto");
+  const [sources, setSources] = useState<string[]>(PUBLIC_SOURCES);
+  const [limit, setLimit] = useState(20);
+  const [results, setResults] = useState<Opportunity[]>([]);
+  const discover = useMutation({
+    mutationFn: () => opportunityService.discoverPublic({ query, keywords, location, remote_type: remoteType, opportunity_type: opportunityType, sources, limit_per_source: limit }),
+    onSuccess: (data) => {
+      setResults(data.opportunities);
+      toast.success(`Found ${data.opportunities.length} opportunities`);
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const importMutation = useMutation({
+    mutationFn: (items: Opportunity[]) => opportunityService.importDiscovered(items),
+    onSuccess: (data) => {
+      toast.success(`Imported ${data.count} opportunities`);
+      setResults([]);
+      qc.invalidateQueries({ queryKey: ["opportunities"] });
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const toggleSource = (source: string) => setSources((current) => current.includes(source) ? current.filter((item) => item !== source) : [...current, source]);
+
+  return (
+    <div className="space-y-5">
+      <div><h1 className="text-2xl font-semibold">Public Discovery</h1><p className="text-sm text-muted-foreground">Fetch public no-auth sources and filter for jobs, internships, hackathons, competitions, remote/hybrid work, visa terms, and other keywords. LinkedIn/Indeed direct scraping should use RapidAPI or Apify integrations.</p></div>
+      <Card><CardContent className="grid gap-4 p-5 md:grid-cols-3">
+        <Input placeholder="Search title or role" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <Input placeholder="Location or region" value={location} onChange={(e) => setLocation(e.target.value)} />
+        <Input placeholder="Keywords: visa hybrid internship..." value={keywords} onChange={(e) => setKeywords(e.target.value)} />
+        <select className="h-10 rounded-md border bg-background/70 px-3 text-sm" value={opportunityType} onChange={(e) => setOpportunityType(e.target.value)}>{OPPORTUNITY_TYPES.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+        <select className="h-10 rounded-md border bg-background/70 px-3 text-sm" value={remoteType} onChange={(e) => setRemoteType(e.target.value)}><option value="all">All work modes</option><option value="remote">Remote</option><option value="hybrid">Hybrid</option><option value="onsite">On-site</option></select>
+        <Input type="number" min={1} max={50} value={limit} onChange={(e) => setLimit(Number(e.target.value || 20))} />
+        <div className="flex flex-wrap gap-2 md:col-span-3">{PUBLIC_SOURCES.map((item) => <button key={item} type="button" className={`rounded-md border px-3 py-1.5 text-sm ${sources.includes(item) ? "glass-subtle text-foreground" : "text-muted-foreground"}`} onClick={() => toggleSource(item)}>{item}</button>)}</div>
+        <Button className="md:col-span-3" disabled={!sources.length || discover.isPending} onClick={() => discover.mutate()}><Search className="h-4 w-4" /> Fetch opportunities</Button>
+      </CardContent></Card>
+      <ProviderDiscoveryPanel />
+      <DiscoveryPreview opportunities={results} onImport={(items) => importMutation.mutate(items)} importing={importMutation.isPending} />
+    </div>
+  );
+}
+
+function ProviderDiscoveryPanel() {
+  const qc = useQueryClient();
+  const [linkedinTitle, setLinkedinTitle] = useState("");
+  const [linkedinLocation, setLinkedinLocation] = useState("United States OR United Kingdom");
+  const [apifyUrl, setApifyUrl] = useState("");
+  const [results, setResults] = useState<Opportunity[]>([]);
+  const rapidapi = useMutation({
+    mutationFn: () => opportunityService.discoverRapidApiLinkedIn({ title_filter: linkedinTitle, location_filter: linkedinLocation, offset: 0 }),
+    onSuccess: (data) => { setResults(data.opportunities); toast.success(`RapidAPI returned ${data.opportunities.length} opportunities`); },
+    onError: (error) => toast.error(error.message),
+  });
+  const apify = useMutation({
+    mutationFn: () => opportunityService.discoverApify({ url: apifyUrl }),
+    onSuccess: (data) => { setResults(data.opportunities); toast.success(`Apify returned ${data.opportunities.length} opportunities`); },
+    onError: (error) => toast.error(error.message),
+  });
+  const importMutation = useMutation({
+    mutationFn: (items: Opportunity[]) => opportunityService.importDiscovered(items),
+    onSuccess: (data) => { toast.success(`Imported ${data.count} provider results`); setResults([]); qc.invalidateQueries({ queryKey: ["opportunities"] }); },
+    onError: (error) => toast.error(error.message),
+  });
+  return (
+    <Card><CardContent className="space-y-5 p-5">
+      <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+        <Input placeholder="LinkedIn title filter" value={linkedinTitle} onChange={(e) => setLinkedinTitle(e.target.value)} />
+        <Input placeholder="LinkedIn location filter" value={linkedinLocation} onChange={(e) => setLinkedinLocation(e.target.value)} />
+        <Button variant="outline" disabled={!linkedinTitle.trim() || rapidapi.isPending} onClick={() => rapidapi.mutate()}><Search className="h-4 w-4" /> Search LinkedIn API</Button>
+      </div>
+      <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+        <Input placeholder="URL for configured Apify actor: LinkedIn, Indeed, Devpost, etc." value={apifyUrl} onChange={(e) => setApifyUrl(e.target.value)} />
+        <Button variant="outline" disabled={!apifyUrl.trim() || apify.isPending} onClick={() => apify.mutate()}><Upload className="h-4 w-4" /> Run Apify scraper</Button>
+      </div>
+      <DiscoveryPreview opportunities={results} onImport={(items) => importMutation.mutate(items)} importing={importMutation.isPending} />
+    </CardContent></Card>
+  );
+}
+
+function DiscoveryPreview({ opportunities, onImport, importing }: { opportunities: Opportunity[]; onImport: (items: Opportunity[]) => void; importing: boolean }) {
+  if (!opportunities.length) return null;
+  return (
+    <Card><CardContent className="space-y-4 p-5">
+      <div className="flex items-center justify-between gap-3"><div className="font-medium">{opportunities.length} preview result(s)</div><Button disabled={importing} onClick={() => onImport(opportunities)}><Plus className="h-4 w-4" /> Import all</Button></div>
+      <div className="overflow-hidden rounded-lg border"><table className="w-full min-w-[760px] text-sm"><thead className="bg-muted/60 text-left text-xs uppercase text-muted-foreground"><tr><th className="p-3">Title</th><th className="p-3">Company</th><th className="p-3">Location</th><th className="p-3">Type</th><th className="p-3">Source</th></tr></thead><tbody>{opportunities.map((item, index) => <tr key={`${item.url || item.title}-${index}`} className="border-t"><td className="p-3 font-medium">{item.title}</td><td className="p-3">{item.company || ""}</td><td className="p-3">{item.location || item.remote_type || ""}</td><td className="p-3"><Badge>{item.opportunity_type || "job"}</Badge></td><td className="p-3">{item.source}</td></tr>)}</tbody></table></div>
+    </CardContent></Card>
   );
 }
 

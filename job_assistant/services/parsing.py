@@ -10,11 +10,13 @@ from .openai_client import ask_json
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 URL_RE = re.compile(r"https?://[^\s<>\)\]\"']+")
-OPPORTUNITY_TYPES = {"job", "hackathon", "competition", "webinar", "other"}
+OPPORTUNITY_TYPES = {"job", "internship", "hackathon", "competition", "webinar", "other"}
 
 
 def infer_opportunity_type(text: str, source: str = "") -> str:
     haystack = f"{source} {text}".lower()
+    if any(word in haystack for word in ["internship", "intern ", "interns", "graduate program", "new grad"]):
+        return "internship"
     if any(word in haystack for word in ["hackathon", "devpost", "buildathon"]):
         return "hackathon"
     if any(word in haystack for word in ["webinar", "workshop", "seminar", "online event"]):

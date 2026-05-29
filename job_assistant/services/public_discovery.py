@@ -4,7 +4,6 @@ from typing import Any, Dict, Iterable, List
 from urllib.parse import urlencode
 
 import requests
-from bs4 import BeautifulSoup
 
 
 DEFAULT_TIMEOUT_SECONDS = 15
@@ -19,7 +18,14 @@ def _text(value: Any) -> str:
 
 
 def _clean_html(value: Any) -> str:
-    return BeautifulSoup(_text(value), "html.parser").get_text(" ", strip=True)
+    try:
+        from bs4 import BeautifulSoup
+
+        return BeautifulSoup(_text(value), "html.parser").get_text(" ", strip=True)
+    except ModuleNotFoundError:
+        import re
+
+        return re.sub(r"<[^>]+>", " ", _text(value)).strip()
 
 
 def _matches_query(opportunity: Dict[str, Any], query: str) -> bool:

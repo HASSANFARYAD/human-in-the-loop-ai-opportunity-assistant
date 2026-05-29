@@ -27,4 +27,21 @@ export const opportunityService = {
   updateStatus: async (id: number, status: string, notes = "") =>
     (await apiClient.patch(`/jobs/${id}/status`, undefined, { params: { status, notes } })).data,
   reminders: () => getJson<unknown[]>("/reminders"),
+  extract: async (payload: { raw: string; source: string; opportunity_type: string; workspace_id?: number }) =>
+    (await apiClient.post<{ status: string; opportunity: Opportunity }>("/discovery/extract", payload)).data,
+  discoverPublic: async (payload: {
+    query: string;
+    sources: string[];
+    limit_per_source: number;
+    opportunity_type: string;
+    remote_type: string;
+    location: string;
+    keywords: string;
+  }) => (await apiClient.post<{ status: string; opportunities: Opportunity[] }>("/discovery/public", payload)).data,
+  discoverRapidApiLinkedIn: async (payload: { title_filter: string; location_filter: string; offset: number; workspace_id?: number }) =>
+    (await apiClient.post<{ status: string; opportunities: Opportunity[]; raw_count: number }>("/discovery/rapidapi-linkedin", payload)).data,
+  discoverApify: async (payload: { url: string; workspace_id?: number }) =>
+    (await apiClient.post<{ status: string; opportunities: Opportunity[]; raw_count: number }>("/discovery/apify", payload)).data,
+  importDiscovered: async (opportunities: Opportunity[], workspace_id?: number) =>
+    (await apiClient.post<{ status: string; ids: number[]; count: number }>("/discovery/import", { opportunities, workspace_id })).data,
 };

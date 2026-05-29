@@ -73,7 +73,11 @@ from job_assistant.ai_orchestrator import ai_orchestrator
 from job_assistant.automation_engine import automation_engine
 from job_assistant.observability import acknowledge_alert, metrics_summary, prometheus_text
 from job_assistant.publishing_engine import approve_post, publish_post, validate_target
+from job_assistant.services.apify_integration import apify_items_to_opportunities, build_run_input, run_actor_for_items
 from job_assistant.services.generation import generate_materials
+from job_assistant.services.parsing import extract_job_from_text, jobs_from_csv
+from job_assistant.services.public_discovery import discover_public_opportunities
+from job_assistant.services.rapidapi_linkedin import search_linkedin_jobs, rapidapi_items_to_opportunities
 from job_assistant.services.scoring import score_job
 from job_assistant.worker_queue import enqueue_job, list_worker_jobs, worker_health
 
@@ -108,6 +112,40 @@ class JobCreate(BaseModel):
     salary_max: Optional[float] = None
     deadline: Optional[str] = None
     opportunity_type: str = "job"
+
+
+class DiscoveryExtractIn(BaseModel):
+    workspace_id: Optional[int] = None
+    raw: str
+    source: str = "Manual"
+    opportunity_type: str = "auto"
+
+
+class DiscoveryPublicIn(BaseModel):
+    query: str = ""
+    sources: list[str] = Field(default_factory=list)
+    limit_per_source: int = 20
+    opportunity_type: str = "auto"
+    remote_type: str = "all"
+    location: str = ""
+    keywords: str = ""
+
+
+class DiscoveryImportIn(BaseModel):
+    workspace_id: Optional[int] = None
+    opportunities: list[Dict[str, Any]] = Field(default_factory=list)
+
+
+class DiscoveryRapidApiIn(BaseModel):
+    workspace_id: Optional[int] = None
+    title_filter: str
+    location_filter: str = "United States OR United Kingdom"
+    offset: int = 0
+
+
+class DiscoveryApifyIn(BaseModel):
+    workspace_id: Optional[int] = None
+    url: str
 
 
 class ReminderCreate(BaseModel):
@@ -756,6 +794,99 @@ async def create_job(job_data: JobCreate, user: dict = Depends(current_user)):
     except Exception as e:
         logger.error(f"Error creating job: {e}")
         raise HTTPException(status_code=500, detail="Failed to create job")
+
+
+def _filter_discovered_opportunities(items: list[dict[str, Any]], payload: DiscoveryPublicIn) -> list[dict[str, Any]]:
+    keywords = " ".join(part for part in [payload.query, payload.keywords] if part).strip().lower()
+    terms = [term for term in keywords.split() if term]
+    filtered: list[dict[str, Any]] = []
+    for item in items:
+        haystack = " ".join(str(item.get(key, "")) for key in ["title", "company", "location", "remote_type", "source", "description", "raw_text"]).lower()
+        if payload.opportunity_type != "auto" and item.get("opportunity_type") not in {"", None, payload.opportunity_type}:
+            continue
+        if payload.remote_type != "all" and payload.remote_type.lower() not in str(item.get("remote_type", "")).lower() and payload.remote_type.lower() not in haystack:
+            continue
+        if payload.location.strip() and payload.location.strip().lower() not in haystack:
+            continue
+        if terms and not all(term in haystack for term in terms):
+            continue
+        if payload.opportunity_type != "auto":
+            item["opportunity_type"] = payload.opportunity_type
+        filtered.append(item)
+    return filtered
+
+
+@router.post("/discovery/extract")
+async def discovery_extract(payload: DiscoveryExtractIn, user: dict = Depends(current_user)):
+    try:
+        opportunity = extract_job_from_text(payload.raw, source=payload.source, opportunity_type=payload.opportunity_type, user_id=user["id"])
+        return {"status": "success", "opportunity": opportunity}
+    except Exception as e:
+        logger.error(f"Error extracting opportunity: {e}")
+        raise HTTPException(status_code=500, detail="Failed to extract opportunity")
+
+
+@router.post("/discovery/public")
+async def discovery_public(payload: DiscoveryPublicIn, user: dict = Depends(current_user)):
+    try:
+        sources = payload.sources or ["RemoteJobs.org", "Arbeitnow", "Remotive", "Jobicy", "Hacker News Who is hiring"]
+        opportunities = discover_public_opportunities(payload.query, sources, payload.limit_per_source)
+        return {"status": "success", "opportunities": _filter_discovered_opportunities(opportunities, payload)}
+    except Exception as e:
+        logger.error(f"Error discovering public opportunities: {e}")
+        raise HTTPException(status_code=502, detail=f"Public discovery failed: {e}")
+
+
+@router.post("/discovery/rapidapi-linkedin")
+async def discovery_rapidapi_linkedin(payload: DiscoveryRapidApiIn, user: dict = Depends(current_user)):
+    settings = get_integration_settings(user["id"], "rapidapi_linkedin", workspace_id=payload.workspace_id)
+    config = settings.get("config", {})
+    api_key = settings.get("api_key", "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="RapidAPI LinkedIn integration is not configured")
+    try:
+        items = search_linkedin_jobs(
+            api_key,
+            payload.title_filter,
+            payload.location_filter,
+            payload.offset,
+            config.get("host", ""),
+            config.get("endpoint", ""),
+        )
+        return {"status": "success", "opportunities": rapidapi_items_to_opportunities(items), "raw_count": len(items)}
+    except Exception as e:
+        logger.error(f"Error searching RapidAPI LinkedIn jobs: {e}")
+        raise HTTPException(status_code=502, detail=f"LinkedIn API search failed: {e}")
+
+
+@router.post("/discovery/apify")
+async def discovery_apify(payload: DiscoveryApifyIn, user: dict = Depends(current_user)):
+    settings = get_integration_settings(user["id"], "apify", workspace_id=payload.workspace_id)
+    config = settings.get("config", {})
+    api_key = settings.get("api_key", "")
+    actor_id = config.get("actor_id", "")
+    if not api_key or not actor_id:
+        raise HTTPException(status_code=400, detail="Apify integration is not configured")
+    try:
+        run_input = build_run_input(payload.url, config.get("input_template", ""))
+        items = run_actor_for_items(api_key, actor_id, run_input)
+        opportunities = apify_items_to_opportunities(items, source=f"Apify:{actor_id}")
+        return {"status": "success", "opportunities": opportunities, "raw_count": len(items)}
+    except Exception as e:
+        logger.error(f"Error running Apify discovery: {e}")
+        raise HTTPException(status_code=502, detail=f"Apify scraper failed: {e}")
+
+
+@router.post("/discovery/import")
+async def discovery_import(payload: DiscoveryImportIn, user: dict = Depends(current_user)):
+    ids: list[int] = []
+    for item in payload.opportunities:
+        try:
+            ids.append(insert_job(item, user["id"], workspace_id=payload.workspace_id))
+        except Exception as e:
+            logger.error(f"Error importing discovered opportunity: {e}")
+            raise HTTPException(status_code=500, detail="Failed to import discovered opportunities")
+    return {"status": "success", "ids": ids, "count": len(ids)}
 
 
 @router.get("/jobs/{job_id}")
