@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import { AlertTriangle, CheckCircle2, Play, Workflow } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,7 @@ import { automationService } from "@/services/automation.service";
 import { formatDate } from "@/lib/utils";
 
 export function AutomationView() {
+  const activeTab = useSearchParams().get("tab") ?? "rules";
   const rules = useQuery({ queryKey: ["automation-rules"], queryFn: () => automationService.rules() });
   const runs = useQuery({ queryKey: ["automation-runs"], queryFn: () => automationService.runs() });
   const errors = useQuery({ queryKey: ["automation-errors"], queryFn: () => automationService.errors() });
@@ -21,8 +23,13 @@ export function AutomationView() {
         <Card><CardContent className="p-5"><AlertTriangle className="mb-3 h-5 w-5 text-warning" /><div className="text-2xl font-semibold">{errors.data?.length ?? 0}</div><div className="text-sm text-muted-foreground">Failures</div></CardContent></Card>
         <Card><CardContent className="p-5"><Play className="mb-3 h-5 w-5 text-primary" /><div className="text-2xl font-semibold">{runs.data?.length ?? 0}</div><div className="text-sm text-muted-foreground">Recent runs</div></CardContent></Card>
       </div>
-      <Card><CardHeader><CardTitle>Automation Rules</CardTitle></CardHeader><CardContent className="space-y-3">{(rules.data ?? []).map((rule) => <div key={rule.id} className="flex items-center justify-between rounded-md border p-3"><div><div className="font-medium">{rule.name}</div><div className="text-sm text-muted-foreground">{rule.trigger_event} → {rule.action_type}</div></div><Badge>{rule.is_active ? "active" : "inactive"}</Badge></div>)}</CardContent></Card>
-      <Card><CardHeader><CardTitle>Recent Runs</CardTitle></CardHeader><CardContent className="space-y-3">{(runs.data ?? []).map((run) => <div key={run.id} className="rounded-md border p-3"><div className="flex justify-between"><span className="font-medium">Run #{run.id}</span><Badge>{run.status}</Badge></div><div className="text-sm text-muted-foreground">{run.trigger_event || "manual"} · {formatDate(run.started_at)}</div></div>)}</CardContent></Card>
+      {activeTab === "runs" ? (
+        <Card><CardHeader><CardTitle>Recent Runs</CardTitle></CardHeader><CardContent className="space-y-3">{(runs.data ?? []).map((run) => <div key={run.id} className="rounded-md border p-3"><div className="flex justify-between"><span className="font-medium">Run #{run.id}</span><Badge>{run.status}</Badge></div><div className="text-sm text-muted-foreground">{run.trigger_event || "manual"} · {formatDate(run.started_at)}</div></div>)}</CardContent></Card>
+      ) : activeTab === "errors" ? (
+        <Card><CardHeader><CardTitle>Failures and Activity</CardTitle></CardHeader><CardContent className="space-y-3">{(errors.data ?? []).map((run) => <div key={run.id} className="rounded-md border border-destructive/30 p-3"><div className="flex justify-between"><span className="font-medium">Failure #{run.id}</span><Badge>{run.status}</Badge></div><div className="text-sm text-muted-foreground">{run.error || run.trigger_event || "No error message recorded"}</div></div>)}</CardContent></Card>
+      ) : (
+        <Card><CardHeader><CardTitle>Automation Rules</CardTitle></CardHeader><CardContent className="space-y-3">{(rules.data ?? []).map((rule) => <div key={rule.id} className="flex items-center justify-between rounded-md border p-3"><div><div className="font-medium">{rule.name}</div><div className="text-sm text-muted-foreground">{rule.trigger_event} → {rule.action_type}</div></div><Badge>{rule.is_active ? "active" : "inactive"}</Badge></div>)}</CardContent></Card>
+      )}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { Suspense } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Sidebar } from "@/components/layout/sidebar";
@@ -42,7 +43,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-background">
-      <Sidebar />
+      <Suspense fallback={null}>
+        <Sidebar />
+      </Suspense>
       <div className="min-w-0 flex-1">
         <Topbar />
         <main className="mx-auto w-full max-w-7xl p-4 md:p-6">{children}</main>
