@@ -1,11 +1,24 @@
 from __future__ import annotations
 
 import json
+from html import escape
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
+
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+except Exception:  # Plotly is optional but recommended for the premium dashboard.
+    px = None
+    go = None
+
+try:
+    from streamlit_lottie import st_lottie
+except Exception:  # Lottie is optional. The UI gracefully falls back to CSS motion.
+    st_lottie = None
 
 from job_assistant.auth import authenticate_user, create_access_token, create_refresh_token, public_user, register_user, revoke_refresh_token, user_from_refresh_token
 from job_assistant.db import (
@@ -120,22 +133,830 @@ def _query_param_value(name: str) -> str:
         return value[0] if value else ""
     return value or ""
 
-st.set_page_config(page_title="Opportunity Assistant", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="Opportunity Assistant", page_icon="🚀", layout="wide", initial_sidebar_state="expanded")
 
-st.markdown(
-    """
-    <style>
-    .block-container {padding-top: 1.4rem; max-width: 1280px;}
-    [data-testid="stSidebar"] {background: #0f172a;}
-    [data-testid="stSidebar"] * {color: #e5e7eb;}
-    .stButton > button, .stDownloadButton > button {border-radius: 10px; font-weight: 600;}
-    div[data-testid="metric-container"] {background: #ffffff; border: 1px solid #e2e8f0; padding: 1rem; border-radius: 16px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);}
-    .section-card {background:#fff; border:1px solid #e2e8f0; border-radius:18px; padding:1rem 1.2rem; margin:.75rem 0; box-shadow:0 1px 2px rgba(15,23,42,.05);}
-    .muted-pill {display:inline-block; padding:.25rem .6rem; border-radius:999px; background:#eef2ff; color:#3730a3; font-size:.82rem; font-weight:600;}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+PAGE_LABELS = {
+    "Dashboard": "▣  Dashboard",
+    "Review Queue": "☑  Review Queue",
+    "Opportunity Detail": "◈  Opportunity Detail",
+    "Profile": "◎  Profile",
+    "Ingest Opportunities": "+  Ingest Opportunities",
+    "Reminders": "◷  Reminders",
+    "Automation": "⚡  Automation",
+    "AI Orchestration": "✦  AI Orchestration",
+    "Integrations": "⌘  Integrations",
+    "Team": "◉  Team",
+    "Feedback": "✉  Feedback",
+    "Privacy": "◌  Privacy",
+}
+
+STATUS_COLORS = {
+    "new": "info",
+    "saved": "info",
+    "applied": "success",
+    "accepted": "success",
+    "interview": "success",
+    "follow-up": "warning",
+    "pending": "warning",
+    "rejected": "danger",
+    "disabled": "muted",
+    "enabled": "success",
+    "running": "success",
+    "failed": "danger",
+    "error": "danger",
+}
+
+PAGE_LABELS.update({
+    "Dashboard": "▦  Dashboard",
+    "Review Queue": "☑  Review Queue",
+    "Opportunity Detail": "◈  Opportunity Detail",
+    "Profile": "◉  Profile",
+    "Ingest Opportunities": "+  Ingest Opportunities",
+    "Reminders": "◷  Reminders",
+    "Automation": "⚡  Automation",
+    "AI Orchestration": "✦  AI Orchestration",
+    "Integrations": "⌘  Integrations",
+    "Team": "◉  Team",
+    "Feedback": "✉  Feedback",
+    "Privacy": "○  Privacy",
+})
+
+SIDEBAR_NAV_GROUPS = [
+    ("Overview", ["Dashboard", "Review Queue", "Opportunity Detail"]),
+    ("Workspace", ["Profile", "Ingest Opportunities", "Reminders"]),
+    ("Automation & AI", ["Automation", "AI Orchestration", "Integrations"]),
+    ("Admin", ["Team", "Feedback", "Privacy"]),
+]
+
+
+def sidebar_nav() -> str:
+    if "main_navigation" not in st.session_state:
+        st.session_state["main_navigation"] = "Dashboard"
+
+    st.markdown('<nav class="sidebar-nav" aria-label="Main navigation">', unsafe_allow_html=True)
+    for group_label, page_keys in SIDEBAR_NAV_GROUPS:
+        st.markdown(f'<div class="sidebar-section-label">{group_label}</div>', unsafe_allow_html=True)
+        for page_key in page_keys:
+            page_label = PAGE_LABELS[page_key]
+            is_active = st.session_state["main_navigation"] == page_key
+            if st.button(
+                page_label,
+                key=f"nav_{page_key}",
+                type="primary" if is_active else "secondary",
+                use_container_width=True,
+            ):
+                st.session_state["main_navigation"] = page_key
+                st.rerun()
+    st.markdown("</nav>", unsafe_allow_html=True)
+    return st.session_state["main_navigation"]
+
+
+def inject_premium_theme() -> None:
+    """Global design system for the Streamlit SaaS-style frontend."""
+    st.markdown(
+        """
+        <style>
+        :root {
+            --bg: #f8fafc;
+            --surface: #ffffff;
+            --surface-soft: #f1f5f9;
+            --surface-glass: rgba(255, 255, 255, .78);
+            --text: #0f172a;
+            --text-soft: #334155;
+            --muted: #64748b;
+            --border: #e2e8f0;
+            --app-gradient: radial-gradient(circle at top left, rgba(37, 99, 235, .10), transparent 26rem),
+                radial-gradient(circle at top right, rgba(124, 58, 237, .10), transparent 28rem),
+                linear-gradient(180deg, #fbfdff 0%, var(--bg) 42%, #f8fafc 100%);
+            --card-bg: rgba(255,255,255,.92);
+            --metric-bg: rgba(255,255,255,.94);
+            --track-bg: #e2e8f0;
+            --timeline-border: #dbeafe;
+            --skeleton-bg: linear-gradient(90deg, #e2e8f0 25%, #f8fafc 50%, #e2e8f0 75%);
+            --auth-hero-bg: linear-gradient(135deg, #eef4ff 0%, #f8fbff 100%);
+            --auth-hero-border: #dbeafe;
+            --auth-security-bg: #ecfdf5;
+            --auth-security-border: #bbf7d0;
+            --auth-security-text: #14532d;
+            --auth-demo-bg: #fffbeb;
+            --auth-demo-border: #fde68a;
+            --auth-demo-text: #78350f;
+            --primary: #2563eb;
+            --secondary: #7c3aed;
+            --cyan: #06b6d4;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --radius-xl: 28px;
+            --radius-lg: 22px;
+            --radius-md: 16px;
+            --shadow-sm: 0 1px 2px rgba(15, 23, 42, .06);
+            --shadow-md: 0 16px 42px rgba(15, 23, 42, .10);
+            --shadow-lg: 0 28px 80px rgba(37, 99, 235, .22);
+            --gradient-primary: linear-gradient(135deg, #2563eb 0%, #7c3aed 55%, #06b6d4 100%);
+            --gradient-dark: linear-gradient(180deg, #0b1020 0%, #111827 100%);
+            --gradient-success: linear-gradient(135deg, #10b981 0%, #22c55e 100%);
+            --gradient-warning: linear-gradient(135deg, #f59e0b 0%, #fb7185 100%);
+        }
+
+        html[data-theme="dark"], body[data-theme="dark"], .stApp[data-theme="dark"],
+        [data-testid="stAppViewContainer"][data-theme="dark"],
+        [data-testid="stApp"][data-theme="dark"] {
+            --bg: #0f172a;
+            --surface: #111827;
+            --surface-soft: #1e293b;
+            --surface-glass: rgba(15, 23, 42, .78);
+            --text: #f8fafc;
+            --text-soft: #cbd5e1;
+            --muted: #94a3b8;
+            --border: rgba(148, 163, 184, .24);
+            --app-gradient: radial-gradient(circle at top left, rgba(37, 99, 235, .20), transparent 26rem),
+                radial-gradient(circle at top right, rgba(124, 58, 237, .18), transparent 28rem),
+                linear-gradient(180deg, #020617 0%, var(--bg) 48%, #111827 100%);
+            --card-bg: rgba(15, 23, 42, .88);
+            --metric-bg: rgba(17, 24, 39, .92);
+            --track-bg: rgba(148, 163, 184, .24);
+            --timeline-border: rgba(96, 165, 250, .42);
+            --skeleton-bg: linear-gradient(90deg, #1e293b 25%, #334155 50%, #1e293b 75%);
+            --auth-hero-bg: linear-gradient(135deg, #111827 0%, #1e293b 100%);
+            --auth-hero-border: rgba(96, 165, 250, .35);
+            --auth-security-bg: rgba(20, 83, 45, .22);
+            --auth-security-border: rgba(34, 197, 94, .34);
+            --auth-security-text: #bbf7d0;
+            --auth-demo-bg: rgba(120, 53, 15, .24);
+            --auth-demo-border: rgba(245, 158, 11, .38);
+            --auth-demo-text: #fde68a;
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, .22);
+            --shadow-md: 0 16px 42px rgba(0, 0, 0, .34);
+            --shadow-lg: 0 28px 80px rgba(0, 0, 0, .38);
+        }
+
+        html, body, [class*="css"], .stApp {
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        .stApp {
+            background: var(--app-gradient);
+            color: var(--text);
+        }
+
+        .block-container {
+            max-width: 1440px;
+            padding-top: 1.2rem;
+            padding-bottom: 4rem;
+        }
+
+        [data-testid="stSidebar"] {
+            background: var(--gradient-dark);
+            border-right: 1px solid rgba(255,255,255,.08);
+        }
+
+        [data-testid="stSidebar"] > div:first-child {
+            padding: 1rem .9rem 1.1rem;
+        }
+
+        [data-testid="stSidebar"] * {
+            color: #e5e7eb;
+        }
+
+        [data-testid="stSidebar"] hr {
+            margin: .9rem 0;
+            border-color: rgba(255,255,255,.09);
+        }
+
+        .sidebar-brand {
+            display: flex;
+            align-items: center;
+            gap: .78rem;
+            padding: .95rem .15rem 1.05rem;
+            margin-bottom: .45rem;
+            border-bottom: 1px solid rgba(255,255,255,.08);
+        }
+
+        .sidebar-brand-mark {
+            display: grid;
+            flex: 0 0 40px;
+            width: 40px;
+            height: 40px;
+            place-items: center;
+            border-radius: 14px;
+            background: linear-gradient(135deg, rgba(99,102,241,.95), rgba(139,92,246,.95));
+            border: 1px solid rgba(255,255,255,.20);
+            box-shadow: 0 16px 34px rgba(99,102,241,.28);
+            color: #ffffff;
+            font-size: 1.05rem;
+            font-weight: 850;
+        }
+
+        .sidebar-brand-copy {
+            min-width: 0;
+            flex: 1;
+        }
+
+        .sidebar-brand-copy h2 {
+            margin: 0;
+            color: #ffffff;
+            font-size: .98rem;
+            font-weight: 820;
+            letter-spacing: 0;
+            line-height: 1.15;
+        }
+
+        .sidebar-brand-copy p {
+            margin: .24rem 0 0;
+            color: rgba(226,232,240,.62);
+            font-size: .72rem;
+            line-height: 1.25;
+        }
+
+        .sidebar-collapse-glyph {
+            display: grid;
+            flex: 0 0 28px;
+            width: 28px;
+            height: 28px;
+            place-items: center;
+            border-radius: 10px;
+            background: rgba(255,255,255,.055);
+            border: 1px solid rgba(255,255,255,.08);
+            color: rgba(255,255,255,.62);
+            font-size: .9rem;
+        }
+
+        .sidebar-account {
+            padding: .72rem .78rem;
+            margin: .35rem 0 .65rem;
+            border: 1px solid rgba(255,255,255,.08);
+            border-radius: 16px;
+            background: rgba(255,255,255,.045);
+        }
+
+        .sidebar-account-label,
+        .sidebar-status-label {
+            color: rgba(255,255,255,.42);
+            font-size: .68rem;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+            line-height: 1;
+        }
+
+        .sidebar-account-email {
+            overflow: hidden;
+            margin-top: .4rem;
+            color: rgba(255,255,255,.86);
+            font-size: .8rem;
+            font-weight: 650;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .sidebar-nav {
+            display: block;
+            padding-top: .1rem;
+        }
+
+        .sidebar-section-label {
+            margin: 1rem .45rem .38rem;
+            color: rgba(255,255,255,.44);
+            font-size: .68rem;
+            font-weight: 750;
+            letter-spacing: .085em;
+            line-height: 1;
+            text-transform: uppercase;
+        }
+
+        .sidebar-status-card {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: .75rem;
+            padding: .7rem .78rem;
+            margin-top: .9rem;
+            border: 1px solid rgba(255,255,255,.08);
+            border-radius: 16px;
+            background: rgba(255,255,255,.045);
+        }
+
+        .sidebar-status-value {
+            margin-top: .3rem;
+            color: rgba(255,255,255,.84);
+            font-size: .78rem;
+            font-weight: 720;
+        }
+
+        .sidebar-status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 99px;
+            background: #22c55e;
+            box-shadow: 0 0 0 4px rgba(34,197,94,.13), 0 0 20px rgba(34,197,94,.32);
+        }
+
+        [data-testid="stSidebar"] .stButton > button {
+            width: 100%;
+            min-height: 40px;
+            justify-content: flex-start;
+            border-radius: 14px !important;
+            padding: .62rem .78rem !important;
+            background: transparent !important;
+            border: 1px solid transparent !important;
+            color: rgba(255,255,255,.76) !important;
+            box-shadow: none !important;
+            font-size: .87rem !important;
+            font-weight: 680 !important;
+            letter-spacing: 0 !important;
+            transition: transform .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease, color .18s ease !important;
+        }
+
+        [data-testid="stSidebar"] .stButton > button:hover {
+            background: rgba(255,255,255,.075) !important;
+            border-color: rgba(255,255,255,.12) !important;
+            color: #ffffff !important;
+            transform: translateX(2px);
+        }
+
+        [data-testid="stSidebar"] .stButton > button[kind="primary"] {
+            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
+            border-color: rgba(255,255,255,.18) !important;
+            color: #ffffff !important;
+            box-shadow: 0 12px 28px rgba(99,102,241,.28), inset 0 1px 0 rgba(255,255,255,.18) !important;
+        }
+
+        [data-testid="stSidebar"] .stButton > button[kind="primary"]:hover {
+            background: linear-gradient(135deg, #6d70ff 0%, #9668ff 100%) !important;
+            transform: translateX(2px);
+        }
+
+        h1, h2, h3 {
+            letter-spacing: -0.035em;
+        }
+
+        h1 { font-weight: 850; }
+        h2, h3 { font-weight: 800; }
+        p, li, label { color: var(--text-soft); }
+
+        .app-shell-title {
+            padding: .85rem .2rem .6rem;
+        }
+        .app-shell-title h2 {
+            margin: 0;
+            color: #ffffff;
+            font-size: 1.25rem;
+        }
+        .app-shell-title p {
+            margin: .15rem 0 0;
+            color: #94a3b8;
+            font-size: .84rem;
+        }
+
+        .hero-card {
+            position: relative;
+            overflow: hidden;
+            background: var(--gradient-primary);
+            color: white;
+            border-radius: var(--radius-xl);
+            padding: 1.8rem;
+            margin-bottom: 1.25rem;
+            box-shadow: var(--shadow-lg);
+            animation: fadeSlideUp .45s ease both;
+        }
+        .hero-card:before {
+            content: "";
+            position: absolute;
+            width: 260px;
+            height: 260px;
+            right: -80px;
+            top: -120px;
+            border-radius: 999px;
+            background: rgba(255,255,255,.18);
+            filter: blur(2px);
+            animation: floatOrb 8s ease-in-out infinite;
+        }
+        .hero-card h1, .hero-card p, .hero-card div { color: white; }
+        .hero-kicker {
+            display: inline-flex;
+            align-items: center;
+            gap: .4rem;
+            padding: .34rem .68rem;
+            background: rgba(255,255,255,.18);
+            border: 1px solid rgba(255,255,255,.24);
+            border-radius: 999px;
+            font-size: .78rem;
+            font-weight: 800;
+            margin-bottom: .85rem;
+        }
+
+        .premium-card, .section-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 1.15rem 1.25rem;
+            margin: .75rem 0;
+            box-shadow: var(--shadow-sm);
+            transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+            animation: fadeSlideUp .38s ease both;
+        }
+        .premium-card:hover, .section-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+            border-color: rgba(37,99,235,.28);
+        }
+
+        .metric-card {
+            background: var(--metric-bg);
+            border: 1px solid var(--border);
+            border-radius: 22px;
+            padding: 1rem 1.1rem;
+            box-shadow: var(--shadow-sm);
+            min-height: 128px;
+            transition: transform .18s ease, box-shadow .18s ease;
+            animation: fadeSlideUp .42s ease both;
+        }
+        .metric-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+        .metric-label { color: var(--muted); font-size: .82rem; font-weight: 750; margin-bottom: .5rem; }
+        .metric-value { color: var(--text); font-size: 1.82rem; font-weight: 880; line-height: 1; letter-spacing: -.04em; }
+        .metric-help { color: var(--muted); font-size: .82rem; margin-top: .55rem; }
+
+        div[data-testid="stMetric"] {
+            background: var(--metric-bg);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 1rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .badge, .muted-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: .35rem;
+            padding: .28rem .65rem;
+            border-radius: 999px;
+            font-size: .76rem;
+            font-weight: 800;
+            letter-spacing: .01em;
+            white-space: nowrap;
+        }
+        .badge-success { background: #dcfce7; color: #166534; }
+        .badge-warning { background: #fef3c7; color: #92400e; }
+        .badge-danger { background: #fee2e2; color: #991b1b; }
+        .badge-info { background: #dbeafe; color: #1e40af; }
+        .badge-purple { background: #ede9fe; color: #5b21b6; }
+        .badge-muted { background: #f1f5f9; color: #475569; }
+
+        .stButton > button,
+        .stDownloadButton > button,
+        .stLinkButton > a {
+            border-radius: 14px !important;
+            font-weight: 800 !important;
+            border: 1px solid rgba(37,99,235,.18) !important;
+            transition: transform .15s ease, box-shadow .15s ease, background .15s ease !important;
+        }
+        .stButton > button:hover,
+        .stDownloadButton > button:hover,
+        .stLinkButton > a:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 10px 24px rgba(37, 99, 235, .16);
+        }
+        .stButton > button:active,
+        .stDownloadButton > button:active {
+            transform: scale(.98);
+        }
+
+        input, textarea, [data-baseweb="select"] > div {
+            border-radius: 14px !important;
+        }
+
+        [data-testid="stDataFrame"], [data-testid="stDataEditor"] {
+            border-radius: 18px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .progress-wrap {
+            margin: .75rem 0;
+        }
+        .progress-top {
+            display: flex;
+            justify-content: space-between;
+            font-size: .85rem;
+            color: var(--muted);
+            margin-bottom: .35rem;
+        }
+        .progress-track {
+            height: 10px;
+            background: var(--track-bg);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg,#2563eb,#7c3aed,#06b6d4);
+            animation: loadFill .75s ease both;
+        }
+
+        .timeline-item {
+            border-left: 2px solid var(--timeline-border);
+            padding: .2rem 0 .9rem 1rem;
+            margin-left: .35rem;
+        }
+        .timeline-item strong { color: var(--text); }
+        .timeline-item span { color: var(--muted); font-size: .84rem; }
+
+        .skeleton {
+            height: 14px;
+            border-radius: 999px;
+            background: var(--skeleton-bg);
+            background-size: 200% 100%;
+            animation: shimmer 1.35s infinite;
+        }
+
+        @keyframes fadeSlideUp {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes floatOrb {
+            0%, 100% { transform: translate3d(0,0,0) scale(1); }
+            50% { transform: translate3d(-18px,22px,0) scale(1.05); }
+        }
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+        @keyframes loadFill {
+            from { width: 0; }
+        }
+
+        @media (max-width: 768px) {
+            .block-container { padding-left: 1rem; padding-right: 1rem; }
+            .hero-card { padding: 1.25rem; border-radius: 22px; }
+            .premium-card, .section-card { padding: 1rem; }
+            .metric-value { font-size: 1.45rem; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def page_header(title: str, subtitle: str = "", kicker: str = "Opportunity Assistant") -> None:
+    st.markdown(
+        f"""
+        <div class="hero-card">
+            <div class="hero-kicker">✦ {kicker}</div>
+            <h1 style="margin:0;font-size:2.25rem;line-height:1.08;">{title}</h1>
+            <p style="margin:.7rem 0 0;max-width:820px;color:rgba(255,255,255,.84);font-size:1rem;">{subtitle}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def metric_card(label: str, value, help_text: str = "", badge: str | None = None) -> None:
+    badge_html = f'<span class="badge badge-purple">{badge}</span>' if badge else ""
+    st.markdown(
+        f"""
+        <div class="metric-card">
+            <div style="display:flex;justify-content:space-between;gap:.75rem;align-items:center;">
+                <div class="metric-label">{label}</div>{badge_html}
+            </div>
+            <div class="metric-value">{value}</div>
+            <div class="metric-help">{help_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def status_badge(status: str | None) -> str:
+    label = status or "Unknown"
+    key = label.lower().strip()
+    cls = STATUS_COLORS.get(key, "info")
+    return f'<span class="badge badge-{cls}">{label}</span>'
+
+
+LOTTIE_PULSE = {
+    "v": "5.7.4",
+    "fr": 30,
+    "ip": 0,
+    "op": 90,
+    "w": 240,
+    "h": 240,
+    "nm": "Opportunity Pulse",
+    "ddd": 0,
+    "assets": [],
+    "layers": [
+        {
+            "ddd": 0,
+            "ind": 1,
+            "ty": 4,
+            "nm": "Pulse Circle",
+            "sr": 1,
+            "ks": {
+                "o": {"a": 1, "k": [{"t": 0, "s": [35]}, {"t": 45, "s": [90]}, {"t": 90, "s": [35]}]},
+                "r": {"a": 0, "k": 0},
+                "p": {"a": 0, "k": [120, 120, 0]},
+                "a": {"a": 0, "k": [0, 0, 0]},
+                "s": {"a": 1, "k": [{"t": 0, "s": [72, 72, 100]}, {"t": 45, "s": [118, 118, 100]}, {"t": 90, "s": [72, 72, 100]}]},
+            },
+            "ao": 0,
+            "shapes": [
+                {
+                    "ty": "gr",
+                    "it": [
+                        {"d": 1, "ty": "el", "s": {"a": 0, "k": [120, 120]}, "p": {"a": 0, "k": [0, 0]}},
+                        {"ty": "fl", "c": {"a": 0, "k": [0.145, 0.388, 0.922, 1]}, "o": {"a": 0, "k": 100}, "r": 1},
+                        {"ty": "tr", "p": {"a": 0, "k": [0, 0]}, "a": {"a": 0, "k": [0, 0]}, "s": {"a": 0, "k": [100, 100]}, "r": {"a": 0, "k": 0}, "o": {"a": 0, "k": 100}},
+                    ],
+                }
+            ],
+            "ip": 0,
+            "op": 90,
+            "st": 0,
+            "bm": 0,
+        }
+    ],
+}
+
+
+def render_lottie_accent() -> None:
+    """Render a lightweight Lottie accent when streamlit-lottie is installed, otherwise use CSS motion."""
+    if st_lottie:
+        st_lottie(LOTTIE_PULSE, height=120, key="opportunity_pulse_lottie")
+    else:
+        st.markdown(
+            """
+            <div style="height:120px;display:grid;place-items:center;">
+                <div style="width:74px;height:74px;border-radius:999px;background:linear-gradient(135deg,#2563eb,#7c3aed,#06b6d4);box-shadow:0 0 0 18px rgba(37,99,235,.08);animation:floatOrb 4s ease-in-out infinite;"></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def progress_bar(value: int | float | None, label: str = "Progress") -> None:
+    value = max(0, min(100, int(value or 0)))
+    st.markdown(
+        f"""
+        <div class="progress-wrap">
+            <div class="progress-top"><span>{label}</span><strong>{value}%</strong></div>
+            <div class="progress-track"><div class="progress-fill" style="width:{value}%;"></div></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def section_card_start() -> None:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+
+
+def section_card_end() -> None:
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def safe_dataframe(rows, columns: list[str] | None = None) -> None:
+    if not rows:
+        st.info("No records to show yet.")
+        return
+    df = pd.DataFrame(rows)
+    if columns:
+        cols = [c for c in columns if c in df.columns]
+        if cols:
+            df = df[cols]
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+def render_dashboard(user_id: int, user: dict) -> None:
+    page_header(
+        "Your opportunity command center",
+        "Track high-match opportunities, monitor automation, review upcoming reminders, and move faster from discovery to application materials.",
+        "Premium dashboard",
+    )
+
+    jobs = list_jobs(user_id)
+    prefs = get_automation_preferences(user_id)
+    events = list_activity_events(user_id, limit=12)
+    due = due_reminders(user_id)
+    generations = list_ai_generations(user_id, limit=50)
+    runs = list_automation_runs(user_id, limit=50)
+    errors = list_automation_errors(user_id, limit=50)
+
+    jobs_df = pd.DataFrame(jobs) if jobs else pd.DataFrame()
+    high_match = 0
+    avg_score = 0
+    pending_review = 0
+    if not jobs_df.empty:
+        if "match_score" in jobs_df.columns:
+            scores = pd.to_numeric(jobs_df["match_score"], errors="coerce")
+            high_match = int((scores >= 80).sum())
+            avg_score = int(scores.dropna().mean()) if not scores.dropna().empty else 0
+        if "status" in jobs_df.columns:
+            pending_review = int(jobs_df["status"].fillna("New").str.lower().isin(["new", "saved", "pending"]).sum())
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        metric_card("Saved opportunities", len(jobs), "Total tracked items", "Pipeline")
+    with c2:
+        metric_card("High match", high_match, "Score of 80+", "Priority")
+    with c3:
+        metric_card("Average score", f"{avg_score}%", "Across scored roles", "Fit")
+    with c4:
+        metric_card("Pending review", pending_review, "Needs attention", "Queue")
+    with c5:
+        metric_card("Due reminders", len(due), "Follow-ups ready", "Today")
+
+    left, right = st.columns([1.45, .9], gap="large")
+    with left:
+        st.markdown('<div class="premium-card">', unsafe_allow_html=True)
+        st.subheader("Opportunity analytics")
+        if jobs_df.empty:
+            st.info("No opportunities yet. Import or paste an opportunity to unlock analytics.")
+            st.markdown('<div class="skeleton" style="width:82%;"></div><br><div class="skeleton" style="width:64%;"></div>', unsafe_allow_html=True)
+        elif px:
+            chart_col1, chart_col2 = st.columns(2)
+            with chart_col1:
+                if "status" in jobs_df.columns:
+                    status_counts = jobs_df["status"].fillna("New").value_counts().reset_index()
+                    status_counts.columns = ["status", "count"]
+                    fig = px.pie(status_counts, values="count", names="status", hole=.58, title="Pipeline by status")
+                    fig.update_layout(height=330, margin=dict(l=10, r=10, t=48, b=10), showlegend=True)
+                    st.plotly_chart(fig, use_container_width=True)
+            with chart_col2:
+                if "match_score" in jobs_df.columns:
+                    score_df = jobs_df.copy()
+                    score_df["match_score"] = pd.to_numeric(score_df["match_score"], errors="coerce")
+                    score_df = score_df.dropna(subset=["match_score"])
+                    if not score_df.empty:
+                        fig = px.histogram(score_df, x="match_score", nbins=10, title="Match score distribution")
+                        fig.update_layout(height=330, margin=dict(l=10, r=10, t=48, b=10), yaxis_title="Opportunities", xaxis_title="Score")
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("Score opportunities to see the match distribution.")
+        else:
+            st.warning("Install Plotly to enable interactive charts: `pip install plotly`.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="premium-card">', unsafe_allow_html=True)
+        st.subheader("Top opportunities")
+        if jobs:
+            top_df = pd.DataFrame(jobs)
+            if "match_score" in top_df.columns:
+                top_df["match_score"] = pd.to_numeric(top_df["match_score"], errors="coerce").fillna(0)
+                top_df = top_df.sort_values("match_score", ascending=False).head(6)
+            safe_dataframe(top_df.to_dict("records"), ["id", "opportunity_type", "title", "company", "location", "match_score", "priority", "status", "deadline"])
+        else:
+            st.info("No opportunities yet. Go to Ingest Opportunities to add your first item.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with right:
+        st.markdown('<div class="premium-card">', unsafe_allow_html=True)
+        st.subheader("Automation health")
+        render_lottie_accent()
+        automation_status = "Enabled" if prefs.get("enabled") else "Disabled"
+        st.markdown(status_badge(automation_status), unsafe_allow_html=True)
+        progress_bar(int(prefs.get("min_score_for_materials", 70)), "Material generation threshold")
+        st.caption("Private sites are never scraped or auto-applied. Human review remains part of the workflow.")
+        if runs or errors:
+            run_count = len(runs)
+            error_count = len(errors)
+            metric_card("Runs logged", run_count, f"{error_count} recent errors", "Automation")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="premium-card">', unsafe_allow_html=True)
+        st.subheader("Recent activity")
+        if events:
+            for item in events[:6]:
+                st.markdown(
+                    f"""
+                    <div class="timeline-item">
+                        <strong>{item.get('title', 'Update')}</strong><br>
+                        <span>{item.get('created_at', '')} · {item.get('level', 'info')}</span><br>
+                        <span>{item.get('message', '')}</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.info("No automation updates yet.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="premium-card">', unsafe_allow_html=True)
+        st.subheader("Upcoming focus")
+        if due:
+            for reminder in due[:5]:
+                st.markdown(f"• **{reminder.get('kind', 'Reminder')}** — {reminder.get('note', '')}")
+        else:
+            st.info("No due reminders right now.")
+        if generations:
+            st.caption(f"AI generations logged: {len(generations)} recent item(s).")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+inject_premium_theme()
 
 
 def get_cookie_manager():
@@ -201,56 +1022,56 @@ def require_streamlit_user() -> dict:
         }
 
         .auth-hero {
-            background: linear-gradient(135deg, #eef4ff 0%, #f8fbff 100%);
-            border: 1px solid #dbeafe;
+            background: var(--auth-hero-bg);
+            border: 1px solid var(--auth-hero-border);
             border-radius: 22px;
             padding: 2rem;
             margin-bottom: 1.5rem;
         }
 
         .auth-hero h1 {
-            color: #000000;
+            color: var(--text);
             font-size: 2.1rem;
             margin-bottom: 0.4rem;
         }
 
         .auth-hero p {
             font-size: 1rem;
-            color: #475569;
+            color: var(--text-soft);
             margin-bottom: 0;
         }
 
         .security-card {
-            background: #ecfdf5;
-            border: 1px solid #bbf7d0;
+            background: var(--auth-security-bg);
+            border: 1px solid var(--auth-security-border);
             border-left: 6px solid #22c55e;
             border-radius: 16px;
             padding: 1rem 1.2rem;
             margin: 1rem 0;
-            color: #14532d;
+            color: var(--auth-security-text);
         }
 
         .demo-card {
-            background: #fffbeb;
-            border: 1px solid #fde68a;
+            background: var(--auth-demo-bg);
+            border: 1px solid var(--auth-demo-border);
             border-left: 6px solid #f59e0b;
             border-radius: 16px;
             padding: 1rem 1.2rem;
             margin: 1rem 0;
-            color: #78350f;
+            color: var(--auth-demo-text);
         }
 
         .auth-note {
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
             border-radius: 14px;
             padding: 1rem;
             margin-top: 1rem;
-            color: #334155;
+            color: var(--text-soft);
         }
 
         .small-muted {
-            color: #64748b;
+            color: var(--muted);
             font-size: 0.92rem;
         }
         </style>
@@ -398,8 +1219,25 @@ current_user = require_streamlit_user()
 current_user_id = int(current_user["id"])
 
 with st.sidebar:
-    st.write(f"**Signed in:** {current_user['email']}")
-    if st.button("Logout"):
+    user_email = escape(current_user["email"])
+    st.markdown(
+        f"""
+        <div class="sidebar-brand">
+            <div class="sidebar-brand-mark">OA</div>
+            <div class="sidebar-brand-copy">
+                <h2>Opportunity Assistant</h2>
+                <p>AI-powered opportunity workspace</p>
+            </div>
+            <div class="sidebar-collapse-glyph">‹</div>
+        </div>
+        <div class="sidebar-account">
+            <div class="sidebar-account-label">Signed in</div>
+            <div class="sidebar-account-email" title="{user_email}">{user_email}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button("Logout", key="logout_button"):
         if cookie_manager:
             refresh_token = cookie_manager.get(settings.session_cookie_name)
             if refresh_token:
@@ -407,32 +1245,9 @@ with st.sidebar:
             cookie_manager.delete(settings.session_cookie_name)
         st.session_state.clear()
         st.rerun()
-    st.divider()
-    page = st.radio("Navigate", ["Profile", "Automation", "AI Orchestration", "Integrations", "Team", "Ingest Opportunities", "Review Queue", "Opportunity Detail", "Reminders", "Feedback", "Privacy"])
-    st.divider()
-    with st.expander("Quick feedback"):
-        with st.form("quick_feedback_form"):
-            q_category = st.selectbox("Category", FEEDBACK_CATEGORIES, index=FEEDBACK_CATEGORIES.index("General Suggestion"))
-            q_title = st.text_input("Title", placeholder="Short summary")
-            q_description = st.text_area("Details", height=90, placeholder="What happened or what should improve?")
-            q_severity = st.selectbox("Severity", FEEDBACK_SEVERITIES, index=FEEDBACK_SEVERITIES.index("medium"))
-            if st.form_submit_button("Submit feedback"):
-                try:
-                    create_feedback(current_user_id, {
-                        "category": q_category,
-                        "title": q_title,
-                        "description": q_description,
-                        "severity": q_severity,
-                        "app_version": settings.app_version,
-                        "metadata": {"source": "sidebar", "page": page},
-                    })
-                    st.success("Feedback submitted.")
-                except Exception as exc:
-                    st.error(f"Feedback failed: {exc}")
+    page = sidebar_nav()
     st.divider()
     prefs_sidebar = get_automation_preferences(current_user_id)
-    st.write("**Automation**")
-    st.caption("Configured from the Automation page. Private sites are never scraped or auto-applied.")
     auto_col1, auto_col2 = st.columns(2)
     with auto_col1:
         if st.button("Start", key="start_scheduler"):
@@ -454,18 +1269,29 @@ with st.sidebar:
                 st.success("Scheduler stopped.")
             except Exception as exc:
                 st.error(f"Scheduler failed: {exc}")
-    st.caption("Status: running" if st.session_state.get("scheduler_started") else ("Configured but stopped" if prefs_sidebar.get("enabled") else "Disabled"))
-    st.divider()
-    st.write("**Allowed workflow**")
-    st.write("Process alerts, pasted descriptions, public/manual URLs, CSVs, and optional Gmail read-only messages.")
-    st.write("For LinkedIn: open the URL yourself, review, and apply manually.")
+    automation_status = "Running" if st.session_state.get("scheduler_started") else ("Configured" if prefs_sidebar.get("enabled") else "Disabled")
+    st.markdown(
+        f"""
+        <div class="sidebar-status-card">
+            <div>
+                <div class="sidebar-status-label">Automation</div>
+                <div class="sidebar-status-value">{automation_status}</div>
+            </div>
+            <div class="sidebar-status-dot"></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 reminders = due_reminders(current_user_id)
 if reminders:
     st.warning(f"You have {len(reminders)} due reminder(s). Open Reminders to review them.")
 
-if page == "Automation":
-    st.header("Automation control center")
+if page == "Dashboard":
+    render_dashboard(current_user_id, current_user)
+
+elif page == "Automation":
+    page_header("Automation control center", "Configure scheduled imports, scoring, material generation, and safe human-in-the-loop workflows.", "Automation")
     prefs = get_automation_preferences(current_user_id)
     c1, c2, c3, c4 = st.columns(4)
     jobs_count = len(list_jobs(current_user_id))
@@ -522,7 +1348,7 @@ if page == "Automation":
         st.info("No automation updates yet. Start the scheduler after enabling automation.")
 
 elif page == "Profile":
-    st.header("1. User profile setup")
+    page_header("Profile setup", "Build a rich profile so scoring and generated materials stay personalized and useful.", "Profile")
     profile = get_profile(current_user_id)
     uploaded_cv = st.file_uploader("Upload CV/resume (.pdf, .docx, .txt)", type=["pdf", "docx", "txt"])
     if uploaded_cv:
@@ -547,7 +1373,7 @@ elif page == "Profile":
             st.success("Profile saved locally.")
 
 elif page == "AI Orchestration":
-    st.header("AI Orchestration & Workflow Automation")
+    page_header("AI Orchestration & Workflow Automation", "Monitor AI usage, prompt versions, safe automation rules, and workflow runs.", "AI operations")
     st.write("Phase 4 and 5 controls for AI generation logging, prompt versions, and safe automation rules.")
     ai_log_tab, prompt_tab, rules_tab, runs_tab = st.tabs(["AI usage", "Prompt versions", "Automation rules", "Automation runs"])
 
@@ -620,7 +1446,7 @@ elif page == "AI Orchestration":
             st.dataframe(pd.DataFrame(errors), use_container_width=True, hide_index=True)
 
 elif page == "Integrations":
-    st.header("Integrations")
+    page_header("Integrations", "Connect AI providers, job sources, Gmail, LinkedIn posting, RapidAPI, and Apify with encrypted credentials.", "Connected apps")
     st.success("API keys and sensitive integration settings are encrypted before they are stored. Use least-privilege keys and rotate them regularly.")
     ai_tab, providers_tab, linkedin_tab, rapidapi_tab, apify_tab = st.tabs(["AI provider", "Provider registry", "LinkedIn posting", "RapidAPI LinkedIn jobs", "Apify scraping"])
 
@@ -831,7 +1657,7 @@ elif page == "Integrations":
 
 
 elif page == "Team":
-    st.header("Team, Workspaces & RBAC")
+    page_header("Team, Workspaces & RBAC", "Manage organizations, workspaces, members, shared resources, roles, and permission visibility.", "Workspace admin")
     try:
         ensure_user_workspace(current_user_id)
         summary = enterprise_summary(current_user_id)
@@ -950,7 +1776,7 @@ elif page == "Team":
         st.error(f"Team workspace setup failed: {exc}")
 
 elif page == "Ingest Opportunities":
-    st.header("2. Opportunity source ingestion")
+    page_header("Ingest opportunities", "Import opportunities from pasted text, public sources, LinkedIn API, Apify, CSV, and Gmail alerts.", "Opportunity workflow")
     source_tab, public_tab, rapidapi_tab, apify_tab, csv_tab, gmail_tab = st.tabs(["Manual / pasted", "Public discovery", "LinkedIn API", "Apify scraper", "CSV upload", "Gmail read-only"])
 
     with source_tab:
@@ -1133,7 +1959,7 @@ elif page == "Ingest Opportunities":
                 st.error(f"Gmail ingestion failed: {exc}")
 
 elif page == "Review Queue":
-    st.header("5. Review queue")
+    page_header("Review queue", "Prioritize opportunities, score unreviewed items, and manage your active pipeline.", "Pipeline")
     jobs = list_jobs(current_user_id)
     if not jobs:
         st.info("No opportunities yet. Add them from Ingest Opportunities.")
@@ -1179,7 +2005,7 @@ elif page == "Review Queue":
                 st.write("Select rows in the table to delete, or open Opportunity Detail to edit one item.")
 
 elif page == "Opportunity Detail":
-    st.header("4. Opportunity detail")
+    page_header("Opportunity detail", "Review a selected opportunity, score fit, generate tailored materials, and save status changes.", "Opportunity workspace")
     jobs = list_jobs(current_user_id)
     if not jobs:
         st.info("No opportunities available.")
@@ -1254,7 +2080,7 @@ elif page == "Opportunity Detail":
                 st.success("Saved.")
 
 elif page == "Reminders":
-    st.header("7. Notifications / reminders")
+    page_header("Notifications & reminders", "Create follow-up reminders and track due actions across your opportunity pipeline.", "Reminders")
     jobs = list_jobs(current_user_id)
     if jobs:
         labels = {f"#{j['id']} - {j['title']} @ {j.get('company','')}": j["id"] for j in jobs}
@@ -1275,8 +2101,31 @@ elif page == "Reminders":
     else:
         st.info("No due reminders.")
 
+elif page == "Feedback":
+    page_header("Feedback center", "Review product feedback, triage issues, and update feedback status without leaving the workspace.", "Feedback")
+    feedback_items = list_feedback(current_user_id)
+    if feedback_items:
+        safe_dataframe(feedback_items, ["id", "created_at", "category", "severity", "status", "title", "description", "app_version"])
+        st.markdown('<div class="premium-card">', unsafe_allow_html=True)
+        st.subheader("Update feedback status")
+        labels = {f"#{item['id']} · {item.get('title', 'Untitled')}": item for item in feedback_items}
+        selected_label = st.selectbox("Feedback item", list(labels.keys()))
+        selected_item = labels[selected_label]
+        new_status = st.selectbox(
+            "Status",
+            FEEDBACK_STATUSES,
+            index=FEEDBACK_STATUSES.index(selected_item.get("status")) if selected_item.get("status") in FEEDBACK_STATUSES else 0,
+        )
+        if st.button("Update feedback status"):
+            update_feedback_status(int(selected_item["id"]), new_status, current_user_id)
+            st.success("Feedback status updated.")
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.info("No feedback has been submitted yet.")
+
 elif page == "Privacy":
-    st.header("9. Privacy and security")
+    page_header("Privacy and security", "Review data ownership, safe automation limits, encrypted settings, and account-level deletion controls.", "Trust center")
 
     st.info(
         """
