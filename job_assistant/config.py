@@ -3,7 +3,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -96,15 +95,7 @@ class Settings(BaseSettings):
     max_jobs_per_user_free: int = int(os.getenv("MAX_JOBS_PER_USER_FREE", "50"))
     max_jobs_per_user_premium: int = int(os.getenv("MAX_JOBS_PER_USER_PREMIUM", "500"))
 
-    cors_origins: list[str] = ["*"]
-
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, value):
-        raw = os.getenv("CORS_ORIGINS")
-        if raw:
-            return [item.strip() for item in raw.split(",") if item.strip()]
-        return value
+    cors_origins: str = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001")
 
     class Config:
         case_sensitive = False
@@ -124,6 +115,10 @@ class Settings(BaseSettings):
     def effective_database_url(self) -> str:
         return self.database_url or f"sqlite:///{self.db_path}"
 
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
     def ensure_runtime_dirs(self) -> None:
         Path(self.app_data_dir).mkdir(parents=True, exist_ok=True)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -138,7 +133,7 @@ class Settings(BaseSettings):
                 warnings.append("APP_ENCRYPTION_KEY is required in production for encrypted user provider keys.")
             if self.jwt_secret_key in {"dev-secret-key-change-in-prod", "change-me-before-production", ""}:
                 warnings.append("JWT_SECRET_KEY must be changed before production use.")
-            if "*" in self.cors_origins:
+            if "*" in self.cors_origin_list:
                 warnings.append("CORS_ORIGINS should be restricted in production.")
             if not self.session_cookie_secure:
                 warnings.append("SESSION_COOKIE_SECURE should be true behind HTTPS in production.")

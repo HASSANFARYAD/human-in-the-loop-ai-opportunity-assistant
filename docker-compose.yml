@@ -32,7 +32,7 @@ x-common-env: &common-env
   APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-key-change-in-prod}
   SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
-  CORS_ORIGINS: ${CORS_ORIGINS:-*}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
 
 services:
   api:
@@ -46,7 +46,7 @@ services:
       API_HOST: 0.0.0.0
       API_PORT: 8000
       API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:8000}
-      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8501}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
@@ -82,6 +82,25 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
       retries: 3

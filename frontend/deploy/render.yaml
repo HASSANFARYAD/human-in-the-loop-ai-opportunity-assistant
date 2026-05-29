@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: job-assistant-api
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api_server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: ENVIRONMENT
+        value: prod
+      - key: DEPLOYMENT_PROFILE
+        value: production
+      - key: APP_BASE_URL
+        value: https://your-app.vercel.app
+      - key: API_PUBLIC_URL
+        value: https://api.yourdomain.com
+      - key: CORS_ORIGINS
+        value: https://your-app.vercel.app,https://your-custom-domain.com
+      - key: SESSION_COOKIE_SECURE
+        value: "true"
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: APP_ENCRYPTION_KEY
+        sync: false

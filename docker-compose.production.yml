@@ -7,7 +7,7 @@ services:
       DEPLOYMENT_PROFILE: production
       SESSION_COOKIE_SECURE: "true"
       SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
-      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS to your HTTPS Streamlit/app domain}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS to your HTTPS Next.js app domain}
     restart: always
 
   streamlit:
@@ -15,4 +15,9 @@ services:
       ENVIRONMENT: prod
       DEPLOYMENT_PROFILE: production
       SESSION_COOKIE_SECURE: "true"
+    restart: always
+
+  frontend:
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Set NEXT_PUBLIC_API_URL to your HTTPS API domain}
     restart: always
