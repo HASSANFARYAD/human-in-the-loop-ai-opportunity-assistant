@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import json
 import logging
+import re
+import secrets
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
-from starlette.responses import Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from pydantic import BaseModel, Field, validator
+from starlette.responses import FileResponse, RedirectResponse, Response
 
 from job_assistant.auth import authenticate_user, create_access_token, current_user, public_user, register_user
 from job_assistant.compliance import admin_review, apply_retention_policies, approve_user_deletion, export_user_data, list_compliance_exports, request_user_deletion
 from job_assistant.db import (
     create_feedback,
     create_reminder,
+    cleanup_non_opportunity_records,
     db_health,
     delete_job,
     delete_user_data,
@@ -37,9 +42,17 @@ from job_assistant.db import (
     list_feedback,
     list_integration_settings,
     list_jobs,
+    list_gmail_messages,
+    list_interview_prep,
+    list_recordings,
+    list_resume_reviews,
     save_evaluation,
     save_integration_settings,
     save_materials,
+    save_gmail_messages,
+    save_interview_prep,
+    save_recording,
+    save_resume_review,
     delete_integration_settings,
     delete_provider_config,
     get_provider_config,
@@ -75,6 +88,15 @@ from job_assistant.observability import acknowledge_alert, metrics_summary, prom
 from job_assistant.publishing_engine import approve_post, publish_post, validate_target
 from job_assistant.services.apify_integration import apify_items_to_opportunities, build_run_input, run_actor_for_items
 from job_assistant.services.generation import generate_materials
+from job_assistant.services.gmail_ingest import build_gmail_authorization_url, disconnect_gmail, exchange_gmail_code, get_gmail_connection
+from job_assistant.services.job_import import import_opportunities
+from job_assistant.services.opportunity_classifier import (
+    VALID_OPPORTUNITY_CATEGORIES,
+    annotate_opportunity,
+    extract_opportunities_from_container,
+    scoring_gate,
+)
+from job_assistant.services.job_source_scrapers import ScraperError, UnsupportedSourceUrl, indeed_url_with_work_location_intent, get_scraper_for_url, is_job_listing_url
 from job_assistant.services.parsing import extract_job_from_text, jobs_from_csv
 from job_assistant.services.public_discovery import discover_public_opportunities
 from job_assistant.services.rapidapi_linkedin import search_linkedin_jobs, rapidapi_items_to_opportunities
@@ -87,16 +109,24 @@ router = APIRouter(prefix="/api/v1")
 
 
 class ProfileCreate(BaseModel):
-    cv_text: str
-    target_roles: str
-    industries: str
-    locations: str
-    remote_preference: str
-    salary_expectations: str
-    work_authorization: str
-    years_experience: str
-    skills: str
-    deal_breakers: str
+    cv_text: str = ""
+    target_roles: str = ""
+    industries: str = ""
+    locations: str = ""
+    remote_preference: str = ""
+    salary_expectations: str = ""
+    work_authorization: str = ""
+    years_experience: str = ""
+    skills: str = ""
+    deal_breakers: str = ""
+    full_name: str = ""
+    email: str = ""
+    preferred_role: str = ""
+    country: str = ""
+    job_preferences: str = ""
+    platforms: str = ""
+    resume_name: str = ""
+    integration_status: str = ""
 
 
 class JobCreate(BaseModel):
@@ -112,6 +142,86 @@ class JobCreate(BaseModel):
     salary_max: Optional[float] = None
     deadline: Optional[str] = None
     opportunity_type: str = "job"
+    classification: Optional[str] = None
+    classification_reason: Optional[str] = None
+    classification_confidence: Optional[float] = None
+    opportunity_confidence: Optional[float] = None
+    importable: Optional[bool] = None
+    blocked_reason: Optional[str] = None
+
+
+WORK_LOCATION_FILTERS = {"all", "remote", "hybrid", "onsite"}
+REMOTE_LOCATION_INDICATORS = ("remote", "work from home", "wfh", "anywhere")
+HYBRID_LOCATION_INDICATORS = ("hybrid", "partially remote")
+ONSITE_LOCATION_INDICATORS = ("onsite", "on-site", "on site", "office")
+
+
+def _normalize_work_location_filter(value: Any) -> str:
+    normalized = str(value or "all").strip().lower()
+    if not normalized:
+        normalized = "all"
+    if normalized not in WORK_LOCATION_FILTERS:
+        raise ValueError("work_location_filter must be one of: all, remote, hybrid, onsite")
+    return normalized
+
+
+def _opportunity_location_text(item: dict[str, Any]) -> str:
+    return " ".join(
+        str(item.get(key, ""))
+        for key in ["title", "company", "location", "remote_type", "description", "raw_text"]
+    ).lower()
+
+
+def _matches_work_location_filter(item: dict[str, Any], work_location_filter: str) -> bool:
+    if work_location_filter == "all":
+        return True
+    haystack = _opportunity_location_text(item)
+    has_remote = any(indicator in haystack for indicator in REMOTE_LOCATION_INDICATORS)
+    has_hybrid = any(indicator in haystack for indicator in HYBRID_LOCATION_INDICATORS)
+    has_onsite = any(indicator in haystack for indicator in ONSITE_LOCATION_INDICATORS)
+    if work_location_filter == "remote":
+        return has_remote and not has_hybrid
+    if work_location_filter == "hybrid":
+        return has_hybrid
+    if work_location_filter == "onsite":
+        return not has_remote and not has_hybrid and (has_onsite or bool(str(item.get("location") or "").strip()))
+    return True
+
+
+def _filter_by_work_location(items: list[dict[str, Any]], work_location_filter: str) -> tuple[list[dict[str, Any]], int]:
+    filtered = [item for item in items if _matches_work_location_filter(item, work_location_filter)]
+    return filtered, len(items) - len(filtered)
+
+
+def _url_error_detail(status: str, message: str, source: str = "") -> dict[str, str]:
+    detail = {"status": status, "message": message}
+    if source:
+        detail["source"] = source
+    return detail
+
+
+def _scraper_error_response(exc: ScraperError, source: str = "") -> HTTPException:
+    error_text = str(exc)
+    source_name = source.lower() if source else ""
+    if "indeed" in error_text.lower():
+        source_name = "indeed"
+    if "status 403" in error_text.lower() or "blocked" in error_text.lower():
+        return HTTPException(
+            status_code=400,
+            detail=_url_error_detail(
+                "blocked",
+                "Indeed blocked the page fetch. Try using another supported URL, a supported extractor, or paste the job details manually.",
+                source_name or "indeed",
+            ),
+        )
+    return HTTPException(
+        status_code=400,
+        detail=_url_error_detail(
+            "url_error",
+            "The URL could not be fetched. Please check the link and try again.",
+            source_name,
+        ),
+    )
 
 
 class DiscoveryExtractIn(BaseModel):
@@ -119,6 +229,11 @@ class DiscoveryExtractIn(BaseModel):
     raw: str
     source: str = "Manual"
     opportunity_type: str = "auto"
+    work_location_filter: str = "all"
+
+    @validator("work_location_filter", pre=True, always=True)
+    def validate_work_location_filter(cls, value: Any) -> str:
+        return _normalize_work_location_filter(value)
 
 
 class DiscoveryPublicIn(BaseModel):
@@ -129,11 +244,24 @@ class DiscoveryPublicIn(BaseModel):
     remote_type: str = "all"
     location: str = ""
     keywords: str = ""
+    country: str = ""
 
 
 class DiscoveryImportIn(BaseModel):
     workspace_id: Optional[int] = None
     opportunities: list[Dict[str, Any]] = Field(default_factory=list)
+
+
+class DiscoveryImportUrlIn(BaseModel):
+    workspace_id: Optional[int] = None
+    url: str
+    source: str = "Manual"
+    page_limit: int = 2
+    work_location_filter: str = "all"
+
+    @validator("work_location_filter", pre=True, always=True)
+    def validate_work_location_filter(cls, value: Any) -> str:
+        return _normalize_work_location_filter(value)
 
 
 class DiscoveryRapidApiIn(BaseModel):
@@ -207,6 +335,29 @@ class ProviderExecuteIn(BaseModel):
     platform: str
     action: str
     payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AdminConfigIn(BaseModel):
+    workspace_id: Optional[int] = None
+    type: str
+    name: str = ""
+    display_name: str = ""
+    secret: str = ""
+    config: Dict[str, Any] = Field(default_factory=dict)
+    is_active: bool = True
+    notes: str = ""
+    keep_existing_secret_if_blank: bool = True
+
+
+class AdminConfigUpdate(BaseModel):
+    workspace_id: Optional[int] = None
+    name: str = ""
+    display_name: str = ""
+    secret: str = ""
+    config: Dict[str, Any] = Field(default_factory=dict)
+    is_active: Optional[bool] = None
+    notes: str = ""
+    keep_existing_secret_if_blank: bool = True
 
 
 class AIAskIn(BaseModel):
@@ -320,6 +471,239 @@ class DeletionRequestIn(BaseModel):
 class DeletionApproveIn(BaseModel):
     target_user_id: int
 
+
+class BatchScoreIn(BaseModel):
+    job_ids: list[int] = Field(default_factory=list)
+    score_all_unscored: bool = False
+
+
+class ResumeReviewIn(BaseModel):
+    job_id: Optional[int] = None
+    resume_text: str = ""
+    target_role: str = ""
+
+
+class RecordingIn(BaseModel):
+    job_id: Optional[int] = None
+    title: str = "Interview practice recording"
+    mime_type: str = "audio/webm"
+    data_url: str
+    duration_ms: int = 0
+
+
+class GmailMessagesIn(BaseModel):
+    messages: list[Dict[str, Any]] = Field(default_factory=list)
+
+
+def _recording_storage_config(user_id: int) -> dict[str, Any]:
+    settings = get_integration_settings(user_id, "recording_storage")
+    config = settings.get("config") or {}
+    if not settings:
+        raise HTTPException(status_code=400, detail="Recording storage configuration is missing in database settings.")
+    if config.get("is_active") is False:
+        raise HTTPException(status_code=400, detail="Recording storage configuration is inactive.")
+    storage_type = str(config.get("storage_type") or "local").strip().lower()
+    if storage_type != "local":
+        raise HTTPException(status_code=400, detail=f"Recording storage type '{storage_type}' is not supported by this deployment.")
+    storage_path = str(config.get("storage_path") or "").strip()
+    if not storage_path:
+        raise HTTPException(status_code=400, detail="Recording storage path is missing in database settings.")
+    allowed = config.get("allowed_mime_types") or ["audio/webm", "audio/wav", "audio/mpeg", "audio/mp4", "audio/ogg"]
+    if isinstance(allowed, str):
+        allowed = [item.strip() for item in allowed.replace(",", " ").split() if item.strip()]
+    return {
+        "storage_type": storage_type,
+        "storage_path": storage_path,
+        "max_upload_size": int(config.get("max_upload_size") or 25 * 1024 * 1024),
+        "allowed_mime_types": allowed,
+    }
+
+
+def _safe_audio_extension(filename: str, mime_type: str) -> str:
+    suffix = Path(filename or "").suffix.lower()
+    if suffix in {".webm", ".wav", ".mp3", ".m4a", ".ogg", ".mp4"}:
+        return suffix
+    return {
+        "audio/webm": ".webm",
+        "audio/wav": ".wav",
+        "audio/mpeg": ".mp3",
+        "audio/mp4": ".m4a",
+        "audio/ogg": ".ogg",
+    }.get(mime_type, ".webm")
+
+
+ADMIN_CONFIG_TYPES = {"ai_provider", "gmail", "recording_storage"}
+
+
+def _require_admin_config_access(user: dict, workspace_id: int | None = None) -> None:
+    workspace = ensure_user_workspace(user["id"])
+    scoped_workspace_id = int(workspace_id or workspace.get("workspace_id") or 0)
+    role = str(workspace.get("role") or "owner").lower()
+    if role in {"owner", "admin"}:
+        return
+    if scoped_workspace_id and (
+        user_has_permission(user["id"], scoped_workspace_id, "integration:manage")
+        or user_has_permission(user["id"], scoped_workspace_id, "provider:manage")
+        or user_has_permission(user["id"], scoped_workspace_id, "workspace:manage")
+    ):
+        return
+    raise HTTPException(status_code=403, detail="Admin configuration access is required.")
+
+
+def _clean_admin_type(config_type: str) -> str:
+    cleaned = (config_type or "").strip().lower()
+    if cleaned not in ADMIN_CONFIG_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported admin configuration type.")
+    return cleaned
+
+
+def _secret_label(config_type: str) -> str:
+    return "client secret" if config_type == "gmail" else "API key" if config_type == "ai_provider" else "secret"
+
+
+def _active_config_value(value: Any) -> bool:
+    return value is not False
+
+
+def _validate_admin_config(config_type: str, name: str, config: dict[str, Any], has_secret: bool, *, partial: bool = False) -> None:
+    if config_type == "ai_provider":
+        if not (name or config.get("provider")):
+            raise HTTPException(status_code=400, detail="Provider name is required.")
+        if not str(config.get("model") or "").strip():
+            raise HTTPException(status_code=400, detail="Model name is required.")
+        if not has_secret and not partial:
+            raise HTTPException(status_code=400, detail="AI provider API key is required.")
+        timeout = config.get("timeout_seconds")
+        if timeout not in (None, "") and int(timeout) <= 0:
+            raise HTTPException(status_code=400, detail="Timeout seconds must be greater than zero.")
+    elif config_type == "gmail":
+        for key in ["client_id", "redirect_uri"]:
+            if not str(config.get(key) or "").strip():
+                raise HTTPException(status_code=400, detail=f"Gmail {key} is required.")
+        if not has_secret and not partial:
+            raise HTTPException(status_code=400, detail="Gmail client secret is required.")
+        redirect_uri = str(config.get("redirect_uri") or "")
+        if not redirect_uri.startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="Gmail redirect URI must start with http:// or https://.")
+    elif config_type == "recording_storage":
+        if str(config.get("storage_type") or "local").strip().lower() != "local":
+            raise HTTPException(status_code=400, detail="Only local recording storage is currently supported.")
+        if not str(config.get("storage_path") or "").strip():
+            raise HTTPException(status_code=400, detail="Recording storage path is required.")
+        max_upload_size = int(config.get("max_upload_size") or 0)
+        if max_upload_size <= 0:
+            raise HTTPException(status_code=400, detail="Max upload size must be greater than zero.")
+        allowed = config.get("allowed_mime_types") or []
+        if isinstance(allowed, str):
+            allowed = [item.strip() for item in allowed.replace(",", " ").split() if item.strip()]
+        if not allowed or any(not str(item).startswith("audio/") for item in allowed):
+            raise HTTPException(status_code=400, detail="Allowed MIME types must include audio/* values.")
+
+
+def _admin_integration_out(config_type: str, item: dict[str, Any]) -> dict[str, Any]:
+    config = item.get("config") or {}
+    return {
+        "id": config_type,
+        "type": config_type,
+        "name": config.get("provider") or config.get("storage_type") or config_type,
+        "display_name": config.get("display_name") or config_type.replace("_", " ").title(),
+        "is_active": _active_config_value(config.get("is_active")),
+        "has_secret": bool(item.get("has_api_key") or item.get("api_key")),
+        "secret_label": _secret_label(config_type),
+        "config": config,
+        "updated_at": item.get("updated_at"),
+        "source": "integration_settings",
+    }
+
+
+def _admin_provider_out(item: dict[str, Any]) -> dict[str, Any]:
+    config = item.get("config") or {}
+    return {
+        "id": item.get("id") or f"ai:{item.get('provider_name')}",
+        "type": "ai_provider",
+        "name": item.get("provider_name") or config.get("provider") or "openai",
+        "display_name": config.get("display_name") or (item.get("provider_name") or "AI Provider").replace("_", " ").title(),
+        "is_active": bool(item.get("is_active")),
+        "has_secret": bool(item.get("has_credentials")),
+        "secret_label": "API key",
+        "config": config,
+        "updated_at": item.get("updated_at"),
+        "source": "provider_configs",
+        "priority": item.get("priority"),
+    }
+
+
+def _admin_configs_for_user(user_id: int, config_type: str | None = None, workspace_id: int | None = None) -> list[dict[str, Any]]:
+    types = [_clean_admin_type(config_type)] if config_type else ["ai_provider", "gmail", "recording_storage"]
+    out: list[dict[str, Any]] = []
+    if "ai_provider" in types:
+        providers = list_provider_configs(user_id, platform="ai", include_credentials=False, workspace_id=workspace_id)
+        out.extend(_admin_provider_out(item) for item in providers)
+        if not providers:
+            legacy = get_integration_settings(user_id, "ai_provider", workspace_id=workspace_id)
+            if legacy:
+                out.append(_admin_integration_out("ai_provider", legacy))
+    for config_type_item in [t for t in types if t in {"gmail", "recording_storage"}]:
+        settings = get_integration_settings(user_id, config_type_item, workspace_id=workspace_id)
+        if settings:
+            out.append(_admin_integration_out(config_type_item, settings))
+    return out
+
+
+def _save_admin_config(user_id: int, payload: AdminConfigIn | AdminConfigUpdate, config_type: str, *, config_id: str | None = None) -> dict[str, Any]:
+    name = (payload.name or "").strip().lower()
+    config = dict(payload.config or {})
+    if payload.display_name:
+        config["display_name"] = payload.display_name.strip()
+    if payload.notes:
+        config["notes"] = payload.notes.strip()
+    if payload.is_active is not None:
+        config["is_active"] = bool(payload.is_active)
+    if config_type == "ai_provider":
+        provider_name = name or str(config.get("provider") or config_id or "openai").strip().lower()
+        config["provider"] = str(config.get("provider") or provider_name).strip().lower()
+        existing = get_provider_config(user_id, "ai", provider_name, include_credentials=False, workspace_id=payload.workspace_id)
+        _validate_admin_config(config_type, provider_name, config, bool((payload.secret or "").strip() or existing.get("has_credentials")))
+        if config.get("is_active") is True:
+            for provider in list_provider_configs(user_id, platform="ai", include_credentials=False, workspace_id=payload.workspace_id):
+                if str(provider.get("provider_name")) != provider_name and provider.get("is_active"):
+                    save_provider_config(
+                        user_id,
+                        "ai",
+                        str(provider.get("provider_name")),
+                        auth_type=str(provider.get("auth_type") or "api_key"),
+                        credentials={},
+                        config=provider.get("config") or {},
+                        priority=int(provider.get("priority") or 100),
+                        is_active=False,
+                        keep_existing_credentials_if_blank=True,
+                        workspace_id=payload.workspace_id,
+                    )
+        save_provider_config(
+            user_id,
+            "ai",
+            provider_name,
+            auth_type="api_key",
+            credentials={"api_key": payload.secret},
+            config=config,
+            priority=int(config.get("priority") or 100),
+            is_active=_active_config_value(config.get("is_active")),
+            keep_existing_credentials_if_blank=payload.keep_existing_secret_if_blank,
+            workspace_id=payload.workspace_id,
+        )
+        return _admin_provider_out(get_provider_config(user_id, "ai", provider_name, include_credentials=False, workspace_id=payload.workspace_id))
+
+    existing = get_integration_settings(user_id, config_type, workspace_id=payload.workspace_id)
+    _validate_admin_config(config_type, name, config, bool((payload.secret or "").strip() or (existing.get("api_key") or "").strip()))
+    save_integration_settings(
+        user_id,
+        config_type,
+        payload.secret,
+        config,
+        keep_existing_api_key_if_blank=payload.keep_existing_secret_if_blank,
+        workspace_id=payload.workspace_id,
+    )
+    return _admin_integration_out(config_type, get_integration_settings(user_id, config_type, workspace_id=payload.workspace_id))
 
 
 
@@ -655,6 +1039,90 @@ async def execute_provider(payload: ProviderExecuteIn, user: dict = Depends(curr
     }
 
 
+def _admin_config_status(user_id: int, config_type: str, workspace_id: int | None = None) -> dict[str, Any]:
+    configs = _admin_configs_for_user(user_id, config_type=config_type, workspace_id=workspace_id)
+    active = [item for item in configs if item.get("is_active")]
+    configured = any(item.get("has_secret") or config_type == "recording_storage" for item in active)
+    return {
+        "type": config_type,
+        "status": "configured" if configured else ("inactive" if configs else "missing"),
+        "configured": configured,
+        "count": len(configs),
+        "active_count": len(active),
+    }
+
+
+@router.get("/admin/configs")
+async def list_admin_configs(type: Optional[str] = None, workspace_id: Optional[int] = None, user: dict = Depends(current_user)):
+    _require_admin_config_access(user, workspace_id)
+    return {
+        "configs": _admin_configs_for_user(user["id"], config_type=type, workspace_id=workspace_id),
+        "statuses": {
+            config_type: _admin_config_status(user["id"], config_type, workspace_id=workspace_id)
+            for config_type in ["ai_provider", "gmail", "recording_storage"]
+        },
+    }
+
+
+@router.get("/admin/configs/{config_type}")
+async def list_admin_configs_by_type(config_type: str, workspace_id: Optional[int] = None, user: dict = Depends(current_user)):
+    _require_admin_config_access(user, workspace_id)
+    return {"configs": _admin_configs_for_user(user["id"], config_type=_clean_admin_type(config_type), workspace_id=workspace_id)}
+
+
+@router.post("/admin/configs")
+async def create_admin_config(payload: AdminConfigIn, user: dict = Depends(current_user)):
+    _require_admin_config_access(user, payload.workspace_id)
+    return _save_admin_config(user["id"], payload, _clean_admin_type(payload.type))
+
+
+@router.put("/admin/configs/{config_type}/{config_id}")
+async def update_admin_config(config_type: str, config_id: str, payload: AdminConfigUpdate, user: dict = Depends(current_user)):
+    _require_admin_config_access(user, payload.workspace_id)
+    return _save_admin_config(user["id"], payload, _clean_admin_type(config_type), config_id=config_id)
+
+
+@router.post("/admin/configs/{config_type}/{config_id}/activate")
+async def activate_admin_config(config_type: str, config_id: str, workspace_id: Optional[int] = None, user: dict = Depends(current_user)):
+    _require_admin_config_access(user, workspace_id)
+    clean_type = _clean_admin_type(config_type)
+    match = next((item for item in _admin_configs_for_user(user["id"], config_type=clean_type, workspace_id=workspace_id) if str(item.get("id")) == config_id or str(item.get("name")) == config_id), None)
+    if not match:
+        raise HTTPException(status_code=404, detail="Configuration record not found.")
+    payload = AdminConfigUpdate(workspace_id=workspace_id, name=str(match.get("name") or config_id), config={**(match.get("config") or {}), "is_active": True}, is_active=True)
+    return _save_admin_config(user["id"], payload, clean_type, config_id=config_id)
+
+
+@router.post("/admin/configs/{config_type}/{config_id}/deactivate")
+async def deactivate_admin_config(config_type: str, config_id: str, workspace_id: Optional[int] = None, user: dict = Depends(current_user)):
+    _require_admin_config_access(user, workspace_id)
+    clean_type = _clean_admin_type(config_type)
+    match = next((item for item in _admin_configs_for_user(user["id"], config_type=clean_type, workspace_id=workspace_id) if str(item.get("id")) == config_id or str(item.get("name")) == config_id), None)
+    if not match:
+        raise HTTPException(status_code=404, detail="Configuration record not found.")
+    payload = AdminConfigUpdate(workspace_id=workspace_id, name=str(match.get("name") or config_id), config={**(match.get("config") or {}), "is_active": False}, is_active=False)
+    return _save_admin_config(user["id"], payload, clean_type, config_id=config_id)
+
+
+@router.post("/admin/configs/{config_type}/{config_id}/test")
+async def test_admin_config(config_type: str, config_id: str, workspace_id: Optional[int] = None, user: dict = Depends(current_user)):
+    _require_admin_config_access(user, workspace_id)
+    clean_type = _clean_admin_type(config_type)
+    match = next((item for item in _admin_configs_for_user(user["id"], config_type=clean_type, workspace_id=workspace_id) if str(item.get("id")) == config_id or str(item.get("name")) == config_id), None)
+    if not match:
+        raise HTTPException(status_code=404, detail="Configuration record not found.")
+    config = match.get("config") or {}
+    if clean_type == "recording_storage":
+        storage_path = Path(str(config.get("storage_path") or "")).expanduser().resolve()
+        storage_path.mkdir(parents=True, exist_ok=True)
+        probe = storage_path / ".write-check"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+    else:
+        _validate_admin_config(clean_type, str(match.get("name") or config_id), config, bool(match.get("has_secret")), partial=True)
+    return {"status": "success", "message": f"{clean_type} configuration is structurally valid."}
+
+
 
 
 @router.get("/ai/generations")
@@ -789,15 +1257,20 @@ async def list_all_jobs(workspace_id: Optional[int] = None, user: dict = Depends
 @router.post("/jobs")
 async def create_job(job_data: JobCreate, user: dict = Depends(current_user)):
     try:
-        job_id = insert_job(job_data.dict(), user["id"], workspace_id=job_data.workspace_id)
+        payload = annotate_opportunity(job_data.dict())
+        if not payload.get("importable"):
+            raise HTTPException(status_code=400, detail=payload.get("blocked_reason") or "This item is not a valid opportunity and cannot be imported.")
+        job_id = insert_job(payload, user["id"], workspace_id=job_data.workspace_id)
         return {"id": job_id, "status": "success", "message": "Job created"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating job: {e}")
         raise HTTPException(status_code=500, detail="Failed to create job")
 
 
 def _filter_discovered_opportunities(items: list[dict[str, Any]], payload: DiscoveryPublicIn) -> list[dict[str, Any]]:
-    keywords = " ".join(part for part in [payload.query, payload.keywords] if part).strip().lower()
+    keywords = " ".join(part for part in [payload.query, payload.keywords, payload.country] if part).strip().lower()
     terms = [term for term in keywords.split() if term]
     filtered: list[dict[str, Any]] = []
     for item in items:
@@ -818,9 +1291,73 @@ def _filter_discovered_opportunities(items: list[dict[str, Any]], payload: Disco
 
 @router.post("/discovery/extract")
 async def discovery_extract(payload: DiscoveryExtractIn, user: dict = Depends(current_user)):
+    if is_job_listing_url(payload.raw):
+        try:
+            scraper = get_scraper_for_url(payload.raw, payload.source)
+            scrape_url = indeed_url_with_work_location_intent(payload.raw, payload.work_location_filter)
+            scrape_result = scraper.scrape(scrape_url)
+            opportunities, skipped_location = _filter_by_work_location(scrape_result.opportunities, payload.work_location_filter)
+            if not opportunities:
+                raise HTTPException(
+                    status_code=404,
+                    detail=_url_error_detail("no_content", "No usable job content was found at the provided URL.", scraper.source_name.lower()),
+                )
+            return {
+                "status": "success",
+                "opportunities": opportunities,
+                "raw_count": scrape_result.found_count,
+                "work_location_filter": payload.work_location_filter,
+                "jobs_found": len(opportunities),
+                "jobs_skipped_location_filter": skipped_location,
+                "warnings": scrape_result.warnings,
+                "message": f"Found {len(opportunities)} jobs from {scraper.source_name}. Review them before importing.",
+            }
+        except UnsupportedSourceUrl as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=_url_error_detail("unsupported_source", str(exc)),
+            )
+        except ScraperError as exc:
+            raise _scraper_error_response(exc, payload.source)
     try:
+        source_classification = annotate_opportunity(
+            {"title": payload.raw[:120], "description": payload.raw, "raw_text": payload.raw, "source": payload.source}
+        )
+        extracted = extract_opportunities_from_container(
+            {"title": payload.raw[:120], "description": payload.raw, "raw_text": payload.raw, "source": payload.source}
+        )
+        if extracted:
+            opportunities, skipped_location = _filter_by_work_location(extracted, payload.work_location_filter)
+            return {
+                "status": "success",
+                "opportunities": opportunities,
+                "classification": source_classification,
+                "work_location_filter": payload.work_location_filter,
+                "jobs_found": len(opportunities),
+                "jobs_skipped_location_filter": skipped_location,
+                "warnings": [] if opportunities else ["Extracted opportunities did not match the selected work-location filter."],
+            }
         opportunity = extract_job_from_text(payload.raw, source=payload.source, opportunity_type=payload.opportunity_type, user_id=user["id"])
-        return {"status": "success", "opportunity": opportunity}
+        if not opportunity.get("importable"):
+            return {
+                "status": "rejected",
+                "opportunity": opportunity,
+                "classification": opportunity,
+                "work_location_filter": payload.work_location_filter,
+                "jobs_found": 0,
+                "jobs_skipped_location_filter": 0,
+                "warnings": [opportunity.get("blocked_reason") or "No valid opportunity detected."],
+            }
+        opportunities, skipped_location = _filter_by_work_location([opportunity], payload.work_location_filter)
+        return {
+            "status": "success",
+            "opportunity": opportunities[0] if opportunities else None,
+            "classification": source_classification,
+            "work_location_filter": payload.work_location_filter,
+            "jobs_found": len(opportunities),
+            "jobs_skipped_location_filter": skipped_location,
+            "warnings": [] if opportunities else ["No extracted opportunity matched the selected work-location filter."],
+        }
     except Exception as e:
         logger.error(f"Error extracting opportunity: {e}")
         raise HTTPException(status_code=500, detail="Failed to extract opportunity")
@@ -830,7 +1367,7 @@ async def discovery_extract(payload: DiscoveryExtractIn, user: dict = Depends(cu
 async def discovery_public(payload: DiscoveryPublicIn, user: dict = Depends(current_user)):
     try:
         sources = payload.sources or ["RemoteJobs.org", "Arbeitnow", "Remotive", "Jobicy", "Hacker News Who is hiring"]
-        opportunities = discover_public_opportunities(payload.query, sources, payload.limit_per_source)
+        opportunities = [annotate_opportunity(item) for item in discover_public_opportunities(payload.query, sources, payload.limit_per_source)]
         return {"status": "success", "opportunities": _filter_discovered_opportunities(opportunities, payload)}
     except Exception as e:
         logger.error(f"Error discovering public opportunities: {e}")
@@ -853,7 +1390,7 @@ async def discovery_rapidapi_linkedin(payload: DiscoveryRapidApiIn, user: dict =
             config.get("host", ""),
             config.get("endpoint", ""),
         )
-        return {"status": "success", "opportunities": rapidapi_items_to_opportunities(items), "raw_count": len(items)}
+        return {"status": "success", "opportunities": [annotate_opportunity(item) for item in rapidapi_items_to_opportunities(items)], "raw_count": len(items)}
     except Exception as e:
         logger.error(f"Error searching RapidAPI LinkedIn jobs: {e}")
         raise HTTPException(status_code=502, detail=f"LinkedIn API search failed: {e}")
@@ -870,23 +1407,87 @@ async def discovery_apify(payload: DiscoveryApifyIn, user: dict = Depends(curren
     try:
         run_input = build_run_input(payload.url, config.get("input_template", ""))
         items = run_actor_for_items(api_key, actor_id, run_input)
-        opportunities = apify_items_to_opportunities(items, source=f"Apify:{actor_id}")
+        opportunities = [annotate_opportunity(item) for item in apify_items_to_opportunities(items, source=f"Apify:{actor_id}")]
         return {"status": "success", "opportunities": opportunities, "raw_count": len(items)}
     except Exception as e:
         logger.error(f"Error running Apify discovery: {e}")
         raise HTTPException(status_code=502, detail=f"Apify scraper failed: {e}")
 
 
+@router.post("/discovery/import-url")
+async def discovery_import_url(payload: DiscoveryImportUrlIn, user: dict = Depends(current_user)):
+    if not is_job_listing_url(payload.url):
+        raise HTTPException(
+            status_code=400,
+            detail=_url_error_detail(
+                "unsupported_source",
+                "Invalid or unsupported listing URL. Use a supported job listing URL or paste the job details manually.",
+            ),
+        )
+    try:
+        scraper = get_scraper_for_url(payload.url, payload.source)
+        scrape_url = indeed_url_with_work_location_intent(payload.url, payload.work_location_filter)
+        scrape_result = scraper.scrape(scrape_url, page_limit=payload.page_limit)
+        opportunities, skipped_location = _filter_by_work_location(scrape_result.opportunities, payload.work_location_filter)
+        if not opportunities:
+            raise HTTPException(
+                status_code=404,
+                detail=_url_error_detail("no_content", "No usable job content was found at the provided URL.", scraper.source_name.lower()),
+            )
+        import_result = import_opportunities(opportunities, user["id"], workspace_id=payload.workspace_id)
+        return {
+            "status": "success" if not import_result.errors else "partial_success",
+            "source": scraper.source_name,
+            "page_urls": scrape_result.page_urls,
+            "work_location_filter": payload.work_location_filter,
+            "jobs_found": import_result.found,
+            "jobs_imported": import_result.imported,
+            "jobs_skipped_duplicates": import_result.skipped_duplicates,
+            "jobs_skipped_location_filter": skipped_location,
+            "found": import_result.found,
+            "imported": import_result.imported,
+            "skipped_duplicates": import_result.skipped_duplicates,
+            "errors": import_result.errors,
+            "warnings": [*scrape_result.warnings, *import_result.warnings],
+            "ids": import_result.ids,
+        }
+    except HTTPException:
+        raise
+    except UnsupportedSourceUrl as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=_url_error_detail("unsupported_source", str(exc)),
+        )
+    except ScraperError as exc:
+        raise _scraper_error_response(exc, payload.source)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=_url_error_detail("invalid_url", str(exc) or "Invalid URL. Please check the link and try again."),
+        )
+
+
 @router.post("/discovery/import")
 async def discovery_import(payload: DiscoveryImportIn, user: dict = Depends(current_user)):
-    ids: list[int] = []
-    for item in payload.opportunities:
-        try:
-            ids.append(insert_job(item, user["id"], workspace_id=payload.workspace_id))
-        except Exception as e:
-            logger.error(f"Error importing discovered opportunity: {e}")
-            raise HTTPException(status_code=500, detail="Failed to import discovered opportunities")
-    return {"status": "success", "ids": ids, "count": len(ids)}
+    result = import_opportunities(payload.opportunities, user["id"], workspace_id=payload.workspace_id)
+    if result.errors and not result.imported:
+        logger.error(f"Error importing discovered opportunities: {result.errors}")
+        raise HTTPException(status_code=500, detail="Failed to import discovered opportunities")
+    return {
+        "status": "success" if not result.errors else "partial_success",
+        "ids": result.ids,
+        "count": result.imported,
+        "found": result.found,
+        "imported": result.imported,
+        "skipped_duplicates": result.skipped_duplicates,
+        "errors": result.errors,
+        "warnings": result.warnings,
+    }
+
+
+@router.post("/jobs/cleanup-non-opportunities")
+async def cleanup_non_opportunities(workspace_id: Optional[int] = None, user: dict = Depends(current_user)):
+    return {"status": "success", **cleanup_non_opportunity_records(user["id"], workspace_id=workspace_id)}
 
 
 @router.get("/jobs/{job_id}")
@@ -923,6 +1524,9 @@ async def score_single_job(job_id: int, user: dict = Depends(current_user)):
         job = get_job(job_id, user["id"])
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
+        gate = scoring_gate(job)
+        if not gate.importable:
+            raise HTTPException(status_code=400, detail="This item is not a valid opportunity and cannot be scored.")
 
         evaluation = score_job(profile, job, user_id=user["id"])
         save_evaluation(job_id, evaluation, user["id"])
@@ -932,6 +1536,337 @@ async def score_single_job(job_id: int, user: dict = Depends(current_user)):
     except Exception as e:
         logger.error(f"Error scoring job: {e}")
         raise HTTPException(status_code=500, detail="Failed to score job")
+
+
+@router.post("/jobs/score-batch")
+async def score_jobs_batch(payload: BatchScoreIn, user: dict = Depends(current_user)):
+    profile = get_profile(user["id"])
+    if not profile:
+        raise HTTPException(status_code=400, detail="Profile not configured")
+    candidate_jobs = list_jobs(user["id"])
+    ids = payload.job_ids
+    if payload.score_all_unscored:
+        ids = [int(job["id"]) for job in candidate_jobs if job.get("match_score") is None]
+    if not ids:
+        raise HTTPException(status_code=400, detail="No jobs selected for scoring")
+    results = []
+    for job_id in ids:
+        try:
+            job = get_job(int(job_id), user["id"])
+            if not job:
+                results.append({"job_id": job_id, "status": "failed", "error": "Job not found"})
+                continue
+            gate = scoring_gate(job)
+            if not gate.importable:
+                results.append({
+                    "job_id": job_id,
+                    "status": "skipped_non_opportunity",
+                    "classification": gate.classification,
+                    "reason": gate.blocked_reason or gate.reason,
+                })
+                continue
+            evaluation = score_job(profile, job, user_id=user["id"])
+            save_evaluation(int(job_id), evaluation, user["id"])
+            results.append({"job_id": job_id, "status": "success", "evaluation": evaluation})
+        except Exception as exc:
+            logger.error("Batch scoring failed for job %s: %s", job_id, exc)
+            results.append({"job_id": job_id, "status": "failed", "error": str(exc)})
+    return {
+        "status": "success" if all(item["status"] == "success" for item in results) else "partial_success",
+        "total": len(results),
+        "succeeded": len([item for item in results if item["status"] == "success"]),
+        "skipped": len([item for item in results if item["status"].startswith("skipped")]),
+        "failed": len([item for item in results if item["status"] == "failed"]),
+        "results": results,
+    }
+
+
+def _generate_resume_review(profile: dict[str, Any], job: dict[str, Any] | None, resume_text: str = "", target_role: str = "") -> dict[str, Any]:
+    resume = resume_text.strip() or str(profile.get("cv_text") or "")
+    job_text = " ".join(str((job or {}).get(key, "")) for key in ["title", "company", "description"])
+    profile_terms = {term.lower() for term in str(profile.get("skills") or "").replace("\n", ",").split(",") if term.strip()}
+    job_terms = {term.lower() for term in job_text.replace("\n", " ").replace("/", " ").split() if len(term) > 3}
+    missing = sorted(list((job_terms - profile_terms) & {"python", "react", "next.js", "sql", "aws", "azure", "fastapi", "typescript", "leadership", "analytics"}))
+    return {
+        "summary": f"Resume review for {target_role or (job or {}).get('title') or profile.get('preferred_role') or 'target role'}.",
+        "strengths": [
+            "Existing resume/profile text is available for tailoring." if resume else "Add resume text to unlock stronger feedback.",
+            "Profile skills can be mapped into opportunity-specific language.",
+        ],
+        "weaknesses": [
+            "Quantify recent achievements with business or delivery impact.",
+            "Move the most relevant role keywords into the top third of the resume.",
+        ],
+        "missing_keywords": missing,
+        "formatting_suggestions": [
+            "Use concise bullets that start with action verbs.",
+            "Keep sections scan-friendly for ATS and recruiter review.",
+        ],
+        "role_alignment": "Good baseline alignment; improve by mirroring the job title, core stack, and responsibility language.",
+        "recommended_changes": [
+            "Add 2-3 bullets tied directly to the selected job responsibilities.",
+            "Replace generic summaries with target-role positioning.",
+        ],
+        "improved_resume_response": "Draft improvement: emphasize measurable outcomes, relevant tools, and the exact target role in the summary and first experience section.",
+    }
+
+
+def _generate_interview_prep(profile: dict[str, Any], job: dict[str, Any], evaluation: dict[str, Any]) -> dict[str, Any]:
+    role = job.get("title") or "this role"
+    company = job.get("company") or "the company"
+    return {
+        "summary": f"Interview preparation for {role} at {company}.",
+        "behavioral_questions": [
+            "Tell me about a time you handled ambiguity in a project.",
+            "Describe a conflict with a stakeholder and how you resolved it.",
+            "Give an example of improving a process or system.",
+        ],
+        "technical_questions": [
+            f"Walk through how your skills in {profile.get('skills') or 'your stack'} apply to this role.",
+            "How would you approach debugging a production issue with limited information?",
+            "What tradeoffs would you consider when designing a scalable feature?",
+        ],
+        "role_specific_questions": [
+            f"What attracts you to the {role} responsibilities?",
+            "Which requirement in the job description best matches your recent experience?",
+        ],
+        "suggested_answers": [
+            "Use STAR: situation, task, action, result. Keep each answer under two minutes.",
+            f"Connect your answer back to {company}'s needs and the role requirements.",
+        ],
+        "talking_points": [
+            evaluation.get("good_fit") or "Highlight direct overlap between your experience and the job.",
+            "Prepare one metric-driven achievement and one learning story.",
+        ],
+        "questions_to_ask": [
+            "What would success look like in the first 90 days?",
+            "Which team priorities are driving this opening?",
+        ],
+    }
+
+
+def _require_ai_configuration(user_id: int, task_type: str) -> None:
+    route = ai_orchestrator.resolve_route(user_id, task_type=task_type)
+    if not (route.settings.get("api_key") or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="LLM provider configuration is missing in database settings. Configure an active AI provider before generating this output.",
+        )
+
+
+def _llm_resume_review(profile: dict[str, Any], job: dict[str, Any] | None, resume_text: str, target_role: str, user_id: int) -> dict[str, Any]:
+    _require_ai_configuration(user_id, "resume_review")
+    fallback = _generate_resume_review(profile, job, resume_text, target_role)
+    system = (
+        "You are an expert resume reviewer. Return JSON only with keys: overall_assessment, strengths, weaknesses, "
+        "missing_keywords, role_alignment_feedback, formatting_suggestions, ats_improvement_suggestions, "
+        "recommended_bullet_rewrites, summary_rewrite_suggestion, priority_action_list, final_improved_resume_guidance."
+    )
+    context = {
+        "user_profile": profile,
+        "target_role": target_role or (job or {}).get("title") or profile.get("preferred_role") or profile.get("target_roles"),
+        "selected_opportunity": job or {},
+        "resume_text": resume_text or profile.get("cv_text") or "",
+        "user_preferences": {
+            "country": profile.get("country"),
+            "role": profile.get("preferred_role") or profile.get("target_roles"),
+            "job_type": profile.get("job_preferences"),
+            "remote_preference": profile.get("remote_preference"),
+            "platforms": profile.get("platforms"),
+        },
+    }
+    review = ai_orchestrator.ask_json(system, json.dumps(context), fallback, user_id=user_id, task_type="resume_review")
+    if review.get("_ai_error"):
+        raise HTTPException(status_code=502, detail=f"LLM resume review failed: {review.get('_ai_error')}")
+    review.setdefault("generation_source", "llm")
+    return review
+
+
+def _llm_interview_prep(profile: dict[str, Any], job: dict[str, Any], evaluation: dict[str, Any], user_id: int) -> dict[str, Any]:
+    _require_ai_configuration(user_id, "interview_prep")
+    fallback = _generate_interview_prep(profile, job, evaluation)
+    latest_reviews = list_resume_reviews(user_id, job_id=int(job["id"]), limit=1)
+    system = (
+        "You are an expert interview coach. Return JSON only with keys: behavioral_questions, technical_questions, "
+        "role_specific_questions, company_job_specific_questions, suggested_answer_outlines, star_format_guidance, "
+        "weakness_improvement_prompts, candidate_questions, final_preparation_checklist."
+    )
+    context = {
+        "user_profile": profile,
+        "resume_text": profile.get("cv_text") or "",
+        "selected_opportunity": job,
+        "company_name": job.get("company"),
+        "role_title": job.get("title"),
+        "job_description": job.get("description"),
+        "required_skills": job.get("raw_text") or job.get("description"),
+        "ai_score": evaluation,
+        "resume_review_findings": latest_reviews[0] if latest_reviews else {},
+    }
+    prep = ai_orchestrator.ask_json(system, json.dumps(context), fallback, user_id=user_id, task_type="interview_prep")
+    if prep.get("_ai_error"):
+        raise HTTPException(status_code=502, detail=f"LLM interview preparation failed: {prep.get('_ai_error')}")
+    prep.setdefault("generation_source", "llm")
+    return prep
+
+
+@router.post("/profile/resume-review")
+async def post_profile_resume_review(payload: ResumeReviewIn, user: dict = Depends(current_user)):
+    profile = get_profile(user["id"])
+    if not profile and not payload.resume_text.strip():
+        raise HTTPException(status_code=400, detail="Profile or resume text is required")
+    job = get_job(payload.job_id, user["id"]) if payload.job_id else None
+    review = _llm_resume_review(profile or {}, job, payload.resume_text, payload.target_role, user["id"])
+    return save_resume_review(user["id"], review, payload.job_id)
+
+
+@router.get("/profile/resume-reviews")
+async def get_profile_resume_reviews(job_id: Optional[int] = None, user: dict = Depends(current_user)):
+    return list_resume_reviews(user["id"], job_id=job_id)
+
+
+@router.post("/jobs/{job_id}/resume-review")
+async def post_job_resume_review(job_id: int, payload: ResumeReviewIn, user: dict = Depends(current_user)):
+    payload.job_id = job_id
+    return await post_profile_resume_review(payload, user)
+
+
+@router.post("/jobs/{job_id}/interview-prep")
+async def post_job_interview_prep(job_id: int, user: dict = Depends(current_user)):
+    profile = get_profile(user["id"])
+    if not profile:
+        raise HTTPException(status_code=400, detail="Profile not configured")
+    job = get_job(job_id, user["id"])
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    evaluation = get_evaluation(job_id, user["id"]) or score_job(profile, job, user_id=user["id"])
+    prep = _llm_interview_prep(profile, job, evaluation, user["id"])
+    return save_interview_prep(user["id"], job_id, prep)
+
+
+@router.get("/jobs/{job_id}/interview-prep")
+async def get_job_interview_prep(job_id: int, user: dict = Depends(current_user)):
+    return list_interview_prep(user["id"], job_id=job_id)
+
+
+@router.post("/recordings")
+async def post_recording(payload: RecordingIn, user: dict = Depends(current_user)):
+    if not payload.data_url.startswith("data:audio/"):
+        raise HTTPException(status_code=400, detail="Recording payload must be an audio data URL")
+    recording = payload.dict()
+    recording["storage_type"] = "legacy_data_url"
+    recording["playback_url"] = payload.data_url
+    return save_recording(user["id"], recording, job_id=payload.job_id)
+
+
+@router.post("/recordings/upload")
+async def upload_recording(
+    job_id: Optional[int] = Form(default=None),
+    title: str = Form(default="Interview practice recording"),
+    duration_ms: int = Form(default=0),
+    interview_prep_session_id: Optional[int] = Form(default=None),
+    file: UploadFile = File(...),
+    user: dict = Depends(current_user),
+):
+    config = _recording_storage_config(user["id"])
+    mime_type = (file.content_type or "application/octet-stream").split(";")[0].strip().lower()
+    if mime_type not in set(config["allowed_mime_types"]):
+        raise HTTPException(status_code=400, detail=f"Recording type '{mime_type}' is not allowed.")
+    content = await file.read()
+    if len(content) > int(config["max_upload_size"]):
+        raise HTTPException(status_code=413, detail="Recording exceeds the configured maximum upload size.")
+    base_dir = Path(config["storage_path"]).expanduser().resolve()
+    user_dir = (base_dir / str(user["id"])).resolve()
+    if not str(user_dir).startswith(str(base_dir)):
+        raise HTTPException(status_code=400, detail="Invalid recording storage path.")
+    user_dir.mkdir(parents=True, exist_ok=True)
+    safe_title = re.sub(r"[^a-zA-Z0-9._-]+", "-", Path(file.filename or "recording").stem).strip("-")[:80] or "recording"
+    stored_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(8)}-{safe_title}{_safe_audio_extension(file.filename or '', mime_type)}"
+    stored_path = (user_dir / stored_name).resolve()
+    if not str(stored_path).startswith(str(user_dir)):
+        raise HTTPException(status_code=400, detail="Invalid recording filename.")
+    stored_path.write_bytes(content)
+    playback_url = f"/api/v1/recordings/{stored_name}/file"
+    recording = {
+        "title": title,
+        "mime_type": mime_type,
+        "data_url": "",
+        "duration_ms": duration_ms,
+        "interview_prep_session_id": interview_prep_session_id,
+        "original_filename": file.filename or "",
+        "stored_path": str(stored_path),
+        "playback_url": playback_url,
+        "file_size": len(content),
+        "storage_type": config["storage_type"],
+    }
+    return save_recording(user["id"], recording, job_id=job_id)
+
+
+@router.get("/recordings")
+async def get_recordings(job_id: Optional[int] = None, user: dict = Depends(current_user)):
+    return list_recordings(user["id"], job_id=job_id)
+
+
+@router.get("/recordings/{filename}/file")
+async def get_recording_file(filename: str, user: dict = Depends(current_user)):
+    rows = list_recordings(user["id"], limit=500)
+    for row in rows:
+        stored_path = row.get("stored_path") or ""
+        if stored_path and Path(stored_path).name == filename:
+            path = Path(stored_path)
+            if not path.exists():
+                raise HTTPException(status_code=404, detail="Recording file not found")
+            return FileResponse(path, media_type=row.get("mime_type") or "audio/webm", filename=row.get("original_filename") or filename)
+    raise HTTPException(status_code=404, detail="Recording not found")
+
+
+@router.get("/gmail/status")
+async def get_gmail_status(user: dict = Depends(current_user)):
+    connection = get_gmail_connection(user["id"])
+    return {**connection, "status": "connected" if connection.get("connected") else ("configured" if connection.get("configured") else "not_configured")}
+
+
+@router.get("/gmail/auth-url")
+async def get_gmail_auth_url(user: dict = Depends(current_user)):
+    try:
+        return {"url": build_gmail_authorization_url(user["id"])}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/gmail/oauth/callback")
+async def gmail_oauth_callback(code: str = "", state: str = "", error: str = ""):
+    frontend_path = "/integrations?service=gmail"
+    if error:
+        return RedirectResponse(f"{frontend_path}&gmail=error&message={error}")
+    if not code or not state:
+        return RedirectResponse(f"{frontend_path}&gmail=error&message=missing_oauth_callback_values")
+    try:
+        parts = state.split(":")
+        if len(parts) < 3 or parts[0] != "gmail":
+            raise RuntimeError("Invalid Gmail OAuth state.")
+        user_id = int(parts[1])
+        settings = get_integration_settings(user_id, "gmail")
+        redirect_uri = (settings.get("config") or {}).get("redirect_uri")
+        exchange_gmail_code(user_id, code, redirect_uri, state)
+        return RedirectResponse(f"{frontend_path}&gmail=connected")
+    except Exception as exc:
+        return RedirectResponse(f"{frontend_path}&gmail=error&message={str(exc)}")
+
+
+@router.post("/gmail/disconnect")
+async def post_gmail_disconnect(user: dict = Depends(current_user)):
+    disconnect_gmail(user["id"])
+    return {"status": "success", "connected": False}
+
+
+@router.get("/gmail/messages")
+async def get_gmail_messages(limit: int = 50, user: dict = Depends(current_user)):
+    return list_gmail_messages(user["id"], limit=limit)
+
+
+@router.post("/gmail/messages")
+async def post_gmail_messages(payload: GmailMessagesIn, user: dict = Depends(current_user)):
+    return {"status": "success", "messages": save_gmail_messages(user["id"], payload.messages)}
 
 
 @router.post("/jobs/{job_id}/generate-materials")

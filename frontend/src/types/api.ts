@@ -28,6 +28,24 @@ export interface Opportunity {
   salary_max?: number | null;
   deadline?: string | null;
   opportunity_type?: string;
+  classification?: string;
+  classification_reason?: string;
+  classification_confidence?: number | null;
+  opportunity_confidence?: number | null;
+  importable?: boolean | number;
+  blocked_reason?: string;
+  extracted_opportunities_count?: number;
+  source_type?: string;
+  source_name?: string;
+  source_url?: string;
+  source_email_id?: string;
+  source_email_open_url?: string;
+  parent_source_id?: string;
+  parent_source_title?: string;
+  extracted_from?: string;
+  raw_source_snippet?: string;
+  original_url?: string;
+  resolved_url?: string;
   status?: string;
   notes?: string;
   created_at?: string;
@@ -35,6 +53,27 @@ export interface Opportunity {
   match_score?: number | null;
   score?: number | null;
   evaluation?: Record<string, unknown> | null;
+}
+
+export interface Profile {
+  cv_text?: string;
+  target_roles?: string;
+  industries?: string;
+  locations?: string;
+  remote_preference?: string;
+  salary_expectations?: string;
+  work_authorization?: string;
+  years_experience?: string;
+  skills?: string;
+  deal_breakers?: string;
+  full_name?: string;
+  email?: string;
+  preferred_role?: string;
+  country?: string;
+  job_preferences?: string;
+  platforms?: string;
+  resume_name?: string;
+  integration_status?: string;
 }
 
 export interface Workspace {
@@ -83,6 +122,28 @@ export interface Integration {
   has_api_key: boolean;
   config: Record<string, unknown>;
   updated_at?: string;
+}
+
+export interface AdminConfig {
+  id: string | number;
+  type: "ai_provider" | "gmail" | "recording_storage";
+  name: string;
+  display_name?: string;
+  is_active: boolean;
+  has_secret: boolean;
+  secret_label?: string;
+  config: Record<string, unknown>;
+  updated_at?: string;
+  source?: string;
+  priority?: number;
+}
+
+export interface AdminConfigStatus {
+  type: string;
+  status: "configured" | "inactive" | "missing";
+  configured: boolean;
+  count: number;
+  active_count: number;
 }
 
 export interface AuditLog {

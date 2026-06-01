@@ -14,8 +14,8 @@ from job_assistant.config import settings
 DEFAULT_DB_PATH = settings.db_path
 from job_assistant.crypto import decrypt_text, encrypt_text
 
-STATUSES = ["New", "Reviewed", "Apply manually", "Applied", "Interview", "Rejected", "Offer", "Archived", "Skip"]
-OPPORTUNITY_TYPES = ["job", "hackathon", "competition", "webinar", "other"]
+STATUSES = ["New", "Reviewed", "Needs Review", "Non-Opportunity", "Apply manually", "Applied", "Interview", "Rejected", "Offer", "Archived", "Skip"]
+OPPORTUNITY_TYPES = ["job", "internship", "contract", "freelance", "hackathon", "competition", "grant", "scholarship", "webinar", "event", "newsletter", "blog_post", "marketing_email", "announcement", "unknown", "other"]
 DEFAULT_USER_EMAIL = "local@example.com"
 DEFAULT_LOCAL_PASSWORD = os.getenv("LOCAL_USER_PASSWORD", "ChangeMe123!")
 PASSWORD_HASH_ITERATIONS = 600_000
@@ -424,6 +424,7 @@ def _run_migrations(con) -> None:
     _migrate_audit_scope_columns(con)
     _ensure_personal_workspace_for_all_users(con)
     _migrate_profile_table(con)
+    _ensure_profile_columns(con)
     _migrate_jobs_table(con)
     _ensure_workspace_scope_columns(con)
     _rebuild_jobs_workspace_unique(con)
@@ -442,6 +443,27 @@ def _run_migrations(con) -> None:
 
     if 'opportunity_type' not in columns:
         con.execute("ALTER TABLE jobs ADD COLUMN opportunity_type TEXT DEFAULT 'job' NOT NULL")
+    for column, definition in {
+        "classification": "TEXT DEFAULT 'job'",
+        "classification_reason": "TEXT",
+        "classification_confidence": "REAL",
+        "opportunity_confidence": "REAL",
+        "importable": "INTEGER DEFAULT 1",
+        "blocked_reason": "TEXT",
+        "source_type": "TEXT",
+        "source_name": "TEXT",
+        "source_url": "TEXT",
+        "source_email_id": "TEXT",
+        "source_email_open_url": "TEXT",
+        "parent_source_id": "TEXT",
+        "parent_source_title": "TEXT",
+        "extracted_from": "TEXT",
+        "raw_source_snippet": "TEXT",
+        "original_url": "TEXT",
+        "resolved_url": "TEXT",
+    }.items():
+        if column not in columns:
+            con.execute(f"ALTER TABLE jobs ADD COLUMN {column} {definition}")
 
     cursor = con.execute("PRAGMA table_info(evaluations)")
     columns = {row[1] for row in cursor.fetchall()}
@@ -454,6 +476,30 @@ def _run_migrations(con) -> None:
         con.execute("ALTER TABLE evaluations ADD COLUMN tech_alignment_score INTEGER")
     if 'webinar_relevance_score' not in columns:
         con.execute("ALTER TABLE evaluations ADD COLUMN webinar_relevance_score INTEGER")
+
+    cursor = con.execute("PRAGMA table_info(recordings)")
+    recording_columns = {row[1] for row in cursor.fetchall()}
+    for column, definition in {
+        "interview_prep_session_id": "INTEGER",
+        "original_filename": "TEXT",
+        "stored_path": "TEXT",
+        "playback_url": "TEXT",
+        "file_size": "INTEGER",
+        "storage_type": "TEXT",
+    }.items():
+        if column not in recording_columns:
+            con.execute(f"ALTER TABLE recordings ADD COLUMN {column} {definition}")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_recordings_user_job ON recordings(user_id, job_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_resume_reviews_user_job ON resume_reviews(user_id, job_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_interview_prep_user_job ON interview_prep_sessions(user_id, job_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_gmail_messages_user_message ON gmail_messages(user_id, message_id)")
+    _rebuild_legacy_job_child_tables(con)
+    con.execute("DELETE FROM applications WHERE job_id NOT IN (SELECT id FROM jobs)")
+    con.execute("DELETE FROM evaluations WHERE job_id NOT IN (SELECT id FROM jobs)")
+    con.execute("DELETE FROM application_materials WHERE job_id NOT IN (SELECT id FROM jobs)")
+    con.execute("DELETE FROM resume_reviews WHERE job_id IS NOT NULL AND job_id NOT IN (SELECT id FROM jobs)")
+    con.execute("DELETE FROM interview_prep_sessions WHERE job_id NOT IN (SELECT id FROM jobs)")
+    con.execute("DELETE FROM recordings WHERE job_id IS NOT NULL AND job_id NOT IN (SELECT id FROM jobs)")
 
 
 def _ensure_default_user(con) -> int:
@@ -490,6 +536,82 @@ def _table_columns(con, table: str) -> set[str]:
 def _add_column_if_missing(con, table: str, column: str, definition: str) -> None:
     if column not in _table_columns(con, table):
         con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _rebuild_legacy_job_child_tables(con) -> None:
+    legacy = con.execute("SELECT name, sql FROM sqlite_master WHERE type='table' AND sql LIKE '%jobs_legacy%'").fetchall()
+    if not legacy:
+        return
+    con.execute("PRAGMA foreign_keys=OFF")
+    table_sql = {
+        "applications": """
+            CREATE TABLE applications (
+                job_id INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+                status TEXT NOT NULL DEFAULT 'New',
+                notes TEXT,
+                last_updated TEXT NOT NULL
+            )
+        """,
+        "evaluations": """
+            CREATE TABLE evaluations (
+                job_id INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+                match_score INTEGER,
+                priority TEXT,
+                skill_match INTEGER,
+                title_match INTEGER,
+                seniority_match INTEGER,
+                location_match INTEGER,
+                salary_match INTEGER,
+                industry_match INTEGER,
+                authorization_match INTEGER,
+                deal_breaker_penalty INTEGER,
+                good_fit TEXT,
+                weak_areas TEXT,
+                red_flags TEXT,
+                generated_at TEXT NOT NULL,
+                opportunity_type TEXT DEFAULT 'job' NOT NULL,
+                prize_value_score INTEGER,
+                tech_alignment_score INTEGER,
+                webinar_relevance_score INTEGER
+            )
+        """,
+        "application_materials": """
+            CREATE TABLE application_materials (
+                job_id INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+                professional_summary TEXT,
+                cover_letter TEXT,
+                resume_bullets TEXT,
+                screening_answers TEXT,
+                linkedin_message TEXT,
+                why_fit TEXT,
+                updated_at TEXT NOT NULL
+            )
+        """,
+        "reminders": """
+            CREATE TABLE reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                remind_at TEXT NOT NULL,
+                done INTEGER NOT NULL DEFAULT 0,
+                note TEXT,
+                created_at TEXT NOT NULL
+            )
+        """,
+    }
+    for table, create_sql in table_sql.items():
+        row = con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=? AND sql LIKE '%jobs_legacy%'", (table,)).fetchone()
+        if not row:
+            continue
+        columns = [col for col in _table_columns(con, table)]
+        con.execute(f"ALTER TABLE {table} RENAME TO {table}_legacy_fk")
+        con.execute(create_sql)
+        common = [col for col in columns if col in _table_columns(con, table)]
+        con.execute(
+            f"INSERT OR IGNORE INTO {table} ({','.join(common)}) SELECT {','.join(common)} FROM {table}_legacy_fk WHERE job_id IN (SELECT id FROM jobs)"
+        )
+        con.execute(f"DROP TABLE {table}_legacy_fk")
+    con.execute("PRAGMA foreign_keys=ON")
 
 
 def _workspace_scope_for_user(con, user_id: int, workspace_id: int | None = None) -> tuple[int, int]:
@@ -763,6 +885,21 @@ def _migrate_profile_table(con) -> None:
     con.execute("DROP TABLE profile_legacy")
 
 
+def _ensure_profile_columns(con) -> None:
+    extra_columns = {
+        "full_name": "TEXT",
+        "email": "TEXT",
+        "preferred_role": "TEXT",
+        "country": "TEXT",
+        "job_preferences": "TEXT",
+        "platforms": "TEXT",
+        "resume_name": "TEXT",
+        "integration_status": "TEXT",
+    }
+    for column, definition in extra_columns.items():
+        _add_column_if_missing(con, "profile", column, definition)
+
+
 def _migrate_jobs_table(con) -> None:
     columns = _table_columns(con, "jobs")
     if "user_id" in columns:
@@ -837,6 +974,47 @@ def init_db() -> None:
                 skills TEXT,
                 deal_breakers TEXT,
                 updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS resume_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
+                review_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS interview_prep_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                prep_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS recordings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
+                title TEXT,
+                mime_type TEXT,
+                data_url TEXT NOT NULL,
+                duration_ms INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS gmail_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                message_id TEXT,
+                thread_id TEXT,
+                sender TEXT,
+                subject TEXT,
+                date TEXT,
+                snippet TEXT,
+                open_url TEXT,
+                payload_json TEXT,
+                created_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS jobs (
@@ -1004,7 +1182,26 @@ def get_user(user_id: int) -> dict[str, Any]:
 
 
 def upsert_profile(profile: Dict[str, Any], user_id: int = 1) -> None:
-    fields = ["cv_text", "target_roles", "industries", "locations", "remote_preference", "salary_expectations", "work_authorization", "years_experience", "skills", "deal_breakers"]
+    fields = [
+        "cv_text",
+        "target_roles",
+        "industries",
+        "locations",
+        "remote_preference",
+        "salary_expectations",
+        "work_authorization",
+        "years_experience",
+        "skills",
+        "deal_breakers",
+        "full_name",
+        "email",
+        "preferred_role",
+        "country",
+        "job_preferences",
+        "platforms",
+        "resume_name",
+        "integration_status",
+    ]
     values = {k: profile.get(k, "") for k in fields}
     values["updated_at"] = utc_now()
     with connect() as con:
@@ -1028,6 +1225,9 @@ def insert_job(job: Dict[str, Any], user_id: int = 1, workspace_id: int | None =
     opportunity_type = str(job.get("opportunity_type") or "job").lower()
     if opportunity_type not in OPPORTUNITY_TYPES:
         opportunity_type = "other"
+    classification = str(job.get("classification") or opportunity_type).lower()
+    if classification not in OPPORTUNITY_TYPES:
+        classification = "unknown"
     with connect() as con:
         scoped_workspace_id, organization_id = _workspace_scope_for_user(con, user_id, workspace_id)
         payload = {
@@ -1048,6 +1248,23 @@ def insert_job(job: Dict[str, Any], user_id: int = 1, workspace_id: int | None =
             "deadline": job.get("deadline", ""),
             "raw_text": job.get("raw_text", ""),
             "opportunity_type": opportunity_type,
+            "classification": classification,
+            "classification_reason": job.get("classification_reason", ""),
+            "classification_confidence": job.get("classification_confidence"),
+            "opportunity_confidence": job.get("opportunity_confidence"),
+            "importable": 1 if job.get("importable", True) else 0,
+            "blocked_reason": job.get("blocked_reason", ""),
+            "source_type": job.get("source_type", ""),
+            "source_name": job.get("source_name", ""),
+            "source_url": job.get("source_url", ""),
+            "source_email_id": job.get("source_email_id", ""),
+            "source_email_open_url": job.get("source_email_open_url", ""),
+            "parent_source_id": job.get("parent_source_id", ""),
+            "parent_source_title": job.get("parent_source_title", ""),
+            "extracted_from": job.get("extracted_from", ""),
+            "raw_source_snippet": job.get("raw_source_snippet", ""),
+            "original_url": job.get("original_url", ""),
+            "resolved_url": job.get("resolved_url", job.get("url") or ""),
             "created_at": now,
             "updated_at": now,
         }
@@ -1066,6 +1283,18 @@ def insert_job(job: Dict[str, Any], user_id: int = 1, workspace_id: int | None =
             if row:
                 return int(row["id"])
             raise
+
+
+def job_url_exists(url: str, user_id: int = 1, workspace_id: int | None = None) -> bool:
+    if not (url or "").strip():
+        return False
+    with connect() as con:
+        scoped_workspace_id, _ = _workspace_scope_for_user(con, user_id, workspace_id)
+        row = con.execute(
+            "SELECT 1 FROM jobs WHERE user_id = ? AND workspace_id = ? AND url = ? LIMIT 1",
+            (user_id, scoped_workspace_id, url.strip()),
+        ).fetchone()
+        return bool(row)
 
 
 def list_jobs(user_id: int = 1, workspace_id: int | None = None) -> list[dict[str, Any]]:
@@ -1090,11 +1319,36 @@ def list_jobs(user_id: int = 1, workspace_id: int | None = None) -> list[dict[st
 def get_job(job_id: int, user_id: int = 1, workspace_id: int | None = None) -> dict[str, Any]:
     with connect() as con:
         if workspace_id is None:
-            row = con.execute("SELECT * FROM jobs WHERE id=? AND user_id=?", (job_id, user_id)).fetchone()
+            row = con.execute(
+                """
+                SELECT j.*, a.status, a.notes, e.match_score, e.priority,
+                       e.good_fit, e.weak_areas, e.red_flags
+                FROM jobs j
+                LEFT JOIN applications a ON a.job_id = j.id
+                LEFT JOIN evaluations e ON e.job_id = j.id
+                WHERE j.id=? AND j.user_id=?
+                """,
+                (job_id, user_id),
+            ).fetchone()
         else:
             scoped_workspace_id, _ = _workspace_scope_for_user(con, user_id, workspace_id)
-            row = con.execute("SELECT * FROM jobs WHERE id=? AND user_id=? AND workspace_id=?", (job_id, user_id, scoped_workspace_id)).fetchone()
-        return dict(row) if row else {}
+            row = con.execute(
+                """
+                SELECT j.*, a.status, a.notes, e.match_score, e.priority,
+                       e.good_fit, e.weak_areas, e.red_flags
+                FROM jobs j
+                LEFT JOIN applications a ON a.job_id = j.id
+                LEFT JOIN evaluations e ON e.job_id = j.id
+                WHERE j.id=? AND j.user_id=? AND j.workspace_id=?
+                """,
+                (job_id, user_id, scoped_workspace_id),
+            ).fetchone()
+        if not row:
+            return {}
+        item = dict(row)
+        evaluation = get_evaluation(job_id, user_id)
+        item["evaluation"] = evaluation or None
+        return item
 
 
 def delete_job(job_id: int, user_id: int = 1, workspace_id: int | None = None) -> None:
@@ -1449,6 +1703,70 @@ def get_evaluation(job_id: int, user_id: int = 1) -> dict[str, Any]:
         return dict(row) if row else {}
 
 
+def cleanup_non_opportunity_records(user_id: int = 1, workspace_id: int | None = None) -> dict[str, Any]:
+    from job_assistant.services.opportunity_classifier import annotate_opportunity
+
+    updated = 0
+    evaluations_removed = 0
+    inspected = 0
+    with connect() as con:
+        scoped_workspace_id, _ = _workspace_scope_for_user(con, user_id, workspace_id)
+        rows = con.execute(
+            """
+            SELECT j.*
+            FROM jobs j
+            WHERE j.user_id=? AND j.workspace_id=?
+              AND (
+                lower(COALESCE(j.source, '')) LIKE '%gmail%'
+                OR lower(COALESCE(j.title, '')) LIKE 'subject:%'
+                OR lower(COALESCE(j.company, '')) IN ('unknown company', 'unknown')
+                OR lower(COALESCE(j.description, '') || ' ' || COALESCE(j.raw_text, '')) LIKE '%newsletter%'
+                OR lower(COALESCE(j.url, '')) LIKE '%medium.com%'
+                OR lower(COALESCE(j.url, '')) LIKE '%sendgrid%'
+              )
+            """
+            ,
+            (user_id, scoped_workspace_id),
+        ).fetchall()
+        for row in rows:
+            inspected += 1
+            item = dict(row)
+            annotated = annotate_opportunity(item)
+            if annotated.get("importable"):
+                continue
+            now = utc_now()
+            con.execute(
+                """
+                UPDATE jobs
+                SET classification=?, classification_reason=?, classification_confidence=?,
+                    opportunity_confidence=?, importable=0, blocked_reason=?, updated_at=?
+                WHERE id=? AND user_id=?
+                """,
+                (
+                    annotated.get("classification") or "unknown",
+                    annotated.get("classification_reason") or "",
+                    annotated.get("classification_confidence") or 0,
+                    annotated.get("opportunity_confidence") or 0,
+                    annotated.get("blocked_reason") or "Non-opportunity content rejected by classifier.",
+                    now,
+                    row["id"],
+                    user_id,
+                ),
+            )
+            con.execute(
+                """
+                INSERT INTO applications(job_id, status, notes, last_updated)
+                VALUES (?, 'Non-Opportunity', ?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET status='Non-Opportunity', notes=excluded.notes, last_updated=excluded.last_updated
+                """,
+                (row["id"], annotated.get("blocked_reason") or annotated.get("classification_reason") or "", now),
+            )
+            cur = con.execute("DELETE FROM evaluations WHERE job_id=?", (row["id"],))
+            evaluations_removed += cur.rowcount or 0
+            updated += 1
+    return {"inspected": inspected, "updated": updated, "evaluations_removed": evaluations_removed}
+
+
 def save_materials(job_id: int, materials: Dict[str, Any], user_id: int = 1) -> None:
     now = utc_now()
     cols = ["job_id", "professional_summary", "cover_letter", "resume_bullets", "screening_answers", "linkedin_message", "why_fit", "updated_at"]
@@ -1494,6 +1812,187 @@ def update_status(job_id: int, status: str, notes: str = "", user_id: int = 1) -
             "INSERT INTO applications(job_id,status,notes,last_updated) VALUES (?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET status=excluded.status, notes=excluded.notes, last_updated=excluded.last_updated",
             (job_id, status, notes, utc_now()),
         )
+
+
+def save_resume_review(user_id: int, review: Dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
+    now = utc_now()
+    with connect() as con:
+        if job_id and not con.execute("SELECT 1 FROM jobs WHERE id=? AND user_id=?", (job_id, user_id)).fetchone():
+            raise ValueError("Job not found for user")
+        cur = con.execute(
+            "INSERT INTO resume_reviews(user_id, job_id, review_json, created_at) VALUES (?,?,?,?)",
+            (user_id, job_id, json.dumps(review), now),
+        )
+        review["id"] = int(cur.lastrowid)
+        review["job_id"] = job_id
+        review["created_at"] = now
+        return review
+
+
+def list_resume_reviews(user_id: int, job_id: int | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    with connect() as con:
+        if job_id:
+            rows = con.execute(
+                "SELECT * FROM resume_reviews WHERE user_id=? AND job_id=? ORDER BY created_at DESC LIMIT ?",
+                (user_id, job_id, limit),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT * FROM resume_reviews WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+    output = []
+    for row in rows:
+        item = json.loads(row["review_json"] or "{}")
+        item.update({"id": row["id"], "job_id": row["job_id"], "created_at": row["created_at"]})
+        output.append(item)
+    return output
+
+
+def save_interview_prep(user_id: int, job_id: int, prep: Dict[str, Any]) -> dict[str, Any]:
+    now = utc_now()
+    with connect() as con:
+        if not con.execute("SELECT 1 FROM jobs WHERE id=? AND user_id=?", (job_id, user_id)).fetchone():
+            raise ValueError("Job not found for user")
+        cur = con.execute(
+            "INSERT INTO interview_prep_sessions(user_id, job_id, prep_json, created_at) VALUES (?,?,?,?)",
+            (user_id, job_id, json.dumps(prep), now),
+        )
+        prep["id"] = int(cur.lastrowid)
+        prep["job_id"] = job_id
+        prep["created_at"] = now
+        return prep
+
+
+def list_interview_prep(user_id: int, job_id: int | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    with connect() as con:
+        if job_id:
+            rows = con.execute(
+                "SELECT * FROM interview_prep_sessions WHERE user_id=? AND job_id=? ORDER BY created_at DESC LIMIT ?",
+                (user_id, job_id, limit),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT * FROM interview_prep_sessions WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+    output = []
+    for row in rows:
+        item = json.loads(row["prep_json"] or "{}")
+        item.update({"id": row["id"], "job_id": row["job_id"], "created_at": row["created_at"]})
+        output.append(item)
+    return output
+
+
+def save_recording(user_id: int, recording: Dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
+    now = utc_now()
+    with connect() as con:
+        if job_id and not con.execute("SELECT 1 FROM jobs WHERE id=? AND user_id=?", (job_id, user_id)).fetchone():
+            raise ValueError("Job not found for user")
+        cur = con.execute(
+            """
+            INSERT INTO recordings(
+                user_id, job_id, title, mime_type, data_url, duration_ms, created_at,
+                interview_prep_session_id, original_filename, stored_path, playback_url, file_size, storage_type
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                user_id,
+                job_id,
+                recording.get("title", "Interview practice recording"),
+                recording.get("mime_type", "audio/webm"),
+                recording.get("data_url", ""),
+                int(recording.get("duration_ms") or 0),
+                now,
+                recording.get("interview_prep_session_id"),
+                recording.get("original_filename", ""),
+                recording.get("stored_path", ""),
+                recording.get("playback_url", ""),
+                int(recording.get("file_size") or 0),
+                recording.get("storage_type", ""),
+            ),
+        )
+        return {"id": int(cur.lastrowid), "job_id": job_id, "created_at": now, **recording}
+
+
+def list_recordings(user_id: int, job_id: int | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    with connect() as con:
+        if job_id:
+            rows = con.execute("SELECT * FROM recordings WHERE user_id=? AND job_id=? ORDER BY created_at DESC LIMIT ?", (user_id, job_id, limit)).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM recordings WHERE user_id=? ORDER BY created_at DESC LIMIT ?", (user_id, limit)).fetchall()
+    output = []
+    for row in rows:
+        item = dict(row)
+        if not item.get("playback_url") and item.get("data_url"):
+            item["playback_url"] = item["data_url"]
+        output.append(item)
+    return output
+
+
+def save_gmail_messages(user_id: int, messages: list[Dict[str, Any]]) -> list[dict[str, Any]]:
+    from job_assistant.services.opportunity_classifier import annotate_opportunity, extract_opportunities_from_container
+
+    saved: list[dict[str, Any]] = []
+    now = utc_now()
+    with connect() as con:
+        for message in messages:
+            message = dict(message)
+            message_id = str(message.get("message_id") or message.get("id") or "")
+            thread_id = str(message.get("thread_id") or message.get("threadId") or "")
+            open_url = message.get("open_url") or (f"https://mail.google.com/mail/u/0/#inbox/{thread_id or message_id}" if (thread_id or message_id) else "")
+            classification = annotate_opportunity(
+                {
+                    "title": message.get("subject", ""),
+                    "subject": message.get("subject", ""),
+                    "sender": message.get("sender") or message.get("from") or "",
+                    "snippet": message.get("snippet", ""),
+                    "body": message.get("body", ""),
+                    "source": "Gmail",
+                    "source_type": "gmail",
+                    "message_id": message_id,
+                    "open_url": open_url,
+                }
+            )
+            extracted = extract_opportunities_from_container({**classification, **message, "open_url": open_url, "source": "Gmail", "source_type": "gmail"})
+            message.update(
+                {
+                    "classification": classification.get("classification"),
+                    "classification_confidence": classification.get("classification_confidence"),
+                    "classification_reason": classification.get("classification_reason"),
+                    "opportunity_confidence": classification.get("opportunity_confidence"),
+                    "importable": classification.get("importable"),
+                    "blocked_reason": classification.get("blocked_reason"),
+                    "extracted_opportunities_count": len(extracted),
+                    "extracted_opportunities": extracted,
+                }
+            )
+            cur = con.execute(
+                """
+                INSERT INTO gmail_messages(user_id, message_id, thread_id, sender, subject, date, snippet, open_url, payload_json, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    user_id,
+                    message_id,
+                    thread_id,
+                    message.get("sender") or message.get("from") or "",
+                    message.get("subject", ""),
+                    message.get("date", ""),
+                    message.get("snippet", ""),
+                    open_url,
+                    json.dumps(message),
+                    now,
+                ),
+            )
+            saved.append({"id": int(cur.lastrowid), **message, "open_url": open_url, "created_at": now})
+    return saved
+
+
+def list_gmail_messages(user_id: int, limit: int = 50) -> list[dict[str, Any]]:
+    with connect() as con:
+        rows = con.execute("SELECT * FROM gmail_messages WHERE user_id=? ORDER BY created_at DESC LIMIT ?", (user_id, limit)).fetchall()
+    return [dict(row) for row in rows]
 
 
 def create_reminder(job_id: int, kind: str, remind_at: str, note: str, user_id: int = 1) -> None:

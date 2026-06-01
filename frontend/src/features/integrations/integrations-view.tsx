@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { opportunityService } from "@/services/opportunity.service";
 import { providerService } from "@/services/provider.service";
 import type { Integration, ProviderConfig } from "@/types/api";
 
@@ -85,7 +86,8 @@ async function fetchAiModels(provider: string, apiKey: string, config: Record<st
 
 const SERVICES = [
   { service: "ai_provider", label: "AI Provider", icon: Bot, description: "Model, provider, base URL, Azure deployment, and provider API key." },
-  { service: "gmail", label: "Gmail", icon: Mail, description: "Gmail OAuth is handled by the backend OAuth flow; configure Google credentials in backend env." },
+  { service: "gmail", label: "Gmail", icon: Mail, description: "Google OAuth client settings and user connection status." },
+  { service: "recording_storage", label: "Recording Storage", icon: Database, description: "Local audio storage path, limits, and allowed MIME types." },
   { service: "linkedin", label: "LinkedIn Posting", icon: KeyRound, description: "Official LinkedIn post API token, author URN, and API version." },
   { service: "rapidapi_linkedin", label: "RapidAPI LinkedIn Jobs", icon: KeyRound, description: "RapidAPI LinkedIn jobs host, endpoint, and default automated search filters." },
   { service: "apify", label: "Apify Scraping", icon: Database, description: "Apify token, actor id, and input JSON template." },
@@ -219,6 +221,22 @@ function ServiceForm({
     return <AiProviderForm selected={selected} form={form} onSave={onSave} saving={saving} />;
   }
 
+  if (service === "gmail") {
+    return <GmailForm selected={selected} form={form} onSave={onSave} saving={saving} />;
+  }
+
+  if (service === "recording_storage") {
+    return (
+      <div className="grid gap-4 md:grid-cols-2">
+        <Field label="Storage type"><Input value={config.storage_type ?? "local"} onChange={(event) => update("storage_type", event.target.value)} /></Field>
+        <Field label="Local storage path"><Input value={config.storage_path ?? "data/recordings"} onChange={(event) => update("storage_path", event.target.value)} /></Field>
+        <Field label="Max upload size bytes"><Input type="number" value={config.max_upload_size ?? "26214400"} onChange={(event) => update("max_upload_size", event.target.value)} /></Field>
+        <Field label="Allowed MIME types"><Input value={config.allowed_mime_types ?? "audio/webm,audio/wav,audio/mpeg,audio/mp4,audio/ogg"} onChange={(event) => update("allowed_mime_types", event.target.value)} /></Field>
+        <SaveButton disabled={saving} onClick={() => onSave({ storage_type: config.storage_type || "local", storage_path: config.storage_path || "data/recordings", max_upload_size: Number(config.max_upload_size || 26214400), allowed_mime_types: config.allowed_mime_types || "audio/webm,audio/wav,audio/mpeg,audio/mp4,audio/ogg" })} />
+      </div>
+    );
+  }
+
   if (service === "linkedin") {
     return (
       <div className="grid gap-4 md:grid-cols-2">
@@ -264,10 +282,35 @@ function ServiceForm({
     );
   }
 
+  return null;
+}
+
+function GmailForm({ selected, form, onSave, saving }: { selected?: Integration; form: IntegrationFormState; onSave: (config: Record<string, unknown>) => void; saving: boolean }) {
+  const { apiKey, setApiKey, config, setConfig } = form;
+  const update = (key: string, value: string) => setConfig((current) => ({ ...current, [key]: value }));
+  const status = useQuery({ queryKey: ["gmail-status"], queryFn: () => opportunityService.gmailStatus() });
+  const connect = useMutation({
+    mutationFn: () => opportunityService.gmailAuthUrl(),
+    onSuccess: (data) => { window.location.href = data.url; },
+    onError: (error) => toast.error(error.message),
+  });
+  const disconnect = useMutation({
+    mutationFn: () => opportunityService.gmailDisconnect(),
+    onSuccess: () => { toast.success("Gmail disconnected"); status.refetch(); },
+    onError: (error) => toast.error(error.message),
+  });
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">Gmail connection uses the backend OAuth flow from the original app. Configure Google OAuth credentials in backend environment variables, then use the Gmail import workflow once OAuth endpoints are exposed in the API.</p>
-      <Badge>{selected?.has_api_key ? "connected" : "not connected"}</Badge>
+    <div className="grid gap-4 md:grid-cols-2">
+      <Field label="Google client ID"><Input value={config.client_id ?? ""} onChange={(event) => update("client_id", event.target.value)} /></Field>
+      <Field label="Google client secret"><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={selected?.has_api_key ? "Leave blank to keep saved secret" : "Paste client secret"} /></Field>
+      <Field label="Redirect URI"><Input value={config.redirect_uri ?? ""} onChange={(event) => update("redirect_uri", event.target.value)} placeholder="http://localhost:8000/api/v1/gmail/oauth/callback" /></Field>
+      <Field label="Gmail scopes"><Input value={config.scopes ?? "https://www.googleapis.com/auth/gmail.readonly"} onChange={(event) => update("scopes", event.target.value)} /></Field>
+      <SaveButton disabled={saving || (!apiKey && !selected?.has_api_key)} onClick={() => onSave({ client_id: config.client_id || "", redirect_uri: config.redirect_uri || "", scopes: config.scopes || "https://www.googleapis.com/auth/gmail.readonly" })} />
+      <div className="flex flex-wrap items-end gap-3">
+        <Badge>{status.data?.connected ? `connected${status.data.connected_email ? `: ${status.data.connected_email}` : ""}` : status.data?.status ?? "not connected"}</Badge>
+        <Button variant="outline" disabled={connect.isPending || !status.data?.configured} onClick={() => connect.mutate()}><Mail className="h-4 w-4" /> Connect Gmail</Button>
+        <Button variant="destructive" disabled={disconnect.isPending || !status.data?.connected} onClick={() => disconnect.mutate()}>Disconnect Gmail</Button>
+      </div>
     </div>
   );
 }

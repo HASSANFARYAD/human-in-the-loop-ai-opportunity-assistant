@@ -19,6 +19,7 @@ import {
   ListChecks,
   Mail,
   Network,
+  UserRound,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -53,7 +54,7 @@ const groups = [
   { label: "Automation", items: [{ href: "/automation", label: "Rules", icon: Workflow }, { href: "/automation?tab=runs", label: "Runs", icon: Activity }, { href: "/automation?tab=errors", label: "Activity", icon: HeartPulse }] },
   { label: "Integrations", items: [{ href: "/integrations?service=ai_provider", label: "AI Providers", icon: Bot }, { href: "/integrations?service=gmail", label: "Gmail", icon: Mail }, { href: "/integrations?service=linkedin", label: "LinkedIn", icon: Briefcase }, { href: "/integrations?service=rapidapi_linkedin", label: "RapidAPI", icon: KeyRound }, { href: "/integrations?service=apify", label: "Apify", icon: Database }, { href: "/integrations?tab=providers", label: "Provider Registry", icon: Network }] },
   { label: "Team", items: [{ href: "/team", label: "Workspaces", icon: Building2 }, { href: "/team?tab=members", label: "Members", icon: Users }, { href: "/team?tab=organizations", label: "Organizations", icon: ShieldCheck }] },
-  { label: "System", items: [{ href: "/settings?tab=feedback", label: "Feedback", icon: Inbox }, { href: "/settings?tab=audit", label: "Audit Logs", icon: ShieldCheck }, { href: "/settings?tab=usage", label: "Usage", icon: BarChart3 }, { href: "/settings?tab=health", label: "Health", icon: HeartPulse }, { href: "/settings", label: "Settings", icon: Settings }] },
+  { label: "System", items: [{ href: "/settings?tab=profile", label: "Profile", icon: UserRound }, { href: "/settings?tab=feedback", label: "Feedback", icon: Inbox }, { href: "/settings?tab=audit", label: "Audit Logs", icon: ShieldCheck }, { href: "/settings?tab=usage", label: "Usage", icon: BarChart3 }, { href: "/settings?tab=health", label: "Health", icon: HeartPulse }, { href: "/settings", label: "Settings", icon: Settings }] },
 ];
 
 export function Sidebar() {

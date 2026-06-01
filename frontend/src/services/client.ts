@@ -1,5 +1,20 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from "axios";
 
+type ApiErrorDetail =
+  | string
+  | {
+      message?: string;
+      status?: string;
+      source?: string;
+    };
+
+export type ApiError = Error & {
+  detail?: ApiErrorDetail;
+  apiStatus?: string;
+  source?: string;
+  httpStatus?: number;
+};
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const API_PREFIX = "/api/v1";
 
@@ -28,14 +43,21 @@ apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 apiClient.interceptors.response.use(
   (response) => response,
-  async (error: AxiosError<{ detail?: string }>) => {
+  async (error: AxiosError<{ detail?: ApiErrorDetail }>) => {
     if (error.response?.status === 401) {
       tokenStorage.clear();
       if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
         window.location.assign("/login");
       }
     }
-    return Promise.reject(new Error(error.response?.data?.detail ?? error.message));
+    const detail = error.response?.data?.detail;
+    const message = typeof detail === "string" ? detail : detail?.message ?? error.message;
+    const apiError = new Error(message) as ApiError;
+    apiError.detail = detail;
+    apiError.apiStatus = typeof detail === "string" ? undefined : detail?.status;
+    apiError.source = typeof detail === "string" ? undefined : detail?.source;
+    apiError.httpStatus = error.response?.status;
+    return Promise.reject(apiError);
   },
 );
 

@@ -10,17 +10,48 @@ from .openai_client import ask_json
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 URL_RE = re.compile(r"https?://[^\s<>\)\]\"']+")
-OPPORTUNITY_TYPES = {"job", "internship", "hackathon", "competition", "webinar", "other"}
+OPPORTUNITY_TYPES = {
+    "job",
+    "internship",
+    "contract",
+    "freelance",
+    "hackathon",
+    "competition",
+    "grant",
+    "scholarship",
+    "webinar",
+    "event",
+    "newsletter",
+    "blog_post",
+    "marketing_email",
+    "announcement",
+    "unknown",
+    "other",
+}
 
 
 def infer_opportunity_type(text: str, source: str = "") -> str:
     haystack = f"{source} {text}".lower()
     if any(word in haystack for word in ["internship", "intern ", "interns", "graduate program", "new grad"]):
         return "internship"
+    if any(word in haystack for word in ["contract", "contractor"]):
+        return "contract"
+    if any(word in haystack for word in ["freelance", "freelancer"]):
+        return "freelance"
     if any(word in haystack for word in ["hackathon", "devpost", "buildathon"]):
         return "hackathon"
+    if any(word in haystack for word in ["scholarship"]):
+        return "scholarship"
+    if any(word in haystack for word in ["grant", "fellowship"]):
+        return "grant"
     if any(word in haystack for word in ["webinar", "workshop", "seminar", "online event"]):
         return "webinar"
+    if any(word in haystack for word in ["newsletter", "digest", "unsubscribe", "view in browser", "medium.com"]):
+        return "newsletter"
+    if any(word in haystack for word in ["blog", "article", "read more"]):
+        return "blog_post"
+    if any(word in haystack for word in ["announcing", "announcement", "product update", "new feature"]):
+        return "announcement"
     if any(word in haystack for word in ["competition", "contest", "challenge", "championship"]):
         return "competition"
     if any(word in haystack for word in ["job", "role", "hiring", "recruiter", "apply", "career"]):
@@ -321,6 +352,8 @@ def _field_is_explicit_in_resume(value: str, text: str) -> bool:
 
 
 def extract_job_from_text(raw: str, source: str = "Manual", opportunity_type: str = "job", user_id: int | None = None) -> Dict:
+    from job_assistant.services.opportunity_classifier import annotate_opportunity
+
     text = clean_html(raw)
     if opportunity_type == "auto":
         opportunity_type = infer_opportunity_type(text, source)
@@ -352,7 +385,7 @@ Source is {source}. Text:\n{text[:12000]}
     data["source"] = source
     data["opportunity_type"] = opportunity_type
     data["raw_text"] = raw
-    return data
+    return annotate_opportunity(data, source=source)
 
 
 def jobs_from_csv(uploaded_file, default_opportunity_type: str = "job") -> List[Dict]:
@@ -376,6 +409,10 @@ def jobs_from_csv(uploaded_file, default_opportunity_type: str = "job") -> List[
             "salary_max": d.get("salary_max") or None,
             "deadline": d.get("deadline") or "",
             "opportunity_type": (d.get("opportunity_type") or d.get("type") or default_opportunity_type or "job").lower(),
+            "classification": (d.get("classification") or d.get("opportunity_type") or d.get("type") or default_opportunity_type or "job").lower(),
+            "classification_confidence": d.get("classification_confidence") or "",
+            "classification_reason": d.get("classification_reason") or "",
+            "opportunity_confidence": d.get("opportunity_confidence") or "",
             "raw_text": str(d),
         })
     return jobs

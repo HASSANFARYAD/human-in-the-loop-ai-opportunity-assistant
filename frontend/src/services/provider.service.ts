@@ -1,5 +1,5 @@
 import { apiClient, getJson } from "@/services/client";
-import type { Integration, ProviderConfig } from "@/types/api";
+import type { AdminConfig, AdminConfigStatus, Integration, ProviderConfig } from "@/types/api";
 
 export const providerService = {
   integrations: (workspace_id?: number) => getJson<Integration[]>("/integrations", { workspace_id }),
@@ -13,4 +13,11 @@ export const providerService = {
   aiHealth: () => getJson<Record<string, unknown>>("/health/ai"),
   generations: (workspace_id?: number, limit = 100) => getJson<unknown[]>("/ai/generations", { workspace_id, limit }),
   prompts: () => getJson<unknown[]>("/ai/prompts"),
+  adminConfigs: () => getJson<{ configs: AdminConfig[]; statuses: Record<string, AdminConfigStatus> }>("/admin/configs"),
+  saveAdminConfig: async (payload: Record<string, unknown>) => (await apiClient.post<AdminConfig>("/admin/configs", payload)).data,
+  updateAdminConfig: async (type: string, id: string | number, payload: Record<string, unknown>) =>
+    (await apiClient.put<AdminConfig>(`/admin/configs/${type}/${id}`, payload)).data,
+  activateAdminConfig: async (type: string, id: string | number) => (await apiClient.post<AdminConfig>(`/admin/configs/${type}/${id}/activate`)).data,
+  deactivateAdminConfig: async (type: string, id: string | number) => (await apiClient.post<AdminConfig>(`/admin/configs/${type}/${id}/deactivate`)).data,
+  testAdminConfig: async (type: string, id: string | number) => (await apiClient.post<{ status: string; message: string }>(`/admin/configs/${type}/${id}/test`)).data,
 };

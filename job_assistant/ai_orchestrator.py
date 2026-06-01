@@ -34,6 +34,8 @@ class AIOrchestrator:
             legacy = get_integration_settings(user_id, "ai_provider", workspace_id=workspace_id)
             if legacy:
                 config = legacy.get("config") or {}
+                if config.get("is_active") is False:
+                    return AIRoute("none", "fallback", {"service": "ai_provider", "api_key": "", "config": {}}, "fallback")
                 return AIRoute((config.get("provider") or "openai").lower(), config.get("model") or "gpt-4o-mini", legacy, "integration_settings")
         return AIRoute("none", "fallback", {"service": "ai_provider", "api_key": "", "config": {}}, "fallback")
 

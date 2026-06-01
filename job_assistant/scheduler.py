@@ -21,6 +21,7 @@ from job_assistant.db import (
 from job_assistant.services.generation import generate_materials
 from job_assistant.services.gmail_ingest import fetch_job_alert_messages
 from job_assistant.services.parsing import extract_job_from_text
+from job_assistant.services.opportunity_classifier import extract_opportunities_from_container, scoring_gate
 from job_assistant.services.public_discovery import discover_public_opportunities
 from job_assistant.services.rapidapi_linkedin import (
     DEFAULT_ENDPOINT as RAPIDAPI_LINKEDIN_ENDPOINT,
@@ -115,6 +116,9 @@ class JobAssistantScheduler:
         logger.info("Scheduler jobs registered")
 
     def _process_new_opportunity(self, opportunity: dict) -> int:
+        gate = scoring_gate(opportunity)
+        if not gate.importable:
+            raise ValueError(gate.blocked_reason or "Non-opportunity content cannot be imported or scored")
         job_id = insert_job(opportunity, self.user_id)
         prefs = get_automation_preferences(self.user_id)
         profile = get_profile(self.user_id)
@@ -143,15 +147,32 @@ class JobAssistantScheduler:
             count = 0
             for message in messages:
                 try:
-                    job = extract_job_from_text(
-                        f"Subject: {message['subject']}\nFrom: {message['from']}\n\n{message['body']}",
-                        source="Gmail",
-                        opportunity_type="auto",
-                        user_id=self.user_id,
-                    )
-                    job["date_received"] = message.get("date_received", "")
-                    self._process_new_opportunity(job)
-                    count += 1
+                    source_item = {
+                        "title": message.get("subject", ""),
+                        "subject": message.get("subject", ""),
+                        "sender": message.get("from", ""),
+                        "snippet": message.get("snippet", ""),
+                        "body": message.get("body", ""),
+                        "source": "Gmail",
+                        "source_type": "gmail",
+                        "message_id": message.get("message_id", ""),
+                        "open_url": message.get("open_url", ""),
+                    }
+                    extracted = extract_opportunities_from_container(source_item)
+                    candidates = extracted or [
+                        extract_job_from_text(
+                            f"Subject: {message['subject']}\nFrom: {message['from']}\n\n{message['body']}",
+                            source="Gmail",
+                            opportunity_type="auto",
+                            user_id=self.user_id,
+                        )
+                    ]
+                    for job in candidates:
+                        job["date_received"] = message.get("date_received", "")
+                        job["source_email_id"] = message.get("message_id", "")
+                        job["source_email_open_url"] = message.get("open_url", "")
+                        self._process_new_opportunity(job)
+                        count += 1
                 except Exception as e:
                     logger.error(f"Failed to process Gmail message: {e}")
 

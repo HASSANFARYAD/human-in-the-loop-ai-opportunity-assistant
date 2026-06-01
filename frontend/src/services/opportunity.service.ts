@@ -1,5 +1,5 @@
 import { apiClient, getJson } from "@/services/client";
-import type { Opportunity } from "@/types/api";
+import type { Opportunity, Profile } from "@/types/api";
 
 export interface OpportunityCreate {
   workspace_id?: number;
@@ -14,6 +14,12 @@ export interface OpportunityCreate {
   salary_max?: number;
   deadline?: string;
   opportunity_type?: string;
+  classification?: string;
+  classification_reason?: string;
+  classification_confidence?: number;
+  opportunity_confidence?: number;
+  importable?: boolean;
+  blocked_reason?: string;
 }
 
 export const opportunityService = {
@@ -22,13 +28,37 @@ export const opportunityService = {
   create: async (payload: OpportunityCreate) => (await apiClient.post("/jobs", payload)).data,
   remove: async (id: number, workspace_id?: number) => (await apiClient.delete(`/jobs/${id}`, { params: { workspace_id } })).data,
   score: async (id: number) => (await apiClient.post(`/jobs/${id}/score`)).data,
+  scoreBatch: async (payload: { job_ids: number[]; score_all_unscored?: boolean }) =>
+    (await apiClient.post<{ status: string; total: number; succeeded: number; skipped?: number; failed: number; results: Array<{ job_id: number; status: string; error?: string; reason?: string }> }>("/jobs/score-batch", payload)).data,
   materials: (id: number) => getJson<Record<string, unknown>>(`/jobs/${id}/materials`),
   generateMaterials: async (id: number) => (await apiClient.post(`/jobs/${id}/generate-materials`)).data,
+  resumeReview: async (id: number, payload: { resume_text?: string; target_role?: string } = {}) =>
+    (await apiClient.post<Record<string, unknown>>(`/jobs/${id}/resume-review`, payload)).data,
+  resumeReviews: (id: number) => getJson<Record<string, unknown>[]>("/profile/resume-reviews", { job_id: id }),
+  interviewPrep: async (id: number) => (await apiClient.post<Record<string, unknown>>(`/jobs/${id}/interview-prep`)).data,
+  interviewPrepSessions: (id: number) => getJson<Record<string, unknown>[]>(`/jobs/${id}/interview-prep`),
+  recordings: (id?: number) => getJson<Record<string, unknown>[]>("/recordings", id ? { job_id: id } : undefined),
+  saveRecording: async (payload: { job_id?: number; title: string; mime_type: string; data_url: string; duration_ms?: number }) =>
+    (await apiClient.post<Record<string, unknown>>("/recordings", payload)).data,
+  uploadRecording: async (payload: { job_id?: number; title: string; blob: Blob; duration_ms?: number }) => {
+    const form = new FormData();
+    if (payload.job_id) form.append("job_id", String(payload.job_id));
+    form.append("title", payload.title);
+    form.append("duration_ms", String(payload.duration_ms ?? 0));
+    form.append("file", payload.blob, "recording.webm");
+    return (await apiClient.post<Record<string, unknown>>("/recordings/upload", form)).data;
+  },
+  profile: () => getJson<Profile>("/profile"),
+  updateProfile: async (payload: Profile) => (await apiClient.post("/profile", payload)).data,
+  gmailStatus: () => getJson<{ connected: boolean; configured?: boolean; status: string; connected_email?: string }>("/gmail/status"),
+  gmailAuthUrl: async () => (await apiClient.get<{ url: string }>("/gmail/auth-url")).data,
+  gmailDisconnect: async () => (await apiClient.post("/gmail/disconnect")).data,
+  gmailMessages: () => getJson<Record<string, unknown>[]>("/gmail/messages"),
   updateStatus: async (id: number, status: string, notes = "") =>
     (await apiClient.patch(`/jobs/${id}/status`, undefined, { params: { status, notes } })).data,
   reminders: () => getJson<unknown[]>("/reminders"),
-  extract: async (payload: { raw: string; source: string; opportunity_type: string; workspace_id?: number }) =>
-    (await apiClient.post<{ status: string; opportunity: Opportunity }>("/discovery/extract", payload)).data,
+  extract: async (payload: { raw: string; source: string; opportunity_type: string; work_location_filter?: string; workspace_id?: number }) =>
+    (await apiClient.post<{ status: string; opportunity?: Opportunity; opportunities?: Opportunity[]; raw_count?: number; work_location_filter?: string; jobs_found?: number; jobs_skipped_location_filter?: number; warnings?: string[]; message?: string }>("/discovery/extract", payload)).data,
   discoverPublic: async (payload: {
     query: string;
     sources: string[];
@@ -37,11 +67,14 @@ export const opportunityService = {
     remote_type: string;
     location: string;
     keywords: string;
+    country?: string;
   }) => (await apiClient.post<{ status: string; opportunities: Opportunity[] }>("/discovery/public", payload)).data,
   discoverRapidApiLinkedIn: async (payload: { title_filter: string; location_filter: string; offset: number; workspace_id?: number }) =>
     (await apiClient.post<{ status: string; opportunities: Opportunity[]; raw_count: number }>("/discovery/rapidapi-linkedin", payload)).data,
   discoverApify: async (payload: { url: string; workspace_id?: number }) =>
     (await apiClient.post<{ status: string; opportunities: Opportunity[]; raw_count: number }>("/discovery/apify", payload)).data,
+  importUrl: async (payload: { url: string; source: string; work_location_filter?: string; page_limit?: number; workspace_id?: number }) =>
+    (await apiClient.post<{ status: string; source: string; work_location_filter?: string; jobs_found?: number; jobs_imported?: number; jobs_skipped_duplicates?: number; jobs_skipped_location_filter?: number; found: number; imported: number; skipped_duplicates: number; errors: string[]; warnings: string[]; ids: number[] }>("/discovery/import-url", payload)).data,
   importDiscovered: async (opportunities: Opportunity[], workspace_id?: number) =>
-    (await apiClient.post<{ status: string; ids: number[]; count: number }>("/discovery/import", { opportunities, workspace_id })).data,
+    (await apiClient.post<{ status: string; ids: number[]; count: number; found?: number; imported?: number; skipped_duplicates?: number; errors?: string[]; warnings?: string[] }>("/discovery/import", { opportunities, workspace_id })).data,
 };
