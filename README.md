@@ -202,13 +202,13 @@ source .venv/bin/activate
 Install dependencies:
 
 ```bash
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 ```
 
-Create a local `.env` file for app-level configuration only:
+Create a local `backend/.env` file for app-level configuration only:
 
 ```bash
-APP_DB_PATH=data/job_assistant.sqlite3
+APP_DB_PATH=backend/data/job_assistant.sqlite3
 GOOGLE_CREDENTIALS_FILE=credentials.json
 GOOGLE_TOKEN_FILE=token.json
 SCHEDULER_ENABLED=true
@@ -230,6 +230,7 @@ Provider API keys are not configured globally in `.env`. Each signed-in user add
 ## Run The FastAPI Server
 
 ```bash
+cd backend
 uvicorn api_server:app --reload
 ```
 
@@ -337,6 +338,7 @@ Public web pages can be visible without login but still disallow automated scrap
 Basic syntax check:
 
 ```bash
+cd backend
 python -m compileall job_assistant api_server.py
 ```
 
@@ -610,24 +612,25 @@ GET /api/v1/health/runtime
 - Secret generation helper:
 
 ```bash
-python scripts/generate_secrets.py
+python backend/scripts/generate_secrets.py
 ```
 
 - SQLite backup helper:
 
 ```bash
-python scripts/backup_sqlite.py --db data/job_assistant.sqlite3 --out-dir backups
+python backend/scripts/backup_sqlite.py --db backend/data/job_assistant.sqlite3 --out-dir backend/backups
 ```
 
 - SQLite restore helper:
 
 ```bash
-python scripts/restore_sqlite.py backups/<backup-file>.sqlite3
+python backend/scripts/restore_sqlite.py backend/backups/<backup-file>.sqlite3 --db backend/data/job_assistant.sqlite3
 ```
 
 - Smoke test helper:
 
 ```bash
+cd backend
 python -m scripts.smoke_test
 ```
 
@@ -647,14 +650,14 @@ See `docs/PHASE2_DEPLOYMENT.md` for the deployment guide.
 
 ### Production-Lite Deployment
 
-Create `.env`:
+Create `backend/.env`:
 
 ```bash
-cp .env.example .env
-python scripts/generate_secrets.py
+cp backend/.env.example backend/.env
+python backend/scripts/generate_secrets.py
 ```
 
-Paste the generated values into `.env`, then set:
+Paste the generated values into `backend/.env`, then set:
 
 ```env
 ENVIRONMENT=prod
@@ -677,7 +680,7 @@ Production startup validation fails when production-only requirements are missin
 Run:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.production.yml up --build -d
+docker compose --env-file backend/.env -f docker-compose.yml -f docker-compose.production.yml up --build -d
 ```
 
 ### Important Security Note
@@ -695,7 +698,7 @@ Phase 3 adds the first provider-agnostic integration layer while keeping the exi
 - New provider abstraction module:
 
 ```text
-job_assistant/provider_registry.py
+backend/job_assistant/provider_registry.py
 ```
 
 - New encrypted per-user provider table:

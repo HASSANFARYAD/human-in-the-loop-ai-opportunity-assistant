@@ -10,9 +10,10 @@ npm install
 npm run dev
 ```
 
-Set `NEXT_PUBLIC_API_URL=http://localhost:8000` and run the FastAPI server from the repository root:
+Set `NEXT_PUBLIC_API_URL=http://localhost:8000` and run the FastAPI server from the backend folder:
 
 ```bash
+cd backend
 uvicorn api_server:app --reload --host 0.0.0.0 --port 8000
 ```
 

@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import importlib
 import sqlite3
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _client(tmp_path, monkeypatch) -> TestClient:
@@ -243,7 +247,7 @@ def test_production_refresh_cookie_and_startup_settings_are_secure(tmp_path, mon
 
 
 def test_frontend_auth_client_retries_once_without_localstorage_primary_store():
-    source = open("frontend/src/services/client.ts", encoding="utf-8").read()
+    source = (REPO_ROOT / "frontend/src/services/client.ts").read_text(encoding="utf-8")
 
     assert "let accessToken: string | null = null" in source
     assert "window.localStorage.getItem" not in source
@@ -254,7 +258,7 @@ def test_frontend_auth_client_retries_once_without_localstorage_primary_store():
 
 
 def test_frontend_auth_service_includes_password_reset_endpoints():
-    source = open("frontend/src/services/auth.service.ts", encoding="utf-8").read()
+    source = (REPO_ROOT / "frontend/src/services/auth.service.ts").read_text(encoding="utf-8")
 
     assert '"/auth/forgot-password"' in source
     assert '"/auth/reset-password"' in source
