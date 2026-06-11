@@ -8,7 +8,7 @@ This phase keeps the MVP SQLite-first architecture but makes the app safer and e
 - Centralized runtime directories for data and logs
 - Runtime health endpoint: `/api/v1/health/runtime`
 - Docker Compose with persistent `app_data` and `app_logs` volumes
-- Streamlit and FastAPI health checks
+- FastAPI and Next.js health checks
 - Production Compose override
 - Secret generation script
 - SQLite backup and restore scripts
@@ -33,7 +33,7 @@ make docker-up
 
 Open:
 
-- Streamlit: http://localhost:8501
+- Next.js: http://localhost:3000
 - FastAPI health: http://localhost:8000/api/v1/health
 - Runtime health: http://localhost:8000/api/v1/health/runtime
 

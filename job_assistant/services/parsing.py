@@ -177,7 +177,7 @@ def _extract_skills(text: str, lines: list[str]) -> str:
     source = skill_section or text
     known = [
         "Python", "JavaScript", "TypeScript", "Java", "C#", "C++", "SQL", "PostgreSQL", "MySQL",
-        "React", "Next.js", "Node.js", "FastAPI", "Django", "Flask", "Streamlit", "Docker",
+        "React", "Next.js", "Node.js", "FastAPI", "Django", "Flask", "Docker",
         "Kubernetes", "AWS", "Azure", "GCP", "Terraform", "Git", "Pandas", "NumPy", "Spark",
         "Airflow", "Machine Learning", "Deep Learning", "NLP", "LLM", "OpenAI", "LangChain",
         "Data Engineering", "Data Analysis", "Power BI", "Tableau", "Project Management",

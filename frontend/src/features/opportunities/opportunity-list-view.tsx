@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { DataTable } from "@/components/ui/data-display";
 import { opportunityService } from "@/services/opportunity.service";
 import { formatDate, scoreTone } from "@/lib/utils";
 import type { Opportunity } from "@/types/api";
@@ -92,7 +93,6 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
   const toggleSelected = (id: number) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
 
   if (mode === "manual") return <ManualImportView />;
-  if (mode === "csv") return <CsvImportView />;
   if (source === "public") return <PublicDiscoveryView />;
   if (showMaterials) return <MaterialsView />;
   if (showReminders) return <RemindersView />;
@@ -376,15 +376,6 @@ function DiscoveryPreview({ opportunities, onImport, importing }: { opportunitie
   );
 }
 
-function CsvImportView() {
-  return (
-    <div className="space-y-5">
-      <div><h1 className="text-2xl font-semibold">CSV Import</h1><p className="text-sm text-muted-foreground">The backend currently exposes single-opportunity import through `/jobs`; bulk CSV upload needs a backend import endpoint before it can save rows server-side.</p></div>
-      <Card><CardContent className="space-y-4 p-5"><Textarea placeholder="title,company,source,description" /><Button disabled>Upload CSV</Button></CardContent></Card>
-    </div>
-  );
-}
-
 function MaterialsView() {
   const jobs = useQuery({ queryKey: ["opportunities"], queryFn: () => opportunityService.list() });
   return (
@@ -400,7 +391,7 @@ function RemindersView() {
   return (
     <div className="space-y-5">
       <div><h1 className="text-2xl font-semibold">Reminders</h1><p className="text-sm text-muted-foreground">Due reminders returned by the existing reminder API.</p></div>
-      <Card><CardContent className="p-5"><pre className="overflow-auto rounded-md bg-muted p-4 text-xs">{JSON.stringify(reminders.data ?? [], null, 2)}</pre></CardContent></Card>
+      <Card><CardContent className="p-5"><DataTable rows={(reminders.data ?? []) as Record<string, unknown>[]} columns={["title", "due_at", "status", "job_id"]} /></CardContent></Card>
     </div>
   );
 }

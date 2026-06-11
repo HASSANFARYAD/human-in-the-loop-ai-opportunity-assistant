@@ -1,6 +1,6 @@
 # Phase 3 — Provider Abstraction MVP
 
-Phase 3 adds the first provider-agnostic foundation while preserving the existing Streamlit/FastAPI/SQLite MVP.
+Phase 3 adds the first provider-agnostic foundation while preserving the FastAPI/SQLite MVP.
 
 ## What was added
 
@@ -21,7 +21,7 @@ Phase 3 adds the first provider-agnostic foundation while preserving the existin
   - `DELETE /api/v1/providers/{platform}/{provider_name}`
   - `GET /api/v1/providers/health`
   - `POST /api/v1/providers/execute`
-- Streamlit Integrations tab for adding, updating, viewing, and deleting provider-registry records.
+- Integrations UI for adding, updating, viewing, and deleting provider-registry records.
 - Provider health metadata:
   - `health_status`
   - `last_health_check_at`
@@ -82,7 +82,7 @@ The provider registry is now ready for platform adapters such as:
 Run:
 
 ```bash
-python scripts/smoke_test.py
+python -m scripts.smoke_test
 ```
 
 Expected result includes:

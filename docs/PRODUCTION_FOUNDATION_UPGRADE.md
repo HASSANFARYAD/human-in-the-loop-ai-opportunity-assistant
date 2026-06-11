@@ -4,7 +4,7 @@ Date: 2026-05-25
 
 ## Implemented
 
-- SQLAlchemy engine/session/model foundation in `job_assistant/db_sa.py`.
+- SQLite runtime data access in `job_assistant/db.py`, with Alembic retained for migration history.
 - Optional Redis-backed rate limiting with SQLite fallback.
 - Local observability:
   - request metrics

@@ -17,3 +17,6 @@ frontend/tsconfig.tsbuildinfo
 .streamlit/*
 deploy/*
 logs/*
+.cache/
+.pytest_cache/
+*.sqlite3

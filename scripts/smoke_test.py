@@ -56,7 +56,7 @@ def main() -> None:
         feedback_id = create_feedback(user["id"], {
             "category": "General Suggestion",
             "title": "Smoke test feedback",
-            "description": "Created by scripts/smoke_test.py",
+            "description": "Created by smoke test",
             "severity": "low",
         })
         feedback = list_feedback(user["id"], limit=5)

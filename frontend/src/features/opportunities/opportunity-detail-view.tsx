@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, FileText, Mic, Printer, Sparkles, Square } from "lucide-react";
 import { toast } from "sonner";
@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import { DataFields } from "@/components/ui/data-display";
 import { opportunityService } from "@/services/opportunity.service";
 import { formatDate, scoreTone } from "@/lib/utils";
 import type { Opportunity } from "@/types/api";
@@ -33,13 +34,33 @@ export function OpportunityDetailView() {
   const generate = useMutation({ mutationFn: () => opportunityService.generateMaterials(id), onSuccess: () => { toast.success("Materials generated"); qc.invalidateQueries({ queryKey: ["materials", id] }); } });
   const review = useMutation({ mutationFn: () => opportunityService.resumeReview(id), onSuccess: () => { toast.success("Resume review generated"); qc.invalidateQueries({ queryKey: ["resume-reviews", id] }); }, onError: (error) => toast.error(error.message) });
   const prep = useMutation({ mutationFn: () => opportunityService.interviewPrep(id), onSuccess: () => { toast.success("Interview preparation generated"); qc.invalidateQueries({ queryKey: ["interview-prep", id] }); }, onError: (error) => toast.error(error.message) });
-  const statusUpdate = useMutation({ mutationFn: (status: string) => opportunityService.updateStatus(id, status, item?.notes ?? ""), onSuccess: () => { toast.success("Status updated"); qc.invalidateQueries({ queryKey: ["opportunity", id] }); } });
   const saveRecording = useMutation({ mutationFn: (payload: { title: string; blob: Blob; duration_ms: number }) => opportunityService.uploadRecording({ ...payload, job_id: id }), onSuccess: () => { toast.success("Recording saved"); qc.invalidateQueries({ queryKey: ["recordings", id] }); }, onError: (error) => toast.error(error.message) });
   const [recording, setRecording] = useState(false);
+  const [notes, setNotes] = useState("");
   const recorderRef = useRef<MediaRecorder | null>(null);
   const startedAtRef = useRef<number>(0);
   const chunksRef = useRef<Blob[]>([]);
   const item = job.data;
+  const saveNotes = useMutation({
+    mutationFn: () => opportunityService.updateStatus(id, item?.status ?? "new", notes),
+    onSuccess: () => {
+      toast.success("Notes saved");
+      qc.invalidateQueries({ queryKey: ["opportunity", id] });
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const statusUpdate = useMutation({
+    mutationFn: (status: string) => opportunityService.updateStatus(id, status, notes),
+    onSuccess: () => {
+      toast.success("Status updated");
+      qc.invalidateQueries({ queryKey: ["opportunity", id] });
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  useEffect(() => {
+    setNotes(item?.notes ?? "");
+  }, [item?.id, item?.notes]);
 
   const startRecording = async () => {
     try {
@@ -82,10 +103,19 @@ export function OpportunityDetailView() {
           <p className="text-muted-foreground">{item.company || "Unknown company"} - {item.location || "Location unspecified"}</p>{!importable ? <p className="mt-2 text-sm text-destructive">{item.blocked_reason || item.classification_reason || "This item is not a valid opportunity."}</p> : null}
         </div>
         <Card><CardHeader><CardTitle>{importable ? "Description" : "Source Snippet"}</CardTitle></CardHeader><CardContent><p className="whitespace-pre-wrap text-sm leading-6">{importable ? (item.description || "No description available.") : (item.raw_source_snippet || item.description || "No source snippet available.")}</p></CardContent></Card>
-        <Card><CardHeader><CardTitle>AI Evaluation</CardTitle></CardHeader><CardContent><pre className="max-h-96 overflow-auto rounded-md bg-muted p-4 text-xs">{JSON.stringify(item.evaluation ?? {}, null, 2)}</pre></CardContent></Card>
-        <Card className="print-break-inside-avoid"><CardHeader><CardTitle>Resume Review</CardTitle></CardHeader><CardContent><pre className="max-h-96 overflow-auto rounded-md bg-muted p-4 text-xs">{JSON.stringify(resumeReviews.data?.[0] ?? {}, null, 2)}</pre></CardContent></Card>
-        <Card className="print-break-inside-avoid"><CardHeader><CardTitle>Interview Preparation</CardTitle></CardHeader><CardContent><pre className="max-h-96 overflow-auto rounded-md bg-muted p-4 text-xs">{JSON.stringify(prepSessions.data?.[0] ?? {}, null, 2)}</pre></CardContent></Card>
-        <Card><CardHeader><CardTitle>Notes</CardTitle></CardHeader><CardContent><Textarea defaultValue={item.notes ?? ""} placeholder="Add private tracking notes..." /></CardContent></Card>
+        <Card><CardHeader><CardTitle>AI Evaluation</CardTitle></CardHeader><CardContent><DataFields data={item.evaluation ?? {}} /></CardContent></Card>
+        <Card className="print-break-inside-avoid"><CardHeader><CardTitle>Resume Review</CardTitle></CardHeader><CardContent><DataFields data={(resumeReviews.data?.[0] ?? {}) as Record<string, unknown>} /></CardContent></Card>
+        <Card className="print-break-inside-avoid"><CardHeader><CardTitle>Interview Preparation</CardTitle></CardHeader><CardContent><DataFields data={(prepSessions.data?.[0] ?? {}) as Record<string, unknown>} /></CardContent></Card>
+        <Card>
+          <CardHeader><CardTitle>Notes</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Add private tracking notes..." />
+            <div className="flex flex-wrap items-center gap-3">
+              <Button disabled={saveNotes.isPending || notes === (item.notes ?? "")} onClick={() => saveNotes.mutate()}>{saveNotes.isPending ? "Saving..." : "Save notes"}</Button>
+              {notes !== (item.notes ?? "") ? <span className="text-sm text-muted-foreground">Unsaved changes</span> : <span className="text-sm text-muted-foreground">Notes are saved</span>}
+            </div>
+          </CardContent>
+        </Card>
       </section>
       <aside className="space-y-5">
         <Card>
@@ -104,7 +134,7 @@ export function OpportunityDetailView() {
             <Button className="w-full" variant={recording ? "destructive" : "outline"} onClick={recording ? stopRecording : startRecording}>{recording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />} {recording ? "Stop recording" : "Start practice recording"}</Button>
           </CardContent>
         </Card>
-        <Card><CardHeader><CardTitle>Application Materials</CardTitle></CardHeader><CardContent><pre className="max-h-96 overflow-auto rounded-md bg-muted p-4 text-xs">{JSON.stringify(materials.data ?? {}, null, 2)}</pre></CardContent></Card>
+        <Card><CardHeader><CardTitle>Application Materials</CardTitle></CardHeader><CardContent><DataFields data={materials.data ?? {}} /></CardContent></Card>
         <Card><CardHeader><CardTitle>Recordings</CardTitle></CardHeader><CardContent className="space-y-3">{(recordings.data ?? []).length ? (recordings.data ?? []).map((recording) => <audio key={String(recording.id)} controls className="w-full" src={String(recording.playback_url || recording.data_url)} />) : <div className="text-sm text-muted-foreground">No recordings saved yet.</div>}</CardContent></Card>
         <Card><CardHeader><CardTitle>History</CardTitle></CardHeader><CardContent className="text-sm text-muted-foreground">Created {formatDate(item.created_at)} · Updated {formatDate(item.updated_at)}</CardContent></Card>
       </aside>

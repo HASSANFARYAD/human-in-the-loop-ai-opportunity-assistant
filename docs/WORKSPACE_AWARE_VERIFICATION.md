@@ -19,7 +19,7 @@ The implementation was verified with:
 python -m py_compile job_assistant/*.py
 APP_DB_PATH=/tmp/workspace_test.db python <database smoke test>
 APP_DB_PATH=/tmp/api_ws.db python <FastAPI route test>
-APP_DB_PATH=/tmp/ws_smoke.db python scripts/smoke_test.py
+APP_DB_PATH=/tmp/ws_smoke.db python -m scripts.smoke_test
 ```
 
 All tests passed in the implementation environment.

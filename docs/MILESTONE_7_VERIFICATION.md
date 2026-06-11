@@ -14,15 +14,15 @@ Status: Achieved as an MVP foundation.
 | Permission checks | Achieved | `user_has_permission()` and `/api/v1/permissions/check` |
 | Shared resources | Achieved | `shared_resources` table and API/UI flows |
 | Audit expansion | Achieved | `workspace_id` and `organization_id` audit scope columns |
-| Admin dashboard foundation | Achieved | Streamlit Team page admin summary and `/enterprise/summary` |
+| Admin dashboard foundation | Achieved | Next.js Team page admin summary and `/enterprise/summary` |
 | Documentation | Achieved | Phase 7 and verification docs added |
-| Smoke validation | Achieved | `scripts/smoke_test.py` passes with enterprise checks |
+| Smoke validation | Achieved | `python -m scripts.smoke_test` passes with enterprise checks |
 
 ## Validation commands
 
 ```bash
-python -m py_compile app.py api_server.py job_assistant/*.py job_assistant/services/*.py
-python scripts/smoke_test.py
+python -m py_compile api_server.py job_assistant/*.py job_assistant/services/*.py
+python -m scripts.smoke_test
 ```
 
 ## Current known constraint

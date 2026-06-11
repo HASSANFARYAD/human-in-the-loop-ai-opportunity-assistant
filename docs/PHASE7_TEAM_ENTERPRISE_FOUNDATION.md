@@ -77,7 +77,7 @@ GET      /api/v1/shared-resources
 POST     /api/v1/shared-resources
 ```
 
-### Streamlit UI
+### Frontend UI
 
 A new `Team` page was added with tabs for:
 
@@ -89,7 +89,7 @@ A new `Team` page was added with tabs for:
 
 ### Validation
 
-`scripts/smoke_test.py` now verifies:
+`python -m scripts.smoke_test` now verifies:
 
 - default user workspace bootstrap
 - organization creation

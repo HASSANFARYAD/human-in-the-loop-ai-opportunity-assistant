@@ -7,13 +7,26 @@ import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlencode, urlparse
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Cookie, Depends, File, Form, HTTPException, Request, UploadFile, Response, status
 from pydantic import BaseModel, Field, validator
-from starlette.responses import FileResponse, RedirectResponse, Response
+from starlette.responses import FileResponse, RedirectResponse
 
-from job_assistant.auth import authenticate_user, create_access_token, current_user, public_user, register_user
+from job_assistant.auth import (
+    authenticate_user,
+    create_access_token,
+    create_refresh_token,
+    current_user,
+    public_user,
+    register_user,
+    request_password_reset,
+    reset_password,
+    revoke_refresh_token,
+    user_from_refresh_token,
+)
 from job_assistant.compliance import admin_review, apply_retention_policies, approve_user_deletion, export_user_data, list_compliance_exports, request_user_deletion
+from job_assistant.config import settings
 from job_assistant.db import (
     create_feedback,
     create_reminder,
@@ -69,7 +82,6 @@ from job_assistant.db import (
     ensure_user_workspace,
     list_permissions,
     list_posts,
-    list_permissions,
     list_role_permissions,
     list_roles,
     list_shared_resources,
@@ -106,6 +118,16 @@ from job_assistant.worker_queue import enqueue_job, list_worker_jobs, worker_hea
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
+
+
+def _frontend_redirect(path: str, params: dict[str, str]) -> str:
+    base_url = settings.frontend_base_url.rstrip("/")
+    parsed = urlparse(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        logger.warning("Invalid FRONTEND_BASE_URL configured for OAuth redirect: %s", settings.frontend_base_url)
+        base_url = "http://localhost:3000"
+    safe_path = path if path.startswith("/") and not path.startswith("//") else "/"
+    return f"{base_url}{safe_path}?{urlencode(params)}"
 
 
 class ProfileCreate(BaseModel):
@@ -291,6 +313,15 @@ class UserRegister(BaseModel):
 
 class UserLogin(BaseModel):
     email: str
+    password: str
+
+
+class ForgotPasswordIn(BaseModel):
+    email: str
+
+
+class ResetPasswordIn(BaseModel):
+    token: str
     password: str
 
 
@@ -548,6 +579,32 @@ def _require_admin_config_access(user: dict, workspace_id: int | None = None) ->
     ):
         return
     raise HTTPException(status_code=403, detail="Admin configuration access is required.")
+
+
+def _require_workspace_admin(user: dict, workspace_id: int | None = None) -> None:
+    workspace = ensure_user_workspace(user["id"])
+    scoped_workspace_id = int(workspace_id or workspace.get("workspace_id") or 0)
+    role = str(workspace.get("role") or "owner").lower()
+    if role in {"owner", "admin"}:
+        return
+    if scoped_workspace_id and user_has_permission(user["id"], scoped_workspace_id, "workspace:manage"):
+        return
+    raise HTTPException(status_code=403, detail="Workspace administrator access is required.")
+
+
+def _auth_payload(user: dict, response: Response) -> dict[str, Any]:
+    access_token = create_access_token(user)
+    refresh_token = create_refresh_token(user, days=settings.refresh_token_expire_days)
+    response.set_cookie(
+        key=settings.session_cookie_name,
+        value=refresh_token,
+        max_age=settings.session_cookie_max_age_seconds,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite=settings.session_cookie_samesite,
+        path=settings.session_cookie_path,
+    )
+    return {"access_token": access_token, "token_type": "bearer", "user": public_user(user)}
 
 
 def _clean_admin_type(config_type: str) -> str:
@@ -868,33 +925,34 @@ async def get_prometheus_metrics():
 
 @router.post("/alerts/{alert_id}/ack")
 async def ack_alert(alert_id: int, user: dict = Depends(current_user)):
+    _require_workspace_admin(user)
     return {"status": "success" if acknowledge_alert(alert_id) else "not_found"}
 
 
 @router.get("/workers/health")
 async def get_worker_health(user: dict = Depends(current_user)):
+    _require_workspace_admin(user)
     return worker_health()
 
 
 @router.get("/workers/jobs")
 async def get_worker_jobs(limit: int = 100, status: str = "", user: dict = Depends(current_user)):
+    _require_workspace_admin(user)
     return list_worker_jobs(limit=limit, status=status)
 
 
 @router.post("/workers/jobs")
 async def post_worker_job(payload: WorkerJobIn, user: dict = Depends(current_user)):
+    _require_workspace_admin(user)
     job_id = enqueue_job(payload.job_type, payload.payload, queue_name=payload.queue_name, run_after=payload.run_after)
     return {"id": job_id, "status": "queued"}
 
 
 @router.post("/auth/register")
-async def register(user_data: UserRegister):
-    if len(user_data.password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+async def register(user_data: UserRegister, response: Response):
     try:
         user = register_user(user_data.email, user_data.password, user_data.full_name)
-        token = create_access_token(user)
-        return {"access_token": token, "token_type": "bearer", "user": public_user(user)}
+        return _auth_payload(user, response)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -903,12 +961,65 @@ async def register(user_data: UserRegister):
 
 
 @router.post("/auth/login")
-async def login(login_data: UserLogin):
+async def login(login_data: UserLogin, response: Response):
     user = authenticate_user(login_data.email, login_data.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    token = create_access_token(user)
-    return {"access_token": token, "token_type": "bearer", "user": public_user(user)}
+    return _auth_payload(user, response)
+
+
+@router.post("/auth/forgot-password")
+async def forgot_password(payload: ForgotPasswordIn, request: Request):
+    try:
+        ip_address = ""
+        user_agent = ""
+        if request is not None:
+            ip_address = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip() or (request.client.host if request.client else "")
+            user_agent = request.headers.get("user-agent", "")
+        request_password_reset(payload.email, settings.frontend_reset_password_url, ip_address=ip_address, user_agent=user_agent)
+    except Exception as e:
+        logger.error("Password reset request failed: %s", e)
+        if settings.is_production:
+            raise HTTPException(status_code=500, detail="Unable to process password reset request")
+    return {"status": "success", "message": "If an account exists for that email, a password reset link has been sent."}
+
+
+@router.post("/auth/reset-password")
+async def reset_password_confirm(payload: ResetPasswordIn):
+    try:
+        if reset_password(payload.token, payload.password):
+            return {"status": "success", "message": "Password has been reset."}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    raise HTTPException(status_code=400, detail="Invalid or expired password reset token.")
+
+
+@router.post("/auth/refresh")
+async def refresh_auth(
+    response: Response,
+    refresh_token: str = Cookie(default="", alias=settings.session_cookie_name),
+):
+    user = user_from_refresh_token(refresh_token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    revoke_refresh_token(refresh_token)
+    return _auth_payload(user, response)
+
+
+@router.post("/auth/logout")
+async def logout(
+    response: Response,
+    refresh_token: str = Cookie(default="", alias=settings.session_cookie_name),
+):
+    if refresh_token:
+        revoke_refresh_token(refresh_token)
+    response.delete_cookie(
+        key=settings.session_cookie_name,
+        path=settings.session_cookie_path,
+        secure=settings.session_cookie_secure,
+        samesite=settings.session_cookie_samesite,
+    )
+    return {"status": "success"}
 
 
 @router.get("/auth/me")
@@ -1835,11 +1946,10 @@ async def get_gmail_auth_url(user: dict = Depends(current_user)):
 
 @router.get("/gmail/oauth/callback")
 async def gmail_oauth_callback(code: str = "", state: str = "", error: str = ""):
-    frontend_path = "/integrations?service=gmail"
     if error:
-        return RedirectResponse(f"{frontend_path}&gmail=error&message={error}")
+        return RedirectResponse(_frontend_redirect("/integrations", {"service": "gmail", "gmail": "error", "message": error}))
     if not code or not state:
-        return RedirectResponse(f"{frontend_path}&gmail=error&message=missing_oauth_callback_values")
+        return RedirectResponse(_frontend_redirect("/integrations", {"service": "gmail", "gmail": "error", "message": "missing_oauth_callback_values"}))
     try:
         parts = state.split(":")
         if len(parts) < 3 or parts[0] != "gmail":
@@ -1848,9 +1958,9 @@ async def gmail_oauth_callback(code: str = "", state: str = "", error: str = "")
         settings = get_integration_settings(user_id, "gmail")
         redirect_uri = (settings.get("config") or {}).get("redirect_uri")
         exchange_gmail_code(user_id, code, redirect_uri, state)
-        return RedirectResponse(f"{frontend_path}&gmail=connected")
+        return RedirectResponse(_frontend_redirect("/integrations", {"service": "gmail", "gmail": "connected"}))
     except Exception as exc:
-        return RedirectResponse(f"{frontend_path}&gmail=error&message={str(exc)}")
+        return RedirectResponse(_frontend_redirect("/integrations", {"service": "gmail", "gmail": "error", "message": str(exc)}))
 
 
 @router.post("/gmail/disconnect")
@@ -2005,15 +2115,18 @@ async def compliance_deletion_request(payload: DeletionRequestIn, user: dict = D
 
 @router.post("/compliance/deletion-approve")
 async def compliance_deletion_approve(payload: DeletionApproveIn, user: dict = Depends(current_user)):
+    _require_workspace_admin(user)
     approve_user_deletion(user["id"], payload.target_user_id)
     return {"status": "deleted_after_export"}
 
 
 @router.post("/compliance/apply-retention")
 async def compliance_apply_retention(user: dict = Depends(current_user)):
+    _require_workspace_admin(user)
     return {"status": "success", "deleted": apply_retention_policies()}
 
 
 @router.get("/admin/review")
 async def get_admin_review(limit: int = 100, user: dict = Depends(current_user)):
+    _require_workspace_admin(user)
     return admin_review(limit=limit)

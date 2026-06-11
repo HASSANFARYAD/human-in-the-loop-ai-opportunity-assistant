@@ -18,7 +18,7 @@ Evidence:
   - `GET /api/v1/ai/prompts`
   - `POST /api/v1/ai/prompts`
   - `POST /api/v1/ai/ask-json`
-- Added Streamlit UI page: `AI Orchestration`.
+- Added AI orchestration UI surface.
 
 Validation:
 
@@ -45,7 +45,7 @@ Evidence:
   - `POST /api/v1/automation/trigger`
   - `GET /api/v1/automation/runs`
   - `GET /api/v1/automation/errors`
-- Added Streamlit automation rule/run/error UI.
+- Added automation rule/run/error UI.
 - Human approval is required by default.
 - Runs and failures are persisted for later retry/worker implementation.
 

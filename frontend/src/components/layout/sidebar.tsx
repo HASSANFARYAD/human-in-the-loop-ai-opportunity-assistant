@@ -47,7 +47,6 @@ const groups = [
       { href: "/opportunities?import=manual", label: "Manual Import", icon: Upload },
       { href: "/opportunities?source=public", label: "Public Discovery", icon: Network },
       { href: "/integrations?service=gmail", label: "Gmail Import", icon: Mail },
-      { href: "/opportunities?import=csv", label: "CSV Import", icon: Database },
       { href: "/integrations?service=apify", label: "Apify Import", icon: Bot },
     ],
   },

@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { DataFields, DataTable } from "@/components/ui/data-display";
 import { auditService } from "@/services/audit.service";
 import { feedbackService } from "@/services/feedback.service";
 import { opportunityService } from "@/services/opportunity.service";
@@ -35,13 +36,13 @@ export function SettingsView() {
       {tab === "profile" ? (
         <ProfileForm profile={profile.data ?? {}} />
       ) : tab === "feedback" ? (
-        <Card><CardHeader><CardTitle>Feedback</CardTitle></CardHeader><CardContent><pre className="overflow-auto rounded-md bg-muted p-4 text-xs">{JSON.stringify(feedback.data ?? [], null, 2)}</pre></CardContent></Card>
+        <Card><CardHeader><CardTitle>Feedback</CardTitle></CardHeader><CardContent><DataTable rows={(feedback.data ?? []) as unknown as Record<string, unknown>[]} columns={["title", "category", "severity", "status", "created_at"]} /></CardContent></Card>
       ) : tab === "audit" ? (
-        <Card><CardHeader><CardTitle>Audit Logs</CardTitle></CardHeader><CardContent><pre className="overflow-auto rounded-md bg-muted p-4 text-xs">{JSON.stringify(audit.data ?? [], null, 2)}</pre></CardContent></Card>
+        <Card><CardHeader><CardTitle>Audit Logs</CardTitle></CardHeader><CardContent><DataTable rows={(audit.data ?? []) as unknown as Record<string, unknown>[]} columns={["created_at", "action", "resource_type", "resource_id"]} /></CardContent></Card>
       ) : tab === "usage" ? (
-        <Card><CardHeader><CardTitle>Usage</CardTitle></CardHeader><CardContent><pre className="overflow-auto rounded-md bg-muted p-4 text-xs">{JSON.stringify(usage.data ?? {}, null, 2)}</pre></CardContent></Card>
+        <Card><CardHeader><CardTitle>Usage</CardTitle></CardHeader><CardContent><DataFields data={usage.data ?? {}} /></CardContent></Card>
       ) : tab === "health" ? (
-        <Card><CardHeader><CardTitle>Health</CardTitle></CardHeader><CardContent><pre className="overflow-auto rounded-md bg-muted p-4 text-xs">{JSON.stringify(health.data ?? {}, null, 2)}</pre></CardContent></Card>
+        <Card><CardHeader><CardTitle>Health</CardTitle></CardHeader><CardContent><DataFields data={health.data ?? {}} /></CardContent></Card>
       ) : (
         <AdminConfiguration data={adminConfigs.data} loading={adminConfigs.isLoading} />
       )}

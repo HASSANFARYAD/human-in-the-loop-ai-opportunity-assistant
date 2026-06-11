@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import { AlertTriangle, CheckCircle2, Play, Workflow } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { automationService } from "@/services/automation.service";
 import { formatDate } from "@/lib/utils";

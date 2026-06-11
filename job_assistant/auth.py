@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -8,9 +9,32 @@ from typing import Any
 from jose import JWTError, jwt
 
 from job_assistant.config import settings
-from job_assistant.db import create_session_token, create_user, get_user, get_user_by_email, get_user_by_session_token, revoke_session_token
+from job_assistant.db import (
+    consume_password_reset_token,
+    create_password_reset_token,
+    create_session_token,
+    create_user,
+    get_user,
+    get_user_by_email,
+    get_user_by_session_token,
+    get_password_reset_token,
+    revoke_session_token,
+    revoke_user_sessions,
+    update_user_password,
+)
+from job_assistant.email_delivery import send_password_reset_email
 
 PASSWORD_HASH_ITERATIONS = 600_000
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+COMMON_PASSWORDS = {
+    "password",
+    "password1",
+    "password123",
+    "changeme",
+    "changeme123",
+    "12345678",
+    "qwerty123",
+}
 
 try:
     from fastapi import Depends, HTTPException, status
@@ -43,7 +67,37 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
+def normalize_email(email: str) -> str:
+    normalized = (email or "").strip().lower()
+    if not normalized or len(normalized) > 254 or not EMAIL_RE.match(normalized):
+        raise ValueError("A valid email address is required")
+    return normalized
+
+
+def validate_password_policy(password: str, email: str = "") -> None:
+    if len(password or "") < 12:
+        raise ValueError("Password must be at least 12 characters")
+    lowered = password.lower()
+    if lowered in COMMON_PASSWORDS:
+        raise ValueError("Password is too common")
+    local_part = (email or "").split("@", 1)[0].lower()
+    if local_part and len(local_part) >= 4 and local_part in lowered:
+        raise ValueError("Password must not contain your email username")
+    checks = [
+        any(ch.islower() for ch in password),
+        any(ch.isupper() for ch in password),
+        any(ch.isdigit() for ch in password),
+        any(not ch.isalnum() for ch in password),
+    ]
+    if sum(checks) < 3:
+        raise ValueError("Password must include at least three of: lowercase, uppercase, number, symbol")
+
+
 def authenticate_user(email: str, password: str) -> dict[str, Any]:
+    try:
+        email = normalize_email(email)
+    except ValueError:
+        return {}
     user = get_user_by_email(email)
     if not user or not verify_password(password, user.get("password_hash", "")):
         return {}
@@ -53,11 +107,43 @@ def authenticate_user(email: str, password: str) -> dict[str, Any]:
 
 
 def register_user(email: str, password: str, full_name: str = "") -> dict[str, Any]:
+    email = normalize_email(email)
+    validate_password_policy(password, email)
     existing = get_user_by_email(email)
     if existing:
         raise ValueError("Email already registered")
     user_id = create_user(email=email, password_hash=hash_password(password), full_name=full_name)
     return get_user(user_id)
+
+
+def request_password_reset(email: str, reset_url_base: str, ip_address: str = "", user_agent: str = "") -> None:
+    try:
+        email = normalize_email(email)
+    except ValueError:
+        return
+    user = get_user_by_email(email)
+    if not user or not user.get("is_active"):
+        return
+    token = secrets.token_urlsafe(48)
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=settings.password_reset_token_expire_minutes)).isoformat(timespec="seconds")
+    create_password_reset_token(int(user["id"]), token, expires_at, ip_address=ip_address, user_agent=user_agent)
+    separator = "&" if "?" in reset_url_base else "?"
+    send_password_reset_email(email, f"{reset_url_base}{separator}token={token}")
+
+
+def reset_password(token: str, new_password: str) -> bool:
+    reset_token = get_password_reset_token(token)
+    if not reset_token:
+        return False
+    user = get_user(int(reset_token["user_id"]))
+    if not user:
+        return False
+    validate_password_policy(new_password, user.get("email", ""))
+    if not consume_password_reset_token(int(reset_token["id"])):
+        return False
+    update_user_password(int(user["id"]), hash_password(new_password))
+    revoke_user_sessions(int(user["id"]))
+    return True
 
 
 def create_access_token(user: dict[str, Any]) -> str:

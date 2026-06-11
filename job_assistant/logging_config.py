@@ -17,7 +17,7 @@ def setup_logging():
     root_logger = logging.getLogger()
     root_logger.setLevel(settings.log_level.upper())
 
-    # Avoid duplicate handlers when Streamlit reloads modules.
+    # Avoid duplicate handlers when app modules are imported repeatedly.
     if not any(getattr(handler, "_job_assistant_handler", False) for handler in root_logger.handlers):
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(formatter)
@@ -34,7 +34,6 @@ def setup_logging():
         file_handler._job_assistant_handler = True
         root_logger.addHandler(file_handler)
 
-    logging.getLogger("streamlit").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
 

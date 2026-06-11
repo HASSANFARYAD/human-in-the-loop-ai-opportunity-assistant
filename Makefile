@@ -9,7 +9,7 @@ secrets:
 	python scripts/generate_secrets.py
 
 smoke:
-	python scripts/smoke_test.py
+	python -m scripts.smoke_test
 
 docker-up:
 	docker compose up --build

@@ -1,6 +1,6 @@
 # Human-in-the-loop AI Opportunity Assistant
 
-A local-first Streamlit + SQLite assistant for discovering, scoring, reviewing, and tracking opportunities such as jobs, hackathons, competitions, webinars, and related events.
+A local-first Next.js + FastAPI + SQLite assistant for discovering, scoring, reviewing, and tracking opportunities such as jobs, hackathons, competitions, webinars, and related events.
 
 The app is intentionally human-in-the-loop. It helps you find and prioritize opportunities, but it does not apply, register, submit forms, scrape private sites, or bypass platform rules.
 
@@ -108,7 +108,7 @@ Use Apify actors only for sources where you have the right to collect the data a
 
 ## Authentication And User Data
 
-Streamlit requires users to register or log in before using the app.
+The Next.js frontend requires users to register or log in before using the app.
 
 Existing single-user data is migrated to a default local account:
 
@@ -123,6 +123,10 @@ FastAPI exposes:
 
 - `POST /api/v1/auth/register`
 - `POST /api/v1/auth/login`
+- `POST /api/v1/auth/forgot-password`
+- `POST /api/v1/auth/reset-password`
+- `POST /api/v1/auth/refresh`
+- `POST /api/v1/auth/logout`
 - `GET /api/v1/auth/me`
 
 Protected API endpoints require a bearer token:
@@ -131,15 +135,40 @@ Protected API endpoints require a bearer token:
 Authorization: Bearer <access_token>
 ```
 
+Registration requires a valid email address and a password of at least 12 characters with at least three of lowercase, uppercase, number, and symbol. Login/register responses still include a bearer access token for compatibility, and the API also sets an HttpOnly refresh-session cookie scoped to `/api/v1/auth` so sessions can be rotated and revoked server-side.
+
+The Next.js frontend keeps the access token in memory only. On page load it calls `POST /api/v1/auth/refresh` with credentials so the HttpOnly refresh cookie can issue a new short-lived access token. If an API call returns `401`, the frontend attempts one refresh, retries the original request once, and then clears client auth state and returns to login if refresh fails.
+
+Refresh sessions are opaque random tokens stored only as hashes in `user_sessions`. A successful refresh revokes the presented refresh token and sets a replacement cookie. Reusing an old refresh token, using an expired token, or using a token revoked by logout returns `401`.
+
+Password recovery uses expiring, single-use reset tokens. `POST /api/v1/auth/forgot-password` always returns the same generic success response whether or not the email exists. When the account exists, the backend stores only a SHA-256 hash of a high-entropy reset token in `password_reset_tokens`, sends a frontend reset URL by email, and never stores the raw token. `POST /api/v1/auth/reset-password` applies the normal password policy, consumes the token, updates the password, and revokes all active refresh sessions for that user. Invalid, expired, or reused reset tokens fail with a generic error.
+
+Configure reset expiry and delivery with:
+
+```bash
+PASSWORD_RESET_TOKEN_EXPIRE_MINUTES=60
+FRONTEND_RESET_PASSWORD_URL=http://localhost:3000/reset-password
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=reset-sender
+SMTP_PASSWORD=replace-with-secret
+SMTP_FROM_EMAIL=no-reply@example.com
+SMTP_USE_TLS=true
+```
+
+For local development, leave SMTP settings blank. The backend captures reset emails in a development-only outbox and logs that a message was captured without logging the raw token. In production, configure SMTP and treat reset links as secrets; do not log raw reset URLs or tokens.
+
+CSRF posture: normal application mutations are authenticated only by `Authorization: Bearer <access_token>`, not by cookies. The only cookie-authenticated endpoints are `POST /auth/refresh` and `POST /auth/logout`; refresh performs single-use rotation for the current session and logout only revokes that session. Keep refresh cookies `SameSite=Lax` or `Strict` unless you intentionally deploy a cross-site frontend/API pair that requires `SameSite=None; Secure`.
+
 Data is scoped by `user_id`. Profiles, opportunities, evaluations, materials, applications, and reminders are only returned for the signed-in user.
 
 The privacy delete action is user-scoped. `Delete my stored data` removes only the signed-in user's profile, opportunities, evaluations, materials, statuses, and reminders. It does not delete other users' data.
 
 ## Automatic Mode
 
-The sidebar has `Automatic import` controls.
+The `Automation` area has automatic import controls.
 
-When you click `Start`, the scheduler runs inside the Streamlit process:
+When automation is enabled, the scheduler runs inside the FastAPI process:
 
 - Gmail alerts every 30 minutes
 - public job discovery every 6 hours
@@ -148,7 +177,7 @@ When you click `Start`, the scheduler runs inside the Streamlit process:
 
 Automatic mode is limited to configured Gmail alerts and supported public APIs. It does not search every website on the internet and does not scrape restricted platforms.
 
-The FastAPI server also starts the scheduler when `SCHEDULER_ENABLED=true`.
+The FastAPI server starts the scheduler when `SCHEDULER_ENABLED=true`.
 
 ## Setup
 
@@ -184,17 +213,19 @@ GOOGLE_CREDENTIALS_FILE=credentials.json
 GOOGLE_TOKEN_FILE=token.json
 SCHEDULER_ENABLED=true
 JWT_SECRET_KEY=replace-this-with-a-long-random-secret
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+CORS_ALLOW_CREDENTIALS=true
+SESSION_COOKIE_SECURE=false
+SESSION_COOKIE_SAMESITE=lax
+SESSION_COOKIE_PATH=/api/v1/auth
+PASSWORD_RESET_TOKEN_EXPIRE_MINUTES=60
+FRONTEND_RESET_PASSWORD_URL=http://localhost:3000/reset-password
 LOCAL_USER_PASSWORD=replace-default-local-password
 APP_ENCRYPTION_KEY=replace-with-fernet-key-in-production
 ```
 
 Provider API keys are not configured globally in `.env`. Each signed-in user adds their own AI, LinkedIn, RapidAPI, Apify, and other provider keys from the `Integrations` page. Those keys are encrypted and stored per user in the SQLite database. If a user has not configured an AI provider key, the app still runs with local rule-based scoring and fallback draft generation.
-
-## Run The Streamlit App
-
-```bash
-streamlit run app.py
-```
 
 ## Run The FastAPI Server
 
@@ -207,6 +238,16 @@ Development API docs are available at:
 ```text
 http://localhost:8000/api/docs
 ```
+
+## Run The Next.js Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The production frontend lives under `frontend/` and expects `NEXT_PUBLIC_API_URL=http://localhost:8000` for local development.
 
 ## Gmail Read-only Setup
 
@@ -296,7 +337,7 @@ Public web pages can be visible without login but still disallow automated scrap
 Basic syntax check:
 
 ```bash
-python -m compileall app.py job_assistant
+python -m compileall job_assistant api_server.py
 ```
 
 ## Production automation, security, sessions, and AI providers
@@ -326,15 +367,21 @@ Do not rotate `APP_ENCRYPTION_KEY` without re-encrypting existing rows, or previ
 
 ### Persistent login
 
-Streamlit now stores a long-lived opaque refresh/session token in a browser cookie and keeps the short-lived JWT in memory. Refresh/session tokens are hashed in the database, can be revoked on logout, and are not the same as access tokens.
+The Next.js frontend uses a long-lived opaque refresh/session token in a browser cookie and keeps the short-lived JWT in memory. Refresh/session tokens are hashed in the database, rotate on every refresh, can be revoked on logout, and are not the same as access tokens.
 
 For production, serve the app behind HTTPS and set:
 
 ```bash
 SESSION_COOKIE_SECURE=true
+SESSION_COOKIE_SAMESITE=lax
+SESSION_COOKIE_PATH=/api/v1/auth
 REFRESH_TOKEN_EXPIRE_DAYS=30
-ACCESS_TOKEN_EXPIRE_MINUTES=1440
+ACCESS_TOKEN_EXPIRE_MINUTES=15
+CORS_ORIGINS=https://your-app.example.com
+CORS_ALLOW_CREDENTIALS=true
 ```
+
+Production startup validation fails when credentialed CORS or refresh-cookie settings are unsafe: wildcard origins, plain HTTP origins, insecure cookies, invalid SameSite values, over-broad cookie paths, or access token lifetimes longer than 15 minutes.
 
 ### Multi-provider AI
 
@@ -412,10 +459,10 @@ Production flow:
 
 1. Create a Google Cloud OAuth **Web application** client.
 2. Enable the Gmail API.
-3. Add the app URL as an authorized redirect URI. For local Streamlit this is usually:
+3. Add the app URL as an authorized redirect URI. For local Next.js this is usually:
 
    ```text
-   http://localhost:8501
+   http://localhost:3000
    ```
 
    In production this should be your public app URL, for example:
@@ -445,14 +492,14 @@ Security notes:
 
 ## Technical Plan Implementation Status
 
-This build starts the MVP-to-production technical plan while preserving the current lightweight Streamlit + FastAPI + SQLite architecture.
+This build starts the MVP-to-production technical plan while preserving the current lightweight Next.js + FastAPI + SQLite architecture.
 
 Implemented foundations:
 
 - per-user encrypted integration key storage in the database
 - user-owned AI/provider credentials instead of shared environment keys
 - feedback database table and service functions
-- in-app Feedback page and sidebar quick feedback form
+- frontend feedback UI
 - FastAPI feedback endpoints
 - user-scoped audit log table and audit log viewer
 - database health endpoint
@@ -460,8 +507,8 @@ Implemented foundations:
 - local SQLite-backed API rate limiting
 - provider configuration health endpoint
 - Dockerfile for FastAPI
-- Dockerfile.streamlit for the Streamlit UI
-- docker-compose.yml with persistent SQLite/log volumes
+- Dockerfile for the Next.js frontend
+- docker-compose.yml with FastAPI, Next.js, and persistent SQLite/log volumes
 - .dockerignore and expanded .env.example
 
 New FastAPI endpoints:
@@ -498,7 +545,7 @@ Services:
 
 ```text
 FastAPI:   http://localhost:8000
-Streamlit: http://localhost:8501
+Next.js:   http://localhost:3000
 ```
 
 SQLite data is persisted in the `app_data` Docker volume.
@@ -557,7 +604,7 @@ GET /api/v1/health/runtime
   - persistent app data volume
   - persistent logs volume
   - FastAPI health check
-  - Streamlit health check
+  - Next.js frontend health check
   - restart policies
   - production override file
 - Secret generation helper:
@@ -581,7 +628,7 @@ python scripts/restore_sqlite.py backups/<backup-file>.sqlite3
 - Smoke test helper:
 
 ```bash
-python scripts/smoke_test.py
+python -m scripts.smoke_test
 ```
 
 - Makefile shortcuts:
@@ -615,8 +662,17 @@ DEPLOYMENT_PROFILE=production
 APP_BASE_URL=https://your-app.example.com
 API_PUBLIC_URL=https://your-api.example.com
 CORS_ORIGINS=https://your-app.example.com
+CORS_ALLOW_CREDENTIALS=true
+ACCESS_TOKEN_EXPIRE_MINUTES=15
 SESSION_COOKIE_SECURE=true
+SESSION_COOKIE_SAMESITE=lax
+SESSION_COOKIE_PATH=/api/v1/auth
+DATABASE_URL=postgresql+psycopg2://user:password@postgres:5432/job_assistant
+RATE_LIMIT_BACKEND=redis
+REDIS_URL=redis://redis:6379/0
 ```
+
+Production startup validation fails when production-only requirements are missing. Use PostgreSQL for durable multi-user data, Redis or an upstream gateway for rate limits, explicit HTTPS CORS origins, a 32+ character `JWT_SECRET_KEY`, `APP_ENCRYPTION_KEY`, and secure session cookies.
 
 Run:
 
@@ -678,7 +734,7 @@ GET /api/v1/health/providers
 
 This now returns both legacy integrations and new provider-registry records.
 
-- Updated Streamlit Integrations page:
+- Updated Integrations UI:
   - added **Provider registry** tab
   - add/update provider records
   - set platform, provider name, auth type, priority, active status, and config JSON
@@ -688,7 +744,7 @@ This now returns both legacy integrations and new provider-registry records.
 - Updated smoke test:
 
 ```bash
-python scripts/smoke_test.py
+python -m scripts.smoke_test
 ```
 
 The smoke test now verifies feedback, database health, provider save, provider health check, and fallback routing.
@@ -739,7 +795,7 @@ Implemented Milestone 7 foundations:
 - permission checks
 - shared resources
 - workspace/organization-scoped audit fields
-- Team page in Streamlit
+- Team page in the Next.js frontend
 - enterprise summary API
 
 See:

@@ -60,33 +60,6 @@ services:
       retries: 3
       start_period: 20s
 
-  streamlit:
-    build:
-      context: .
-      dockerfile: Dockerfile.streamlit
-    env_file:
-      - .env
-    environment:
-      <<: *common-env
-      STREAMLIT_PORT: 8501
-      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8501}
-      API_PUBLIC_URL: ${API_PUBLIC_URL:-http://api:8000}
-    ports:
-      - "${STREAMLIT_PORT:-8501}:8501"
-    volumes:
-      - app_data:/app/data
-      - app_logs:/app/logs
-    depends_on:
-      api:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8501/_stcore/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
   frontend:
     build:
       context: ./frontend

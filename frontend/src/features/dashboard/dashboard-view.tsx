@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, Bot, Briefcase, CalendarClock, ClipboardCheck, Sparkles, Workflow } from "lucide-react";
+import { Bot, Briefcase, CalendarClock, ClipboardCheck, Sparkles, Workflow } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SourceChart, ScoreDistribution, TrendChart } from "@/components/charts/analytics-charts";
 import { opportunityService } from "@/services/opportunity.service";
@@ -26,9 +26,11 @@ function Kpi({ label, value, icon: Icon }: { label: string; value: string | numb
 export function DashboardView() {
   const jobs = useQuery({ queryKey: ["opportunities"], queryFn: () => opportunityService.list() });
   const rules = useQuery({ queryKey: ["automation-rules"], queryFn: () => automationService.rules() });
+  const runs = useQuery({ queryKey: ["automation-runs"], queryFn: () => automationService.runs() });
+  const errors = useQuery({ queryKey: ["automation-errors"], queryFn: () => automationService.errors() });
   const generations = useQuery({ queryKey: ["ai-generations"], queryFn: () => providerService.generations() });
 
-  const opportunities = jobs.data ?? [];
+  const opportunities = useMemo(() => jobs.data ?? [], [jobs.data]);
   const chartData = useMemo(() => {
     const sources = Object.entries(opportunities.reduce<Record<string, number>>((acc, item) => {
       acc[item.source || "unknown"] = (acc[item.source || "unknown"] ?? 0) + 1;
@@ -39,8 +41,16 @@ export function DashboardView() {
       const score = Number(item.match_score ?? item.score ?? 0);
       buckets[score >= 80 ? 3 : score >= 60 ? 2 : score >= 40 ? 1 : 0].count += 1;
     });
-    return { sources, buckets };
+    const weekly = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((name) => ({ name, value: 0 }));
+    opportunities.forEach((item) => {
+      const date = item.created_at ? new Date(item.created_at) : null;
+      if (date && !Number.isNaN(date.getTime())) weekly[date.getDay()].value += 1;
+    });
+    return { sources, buckets, weekly };
   }, [opportunities]);
+  const hasWeeklyData = chartData.weekly.some((item) => item.value > 0);
+  const isLoading = jobs.isLoading || rules.isLoading || runs.isLoading || errors.isLoading || generations.isLoading;
+  const hasError = jobs.isError || rules.isError || runs.isError || errors.isError || generations.isError;
 
   return (
     <div className="space-y-6">
@@ -48,6 +58,8 @@ export function DashboardView() {
         <h1 className="text-2xl font-semibold">Dashboard</h1>
         <p className="text-sm text-muted-foreground">AI activity, deadlines, scoring, and automation health across your workspace.</p>
       </div>
+      {isLoading ? <div className="rounded-md border p-4 text-sm text-muted-foreground">Loading dashboard data...</div> : null}
+      {hasError ? <div className="rounded-md border border-destructive/30 p-4 text-sm text-destructive">Some dashboard data could not be loaded. Refresh or check the API connection.</div> : null}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
         <Kpi label="Total Opportunities" value={opportunities.length} icon={Briefcase} />
         <Kpi label="High Match" value={opportunities.filter((j) => Number(j.match_score ?? j.score ?? 0) >= 80).length} icon={Sparkles} />
@@ -59,8 +71,8 @@ export function DashboardView() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card><CardHeader><CardTitle>Opportunity Sources</CardTitle></CardHeader><CardContent><SourceChart data={chartData.sources.length ? chartData.sources : [{ name: "No data", value: 1 }]} /></CardContent></Card>
         <Card><CardHeader><CardTitle>Match Score Distribution</CardTitle></CardHeader><CardContent><ScoreDistribution data={chartData.buckets} /></CardContent></Card>
-        <Card><CardHeader><CardTitle>Weekly Activity</CardTitle></CardHeader><CardContent><TrendChart data={[{ name: "Mon", value: 2 }, { name: "Tue", value: 4 }, { name: "Wed", value: opportunities.length }, { name: "Thu", value: 3 }, { name: "Fri", value: 6 }]} /></CardContent></Card>
-        <Card><CardHeader><CardTitle>Automation Statistics</CardTitle></CardHeader><CardContent><TrendChart data={[{ name: "Rules", value: rules.data?.length ?? 0 }, { name: "Runs", value: 0 }, { name: "Failures", value: 0 }]} /></CardContent></Card>
+        <Card><CardHeader><CardTitle>Weekly Activity</CardTitle></CardHeader><CardContent>{hasWeeklyData ? <TrendChart data={chartData.weekly} /> : <div className="py-12 text-center text-sm text-muted-foreground">No data available</div>}</CardContent></Card>
+        <Card><CardHeader><CardTitle>Automation Statistics</CardTitle></CardHeader><CardContent><TrendChart data={[{ name: "Rules", value: rules.data?.length ?? 0 }, { name: "Runs", value: runs.data?.length ?? 0 }, { name: "Failures", value: errors.data?.length ?? 0 }]} /></CardContent></Card>
       </div>
     </div>
   );

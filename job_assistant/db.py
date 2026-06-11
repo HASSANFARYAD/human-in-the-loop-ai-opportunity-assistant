@@ -88,6 +88,20 @@ def _run_migrations(con) -> None:
     )
     con.execute(
         """
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT,
+            ip_address TEXT,
+            user_agent TEXT
+        )
+        """
+    )
+    con.execute(
+        """
         CREATE TABLE IF NOT EXISTS automation_preferences (
             user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
             enabled INTEGER NOT NULL DEFAULT 0,
@@ -1098,6 +1112,17 @@ def init_db() -> None:
                 revoked_at TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                ip_address TEXT,
+                user_agent TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS automation_preferences (
                 user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
                 enabled INTEGER NOT NULL DEFAULT 0,
@@ -2060,6 +2085,77 @@ def revoke_session_token(token: str) -> None:
         return
     with connect() as con:
         con.execute("UPDATE user_sessions SET revoked_at=? WHERE token_hash=?", (utc_now(), _token_hash(token)))
+
+
+def _ensure_password_reset_table(con) -> None:
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT,
+            ip_address TEXT,
+            user_agent TEXT
+        )
+        """
+    )
+
+
+def create_password_reset_token(user_id: int, token: str, expires_at: str, ip_address: str = "", user_agent: str = "") -> int:
+    now = utc_now()
+    with connect() as con:
+        _ensure_password_reset_table(con)
+        cur = con.execute(
+            """
+            INSERT INTO password_reset_tokens(user_id, token_hash, created_at, expires_at, ip_address, user_agent)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (user_id, _token_hash(token), now, expires_at, ip_address, user_agent),
+        )
+        return int(cur.lastrowid)
+
+
+def get_password_reset_token(token: str) -> dict[str, Any]:
+    if not token:
+        return {}
+    now = utc_now()
+    token_hash = _token_hash(token)
+    with connect() as con:
+        _ensure_password_reset_table(con)
+        row = con.execute(
+            """
+            SELECT prt.*, u.email FROM password_reset_tokens prt
+            JOIN users u ON u.id = prt.user_id
+            WHERE prt.token_hash=?
+              AND prt.consumed_at IS NULL
+              AND prt.expires_at > ?
+              AND u.is_active=1
+            """,
+            (token_hash, now),
+        ).fetchone()
+        return dict(row) if row else {}
+
+
+def consume_password_reset_token(token_id: int) -> bool:
+    with connect() as con:
+        cur = con.execute(
+            "UPDATE password_reset_tokens SET consumed_at=? WHERE id=? AND consumed_at IS NULL",
+            (utc_now(), token_id),
+        )
+        return cur.rowcount == 1
+
+
+def update_user_password(user_id: int, password_hash: str) -> None:
+    with connect() as con:
+        con.execute("UPDATE users SET password_hash=?, updated_at=? WHERE id=?", (password_hash, utc_now(), user_id))
+
+
+def revoke_user_sessions(user_id: int) -> None:
+    with connect() as con:
+        con.execute("UPDATE user_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (utc_now(), user_id))
 
 
 def get_automation_preferences(user_id: int) -> dict[str, Any]:

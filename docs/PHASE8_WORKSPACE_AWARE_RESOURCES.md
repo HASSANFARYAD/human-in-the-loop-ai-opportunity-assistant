@@ -55,11 +55,11 @@ Validation performed:
 - Database migration smoke test
 - Workspace-scoped database CRUD test
 - FastAPI route test for jobs, feedback, integrations, providers, automation, and posts
-- Existing `scripts/smoke_test.py` still passes
+- Existing `python -m scripts.smoke_test` still passes
 
 ## Remaining recommended work
 
-- Update the Streamlit UI to expose workspace selectors consistently across every page.
+- Update the Next.js UI to expose workspace selectors consistently across every page.
 - Add permission enforcement per resource action, not only membership validation.
 - Convert compact SQLite helpers to SQLAlchemy repositories before full PostgreSQL runtime migration.
 - Add publishing approval workflow and provider-backed publishing execution.

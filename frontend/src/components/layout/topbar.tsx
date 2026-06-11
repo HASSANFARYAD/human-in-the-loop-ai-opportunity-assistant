@@ -2,9 +2,8 @@
 
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
-import { Laptop, LogOut, Moon, Search, Sun } from "lucide-react";
+import { Laptop, LogOut, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { authService } from "@/services/auth.service";
 import { useAuthStore } from "@/stores/auth-store";
 
@@ -15,10 +14,7 @@ export function Topbar() {
 
   return (
     <header className="glass-strong sticky top-0 z-20 flex h-16 items-center gap-3 border-b px-4">
-      <div className="relative max-w-xl flex-1">
-        <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-        <Input className="pl-9" placeholder="Search opportunities, automations, providers..." />
-      </div>
+      <div className="flex-1" />
       <Button
         variant="ghost"
         size="icon"

@@ -10,8 +10,7 @@ Evidence:
 - SQLite database initialization and migration logic exists in `job_assistant/db.py`.
 - Feedback system exists through:
   - `feedback` database table
-  - Streamlit Feedback page
-  - sidebar quick-feedback form
+  - frontend feedback UI
   - FastAPI `/api/v1/feedback` endpoints
 - Audit logging exists through:
   - `audit_logs` database table
@@ -38,7 +37,7 @@ Evidence:
 
 - Docker files exist:
   - `Dockerfile`
-  - `Dockerfile.streamlit`
+  - `frontend/Dockerfile`
   - `.dockerignore`
 - Compose files exist:
   - `docker-compose.yml`
@@ -56,7 +55,7 @@ Evidence:
   - `scripts/generate_secrets.py`
   - `scripts/backup_sqlite.py`
   - `scripts/restore_sqlite.py`
-  - `scripts/smoke_test.py`
+  - `python -m scripts.smoke_test`
 - Makefile shortcuts exist for setup, smoke test, Docker up/down, backup, and restore.
 
 Notes:
@@ -75,7 +74,7 @@ Evidence:
 - Provider CRUD API exists under `/api/v1/providers`.
 - Provider health API exists at `/api/v1/providers/health`.
 - Provider fallback execution API exists at `/api/v1/providers/execute`.
-- Streamlit Provider Registry UI exists inside the Integrations page.
+- Provider Registry UI exists inside the Next.js Integrations page.
 - Manual provider selection and priority ordering are supported through `platform`, `provider_name`, `priority`, and `is_active`.
 - Provider health scoring fields are stored:
   - success count
@@ -84,7 +83,7 @@ Evidence:
   - last success/failure time
   - last error
 - Provider create/update/delete actions are audit logged.
-- `scripts/smoke_test.py` verifies provider creation, health checks, and fallback routing.
+- `python -m scripts.smoke_test` verifies provider creation, health checks, and fallback routing.
 
 Notes:
 

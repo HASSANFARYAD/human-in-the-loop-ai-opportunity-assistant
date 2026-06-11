@@ -33,12 +33,12 @@ class Settings(BaseSettings):
 
     app_name: str = os.getenv("APP_NAME", "Job Application Assistant")
     app_version: str = os.getenv("APP_VERSION", "1.1.0")
-    app_base_url: str = os.getenv("APP_BASE_URL", "http://localhost:8501")
+    app_base_url: str = os.getenv("APP_BASE_URL", "http://localhost:3000")
+    frontend_base_url: str = os.getenv("FRONTEND_BASE_URL", os.getenv("APP_BASE_URL", "http://localhost:3000"))
     api_public_url: str = os.getenv("API_PUBLIC_URL", "http://localhost:8000")
 
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("API_PORT", "8000"))
-    streamlit_port: int = int(os.getenv("STREAMLIT_PORT", "8501"))
 
     app_data_dir: str = os.getenv("APP_DATA_DIR", "data")
     log_dir: str = os.getenv("LOG_DIR", "logs")
@@ -85,10 +85,20 @@ class Settings(BaseSettings):
 
     jwt_secret_key: str = os.getenv("JWT_SECRET_KEY", "dev-secret-key-change-in-prod")
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", str(60 * 24)))
+    access_token_expire_minutes: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15" if os.getenv("ENVIRONMENT") == "prod" else "60"))
     refresh_token_expire_days: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "30"))
     session_cookie_name: str = os.getenv("SESSION_COOKIE_NAME", "job_assistant_refresh")
     session_cookie_secure: bool = _bool_env("SESSION_COOKIE_SECURE", os.getenv("ENVIRONMENT", "dev") == "prod")
+    session_cookie_samesite: str = os.getenv("SESSION_COOKIE_SAMESITE", "lax").strip().lower()
+    session_cookie_path: str = os.getenv("SESSION_COOKIE_PATH", "/api/v1/auth")
+    password_reset_token_expire_minutes: int = int(os.getenv("PASSWORD_RESET_TOKEN_EXPIRE_MINUTES", "60"))
+    frontend_reset_password_url: str = os.getenv("FRONTEND_RESET_PASSWORD_URL", f"{os.getenv('FRONTEND_BASE_URL', os.getenv('APP_BASE_URL', 'http://localhost:3000')).rstrip('/')}/reset-password")
+    smtp_host: str = os.getenv("SMTP_HOST", "")
+    smtp_port: int = int(os.getenv("SMTP_PORT", "587"))
+    smtp_username: str = os.getenv("SMTP_USERNAME", "")
+    smtp_password: str = os.getenv("SMTP_PASSWORD", "")
+    smtp_from_email: str = os.getenv("SMTP_FROM_EMAIL", "")
+    smtp_use_tls: bool = _bool_env("SMTP_USE_TLS", True)
     app_encryption_key: Optional[str] = os.getenv("APP_ENCRYPTION_KEY")
 
     max_upload_size_mb: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "10"))
@@ -96,6 +106,7 @@ class Settings(BaseSettings):
     max_jobs_per_user_premium: int = int(os.getenv("MAX_JOBS_PER_USER_PREMIUM", "500"))
 
     cors_origins: str = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001")
+    cors_allow_credentials: bool = _bool_env("CORS_ALLOW_CREDENTIALS", True)
 
     class Config:
         case_sensitive = False
@@ -119,6 +130,10 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
 
+    @property
+    def session_cookie_max_age_seconds(self) -> int:
+        return self.refresh_token_expire_days * 24 * 60 * 60
+
     def ensure_runtime_dirs(self) -> None:
         Path(self.app_data_dir).mkdir(parents=True, exist_ok=True)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -131,12 +146,34 @@ class Settings(BaseSettings):
         if self.is_production:
             if not self.app_encryption_key:
                 warnings.append("APP_ENCRYPTION_KEY is required in production for encrypted user provider keys.")
-            if self.jwt_secret_key in {"dev-secret-key-change-in-prod", "change-me-before-production", ""}:
+            if self.jwt_secret_key in {"dev-secret-key-change-in-prod", "change-me-before-production", ""} or self.jwt_secret_key.startswith("change-me-"):
                 warnings.append("JWT_SECRET_KEY must be changed before production use.")
+            if len(self.jwt_secret_key) < 32:
+                warnings.append("JWT_SECRET_KEY should be at least 32 characters in production.")
             if "*" in self.cors_origin_list:
-                warnings.append("CORS_ORIGINS should be restricted in production.")
+                warnings.append("CORS_ORIGINS must not include wildcard origins in production.")
+            if not self.cors_origin_list or any(origin.startswith("http://") for origin in self.cors_origin_list):
+                warnings.append("CORS_ORIGINS should contain explicit HTTPS origins in production.")
+            if not self.cors_allow_credentials:
+                warnings.append("CORS_ALLOW_CREDENTIALS must be true in production so refresh cookies can be sent by the trusted frontend.")
             if not self.session_cookie_secure:
                 warnings.append("SESSION_COOKIE_SECURE should be true behind HTTPS in production.")
+            if self.session_cookie_samesite not in {"lax", "strict", "none"}:
+                warnings.append("SESSION_COOKIE_SAMESITE must be one of lax, strict, or none.")
+            if self.session_cookie_samesite == "none" and not self.session_cookie_secure:
+                warnings.append("SESSION_COOKIE_SAMESITE=none requires SESSION_COOKIE_SECURE=true.")
+            if not self.session_cookie_path.startswith("/api/v1/auth"):
+                warnings.append("SESSION_COOKIE_PATH should be scoped to /api/v1/auth in production.")
+            if self.access_token_expire_minutes > 15:
+                warnings.append("ACCESS_TOKEN_EXPIRE_MINUTES should be 15 or less in production.")
+            if self.password_reset_token_expire_minutes <= 0 or self.password_reset_token_expire_minutes > 120:
+                warnings.append("PASSWORD_RESET_TOKEN_EXPIRE_MINUTES should be between 1 and 120 in production.")
+            if not self.smtp_host or not self.smtp_from_email:
+                warnings.append("SMTP_HOST and SMTP_FROM_EMAIL are required in production for password recovery email.")
+            if not self.database_url or not self.database_url.startswith("postgres"):
+                warnings.append("DATABASE_URL should point to PostgreSQL in production; SQLite is only suitable for local/demo use.")
+            if self.rate_limits_enabled and self.rate_limit_backend.lower() == "sqlite":
+                warnings.append("RATE_LIMIT_BACKEND should use Redis or a gateway in production.")
         return warnings
 
     def public_runtime_info(self) -> dict:
@@ -153,6 +190,7 @@ class Settings(BaseSettings):
             "worker_backend": self.worker_backend,
             "publishing_dry_run": self.publishing_dry_run,
             "app_base_url": self.app_base_url,
+            "frontend_base_url": self.frontend_base_url,
             "api_public_url": self.api_public_url,
         }
 

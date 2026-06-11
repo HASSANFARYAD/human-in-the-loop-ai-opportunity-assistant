@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DataFields } from "@/components/ui/data-display";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { opportunityService } from "@/services/opportunity.service";
@@ -121,11 +122,6 @@ export function IntegrationsView() {
   const integrations = useQuery({ queryKey: ["integrations"], queryFn: () => providerService.integrations() });
   const providers = useQuery({ queryKey: ["providers"], queryFn: () => providerService.providers() });
   const providerHealth = useQuery({ queryKey: ["provider-health"], queryFn: () => providerService.health() });
-
-  if (tab === "providers") {
-    return <ProviderRegistry providers={providers.data ?? []} providerHealth={providerHealth.data ?? {}} />;
-  }
-
   const service = SERVICES.find((item) => item.service === selectedService) ?? SERVICES[0];
   const selected = getIntegration(integrations.data, service.service);
   const form = useIntegrationForm(selected);
@@ -153,11 +149,15 @@ export function IntegrationsView() {
     onError: (error) => toast.error(error.message),
   });
 
+  if (tab === "providers") {
+    return <ProviderRegistry providers={providers.data ?? []} providerHealth={providerHealth.data ?? {}} />;
+  }
+
   return (
     <div className="space-y-5">
       <div>
         <h1 className="text-2xl font-semibold">Integrations</h1>
-        <p className="text-sm text-muted-foreground">These forms mirror the working Streamlit integration flows and save to the same FastAPI contracts.</p>
+        <p className="text-sm text-muted-foreground">These forms save provider and integration settings through the FastAPI contracts.</p>
       </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         {SERVICES.map((item) => {
@@ -193,7 +193,7 @@ export function IntegrationsView() {
       </Card>
       <Card>
         <CardHeader><CardTitle>Saved Configuration</CardTitle></CardHeader>
-        <CardContent><pre className="overflow-auto rounded-md bg-muted p-4 text-xs">{JSON.stringify(selected ?? { service: service.service, has_api_key: false, config: {} }, null, 2)}</pre></CardContent>
+        <CardContent><DataFields data={(selected ?? { service: service.service, has_api_key: false, config: {} }) as unknown as Record<string, unknown>} /></CardContent>
       </Card>
     </div>
   );
@@ -454,7 +454,7 @@ function ProviderRegistry({ providers, providerHealth }: { providers: ProviderCo
   return (
     <div className="space-y-5">
       <div><h1 className="text-2xl font-semibold">Provider Registry</h1><p className="text-sm text-muted-foreground">Register user-owned providers by platform, priority, auth type, and encrypted credentials.</p></div>
-      <Card><CardHeader><CardTitle>Provider Health</CardTitle></CardHeader><CardContent><pre className="overflow-auto rounded-md bg-muted p-4 text-xs">{JSON.stringify(providerHealth, null, 2)}</pre></CardContent></Card>
+      <Card><CardHeader><CardTitle>Provider Health</CardTitle></CardHeader><CardContent><DataFields data={providerHealth} /></CardContent></Card>
       <Card>
         <CardHeader><CardTitle>Add or Update Provider</CardTitle></CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-3">

@@ -8,7 +8,7 @@ Implemented:
 - AI generation logging in `ai_generations`
 - Prompt version metadata in `prompt_versions`
 - API routes under `/api/v1/ai/*`
-- Streamlit AI usage and prompt version UI
+- AI usage and prompt version UI
 
 Human safety posture:
 
