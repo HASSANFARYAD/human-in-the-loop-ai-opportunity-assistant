@@ -170,8 +170,10 @@ class Settings(BaseSettings):
                 warnings.append("PASSWORD_RESET_TOKEN_EXPIRE_MINUTES should be between 1 and 120 in production.")
             if not self.smtp_host or not self.smtp_from_email:
                 warnings.append("SMTP_HOST and SMTP_FROM_EMAIL are required in production for password recovery email.")
-            if not self.database_url or not self.database_url.startswith("postgres"):
-                warnings.append("DATABASE_URL should point to PostgreSQL in production; SQLite is only suitable for local/demo use.")
+            if self.database_url and not self.database_url.startswith("postgres"):
+                warnings.append("DATABASE_URL should point to PostgreSQL when set. Leave it unset for SQLite deployments.")
+            if not self.database_url and not Path(self.db_path).is_absolute():
+                warnings.append("APP_DB_PATH should be an absolute path on persistent storage for production SQLite deployments.")
             if self.rate_limits_enabled and self.rate_limit_backend.lower() == "sqlite":
                 warnings.append("RATE_LIMIT_BACKEND should use Redis or a gateway in production.")
         return warnings

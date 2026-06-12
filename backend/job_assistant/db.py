@@ -1417,6 +1417,103 @@ def delete_job(job_id: int, user_id: int = 1, workspace_id: int | None = None) -
             add_audit_log(user_id, "opportunity.delete", "job", str(job_id), {}, con=con, workspace_id=row["workspace_id"], organization_id=row["organization_id"])
 
 
+JOB_DATA_TABLE_ORDER = [
+    "evaluations",
+    "application_materials",
+    "applications",
+    "reminders",
+    "resume_reviews",
+    "interview_prep_sessions",
+    "recordings",
+    "jobs",
+]
+
+
+def _table_exists(con, table_name: str) -> bool:
+    row = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def clear_job_data(user_id: int | None = None, *, dry_run: bool = True) -> dict[str, Any]:
+    """Clear generated opportunity/job data while preserving accounts and settings."""
+    with connect() as con:
+        job_filter_sql = "SELECT id FROM jobs"
+        params: list[Any] = []
+        if user_id is not None:
+            job_filter_sql += " WHERE user_id=?"
+            params.append(int(user_id))
+
+        job_ids = [int(row["id"]) for row in con.execute(job_filter_sql, params).fetchall()] if _table_exists(con, "jobs") else []
+        job_id_params: list[Any] = job_ids
+        placeholders = ",".join(["?"] * len(job_ids))
+        counts: dict[str, int] = {}
+
+        def count_rows(table: str, where_sql: str = "", where_params: list[Any] | None = None) -> int:
+            if not _table_exists(con, table):
+                return 0
+            sql = f"SELECT COUNT(*) AS count FROM {table}"
+            if where_sql:
+                sql += f" WHERE {where_sql}"
+            return int(con.execute(sql, where_params or []).fetchone()["count"] or 0)
+
+        counts["evaluations"] = count_rows("evaluations", f"job_id IN ({placeholders})", job_id_params) if job_ids else 0
+        counts["application_materials"] = count_rows("application_materials", f"job_id IN ({placeholders})", job_id_params) if job_ids else 0
+        counts["applications"] = count_rows("applications", f"job_id IN ({placeholders})", job_id_params) if job_ids else 0
+        counts["reminders"] = count_rows("reminders", f"job_id IN ({placeholders})", job_id_params) if job_ids else 0
+        if user_id is None:
+            counts["resume_reviews"] = count_rows("resume_reviews")
+            counts["interview_prep_sessions"] = count_rows("interview_prep_sessions")
+            counts["recordings"] = count_rows("recordings")
+            counts["jobs"] = count_rows("jobs")
+        else:
+            counts["resume_reviews"] = count_rows("resume_reviews", "user_id=?", [int(user_id)])
+            counts["interview_prep_sessions"] = count_rows("interview_prep_sessions", "user_id=?", [int(user_id)])
+            counts["recordings"] = count_rows("recordings", "user_id=?", [int(user_id)])
+            counts["jobs"] = count_rows("jobs", "user_id=?", [int(user_id)])
+
+        result = {
+            "dry_run": dry_run,
+            "user_id": user_id,
+            "tables": counts,
+            "total_rows": sum(counts.values()),
+            "preserved": [
+                "users",
+                "profile",
+                "user_sessions",
+                "password_reset_tokens",
+                "integration_settings",
+                "provider_configs",
+                "automation_preferences",
+                "organizations",
+                "workspaces",
+                "workspace_members",
+            ],
+        }
+        if dry_run:
+            return result
+
+        if job_ids:
+            con.execute(f"DELETE FROM evaluations WHERE job_id IN ({placeholders})", job_id_params)
+            con.execute(f"DELETE FROM application_materials WHERE job_id IN ({placeholders})", job_id_params)
+            con.execute(f"DELETE FROM applications WHERE job_id IN ({placeholders})", job_id_params)
+            con.execute(f"DELETE FROM reminders WHERE job_id IN ({placeholders})", job_id_params)
+        if user_id is None:
+            con.execute("DELETE FROM resume_reviews")
+            con.execute("DELETE FROM interview_prep_sessions")
+            con.execute("DELETE FROM recordings")
+            con.execute("DELETE FROM jobs")
+        else:
+            con.execute("DELETE FROM resume_reviews WHERE user_id=?", (int(user_id),))
+            con.execute("DELETE FROM interview_prep_sessions WHERE user_id=?", (int(user_id),))
+            con.execute("DELETE FROM recordings WHERE user_id=?", (int(user_id),))
+            con.execute("DELETE FROM jobs WHERE user_id=?", (int(user_id),))
+        result["deleted"] = counts
+        return result
+
+
 def save_integration_settings(
     user_id: int,
     service: str,

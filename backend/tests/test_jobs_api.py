@@ -58,6 +58,16 @@ def _create_minimal_schema(db_path) -> None:
                 expires_at TEXT NOT NULL,
                 revoked_at TEXT
             );
+            CREATE TABLE integration_settings (
+                user_id INTEGER NOT NULL,
+                workspace_id INTEGER NOT NULL DEFAULT 1,
+                organization_id INTEGER,
+                service TEXT NOT NULL,
+                api_key TEXT,
+                config_json TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(user_id, workspace_id, service)
+            );
             CREATE TABLE organizations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -368,6 +378,63 @@ def test_delete_job_removes_related_rows(tmp_path, monkeypatch):
             "recordings",
         ]:
             assert con.execute(f"SELECT COUNT(*) FROM {table} WHERE {'id' if table == 'jobs' else 'job_id'}=?", (job_id,)).fetchone()[0] == 0
+
+
+def test_clear_job_data_preserves_account_profile_and_settings(tmp_path, monkeypatch):
+    client, headers = _client(tmp_path, monkeypatch)
+    from job_assistant.db import (
+        clear_job_data,
+        create_reminder,
+        get_user_by_email,
+        insert_job,
+        save_evaluation,
+        save_integration_settings,
+        save_interview_prep,
+        save_materials,
+        save_recording,
+        save_resume_review,
+    )
+
+    user_id = get_user_by_email("jobs@example.com")["id"]
+    _seed_profile(user_id)
+    save_integration_settings(user_id, "openai", "test-key", {"model": "gpt-test"})
+    job_id = insert_job(_job_payload("Clear Me", "job"), user_id)
+    save_evaluation(job_id, {"match_score": 80, "priority": "High"}, user_id)
+    save_materials(job_id, {"cover_letter": "Hello"}, user_id)
+    create_reminder(job_id, "follow_up", "2000-01-01T00:00:00+00:00", "Check", user_id)
+    save_resume_review(user_id, {"summary": "Review"}, job_id)
+    save_resume_review(user_id, {"summary": "Profile review"}, None)
+    save_interview_prep(user_id, job_id, {"summary": "Prep"})
+    save_recording(user_id, {"title": "Recording", "mime_type": "audio/webm", "data_url": "data:audio/webm;base64,AA=="}, job_id)
+
+    dry_run = clear_job_data(user_id=user_id)
+    assert dry_run["dry_run"] is True
+    assert dry_run["tables"]["jobs"] == 1
+    assert dry_run["tables"]["resume_reviews"] == 2
+
+    with sqlite3.connect(tmp_path / "jobs.sqlite3") as con:
+        assert con.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
+
+    result = clear_job_data(user_id=user_id, dry_run=False)
+    assert result["dry_run"] is False
+    assert result["deleted"]["jobs"] == 1
+
+    with sqlite3.connect(tmp_path / "jobs.sqlite3") as con:
+        for table in [
+            "jobs",
+            "evaluations",
+            "application_materials",
+            "applications",
+            "reminders",
+            "resume_reviews",
+            "interview_prep_sessions",
+            "recordings",
+        ]:
+            assert con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+        assert con.execute("SELECT COUNT(*) FROM users WHERE id=?", (user_id,)).fetchone()[0] == 1
+        assert con.execute("SELECT COUNT(*) FROM user_sessions WHERE user_id=?", (user_id,)).fetchone()[0] == 1
+        assert con.execute("SELECT COUNT(*) FROM profile WHERE user_id=?", (user_id,)).fetchone()[0] == 1
+        assert con.execute("SELECT COUNT(*) FROM integration_settings WHERE user_id=?", (user_id,)).fetchone()[0] == 1
 
 
 def test_batch_scoring_score_all_unscored_targets_only_job_like_content(tmp_path, monkeypatch):
