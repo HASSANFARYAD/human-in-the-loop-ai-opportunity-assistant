@@ -5,6 +5,7 @@ from typing import Any
 
 from job_assistant.db import insert_job, job_url_exists
 from job_assistant.services.opportunity_classifier import (
+    JOB_LIKE_CATEGORIES,
     VALID_OPPORTUNITY_CATEGORIES,
     annotate_opportunity,
     extract_opportunities_from_container,
@@ -55,6 +56,12 @@ def import_opportunities(
                 result.warnings.append(
                     f"{item.get('title') or item.get('subject') or 'Source item'} skipped: {annotated.get('blocked_reason') or annotated.get('classification_reason')}"
                 )
+            continue
+        if annotated.get("classification") not in JOB_LIKE_CATEGORIES and annotated.get("opportunity_type") not in JOB_LIKE_CATEGORIES:
+            result.skipped_non_opportunities += 1
+            result.warnings.append(
+                f"{item.get('title') or item.get('subject') or 'Source item'} skipped: only jobs, internships, contracts, and freelance roles can be saved."
+            )
             continue
         expanded.append(annotated)
 

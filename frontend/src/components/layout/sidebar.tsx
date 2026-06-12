@@ -4,56 +4,42 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Activity,
   BarChart3,
   Bot,
   Briefcase,
-  Building2,
   ChevronDown,
   ClipboardList,
-  Database,
   Gauge,
-  HeartPulse,
   Inbox,
-  KeyRound,
-  ListChecks,
   Mail,
-  Network,
-  UserRound,
   Settings,
-  ShieldCheck,
   Sparkles,
   Upload,
-  Users,
-  Workflow,
+  UserRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const groups = [
-  { label: "Overview", items: [{ href: "/dashboard", label: "Dashboard", icon: Gauge }, { href: "/activity", label: "Activity Feed", icon: Activity }] },
+  { label: "Overview", items: [{ href: "/dashboard", label: "Dashboard", icon: Gauge }, { href: "/analytics", label: "Insights", icon: BarChart3 }] },
   {
-    label: "Opportunities",
+    label: "Jobs",
     items: [
-      { href: "/opportunities", label: "All Opportunities", icon: Briefcase },
-      { href: "/review-queue", label: "Review Queue", icon: ListChecks },
-      { href: "/ai", label: "AI Scoring", icon: Sparkles },
+      { href: "/opportunities", label: "All Jobs", icon: Briefcase },
+      { href: "/opportunities?source=public", label: "Find Jobs", icon: Sparkles },
+      { href: "/opportunities?import=manual", label: "Add Job", icon: Upload },
       { href: "/opportunities?materials=true", label: "Application Materials", icon: ClipboardList },
       { href: "/opportunities?reminders=true", label: "Reminders", icon: Inbox },
     ],
   },
   {
-    label: "Discovery",
+    label: "Profile",
     items: [
-      { href: "/opportunities?import=manual", label: "Manual Import", icon: Upload },
-      { href: "/opportunities?source=public", label: "Public Discovery", icon: Network },
+      { href: "/settings?tab=profile", label: "Resume Profile", icon: UserRound },
+      { href: "/integrations?service=ai_provider", label: "AI Provider", icon: Bot },
       { href: "/integrations?service=gmail", label: "Gmail Import", icon: Mail },
-      { href: "/integrations?service=apify", label: "Apify Import", icon: Bot },
+      { href: "/settings", label: "Settings", icon: Settings },
     ],
   },
-  { label: "Automation", items: [{ href: "/automation", label: "Rules", icon: Workflow }, { href: "/automation?tab=runs", label: "Runs", icon: Activity }, { href: "/automation?tab=errors", label: "Activity", icon: HeartPulse }] },
-  { label: "Integrations", items: [{ href: "/integrations?service=ai_provider", label: "AI Providers", icon: Bot }, { href: "/integrations?service=gmail", label: "Gmail", icon: Mail }, { href: "/integrations?service=linkedin", label: "LinkedIn", icon: Briefcase }, { href: "/integrations?service=rapidapi_linkedin", label: "RapidAPI", icon: KeyRound }, { href: "/integrations?service=apify", label: "Apify", icon: Database }, { href: "/integrations?tab=providers", label: "Provider Registry", icon: Network }] },
-  { label: "Team", items: [{ href: "/team", label: "Workspaces", icon: Building2 }, { href: "/team?tab=members", label: "Members", icon: Users }, { href: "/team?tab=organizations", label: "Organizations", icon: ShieldCheck }] },
-  { label: "System", items: [{ href: "/settings?tab=profile", label: "Profile", icon: UserRound }, { href: "/settings?tab=feedback", label: "Feedback", icon: Inbox }, { href: "/settings?tab=audit", label: "Audit Logs", icon: ShieldCheck }, { href: "/settings?tab=usage", label: "Usage", icon: BarChart3 }, { href: "/settings?tab=health", label: "Health", icon: HeartPulse }, { href: "/settings", label: "Settings", icon: Settings }] },
 ];
 
 export function Sidebar() {
@@ -87,10 +73,10 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="glass-strong sticky top-0 hidden h-dvh w-72 shrink-0 flex-col overflow-hidden border-r lg:flex">
+    <aside className="glass-strong sticky top-0 hidden h-dvh w-64 shrink-0 flex-col overflow-hidden border-r xl:w-72 lg:flex">
       <Link href="/dashboard" className="glass-subtle flex h-16 shrink-0 items-center gap-3 border-b px-6">
         <span className="grid h-9 w-9 place-items-center rounded-md bg-primary text-primary-foreground"><Sparkles className="h-5 w-5" /></span>
-        <span className="font-semibold">Opportunity AI</span>
+        <span className="font-semibold">Job Assistant</span>
       </Link>
       <nav className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4">
         {groups.map((group) => (
@@ -122,5 +108,37 @@ export function Sidebar() {
         ))}
       </nav>
     </aside>
+  );
+}
+
+export function MobileNav() {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const currentHref = useMemo(() => {
+    const query = searchParams.toString();
+    return query ? `${pathname}?${query}` : pathname;
+  }, [pathname, searchParams]);
+  const items = groups.flatMap((group) => group.items).slice(0, 8);
+
+  return (
+    <nav className="glass-strong sticky top-16 z-10 flex gap-2 overflow-x-auto border-b px-3 py-2 lg:hidden">
+      {items.map((item) => {
+        const active = currentHref === item.href || (item.href === pathname && !searchParams.toString());
+        const Icon = item.icon;
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            className={cn(
+              "flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm text-muted-foreground transition hover:bg-white/30 hover:text-foreground dark:hover:bg-white/10",
+              active && "glass-subtle text-foreground",
+            )}
+          >
+            <Icon className="h-4 w-4 shrink-0" />
+            <span>{item.label}</span>
+          </Link>
+        );
+      })}
+    </nav>
   );
 }

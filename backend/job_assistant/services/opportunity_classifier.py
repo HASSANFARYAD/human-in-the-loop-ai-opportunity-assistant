@@ -17,6 +17,7 @@ VALID_OPPORTUNITY_CATEGORIES = {
     "grant",
     "scholarship",
 }
+JOB_LIKE_CATEGORIES = {"job", "internship", "contract", "freelance"}
 NON_OPPORTUNITY_CATEGORIES = {
     "newsletter",
     "blog_post",
@@ -27,6 +28,12 @@ NON_OPPORTUNITY_CATEGORIES = {
     "unknown",
 }
 SUPPORTED_CLASSIFICATIONS = VALID_OPPORTUNITY_CATEGORIES | NON_OPPORTUNITY_CATEGORIES
+
+
+def is_job_like(item: dict[str, Any]) -> bool:
+    classification = str(item.get("classification") or item.get("opportunity_type") or "").strip().lower()
+    opportunity_type = str(item.get("opportunity_type") or "").strip().lower()
+    return classification in JOB_LIKE_CATEGORIES or opportunity_type in JOB_LIKE_CATEGORIES
 
 JOB_EVIDENCE = (
     "apply now",

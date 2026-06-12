@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Suspense } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Sidebar } from "@/components/layout/sidebar";
+import { MobileNav, Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 import { authService } from "@/services/auth.service";
 import { workspaceService } from "@/services/workspace.service";
@@ -53,13 +53,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   if (!authReady) return null;
 
   return (
-    <div className="flex min-h-screen bg-transparent">
+    <div className="flex min-h-screen overflow-x-hidden bg-transparent">
       <Suspense fallback={null}>
         <Sidebar />
       </Suspense>
-      <div className="min-w-0 flex-1">
+      <div className="flex min-w-0 flex-1 flex-col">
         <Topbar />
-        <main className="mx-auto w-full max-w-7xl p-4 md:p-6">{children}</main>
+        <Suspense fallback={null}>
+          <MobileNav />
+        </Suspense>
+        <main className="mx-auto w-full min-w-0 max-w-7xl flex-1 p-4 md:p-6">{children}</main>
       </div>
     </div>
   );

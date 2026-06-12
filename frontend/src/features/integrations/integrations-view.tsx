@@ -28,7 +28,7 @@ const AI_PROVIDERS = [
 
 const AI_PROVIDER_DEFAULTS: Record<string, Record<string, string>> = {
   openai: { model: "gpt-4o-mini", base_url: "" },
-  azure_openai: { model: "gpt-4o-mini", endpoint: "", api_version: "2024-10-21", deployment: "" },
+  azure_openai: { model: "Kimi-K2.5", endpoint: "", api_version: "2024-10-21", deployment: "" },
   grok: { model: "grok-3-mini", base_url: "https://api.x.ai/v1" },
   claude: { model: "claude-3-5-sonnet-latest" },
   gemini: { model: "gemini-1.5-pro" },
@@ -37,7 +37,7 @@ const AI_PROVIDER_DEFAULTS: Record<string, Record<string, string>> = {
 
 const AI_PROVIDER_MODEL_FALLBACKS: Record<string, string[]> = {
   openai: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"],
-  azure_openai: ["gpt-4o-mini", "gpt-4o"],
+  azure_openai: ["Kimi-K2.5"],
   grok: ["grok-3-mini", "grok-3", "grok-2-latest"],
   claude: ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"],
   gemini: ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"],

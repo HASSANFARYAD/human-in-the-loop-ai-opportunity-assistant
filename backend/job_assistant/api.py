@@ -106,6 +106,7 @@ from job_assistant.services.opportunity_classifier import (
     VALID_OPPORTUNITY_CATEGORIES,
     annotate_opportunity,
     extract_opportunities_from_container,
+    is_job_like,
     scoring_gate,
 )
 from job_assistant.services.job_source_scrapers import ScraperError, UnsupportedSourceUrl, indeed_url_with_work_location_intent, get_scraper_for_url, is_job_listing_url
@@ -267,6 +268,13 @@ class DiscoveryPublicIn(BaseModel):
     location: str = ""
     keywords: str = ""
     country: str = ""
+
+
+class DiscoveryFromProfileIn(BaseModel):
+    sources: list[str] = Field(default_factory=list)
+    limit_per_source: int = 10
+    save_results: bool = False
+    score_results: bool = True
 
 
 class DiscoveryImportIn(BaseModel):
@@ -1356,9 +1364,10 @@ async def update_profile(profile_data: ProfileCreate, user: dict = Depends(curre
 
 
 @router.get("/jobs")
-async def list_all_jobs(workspace_id: Optional[int] = None, user: dict = Depends(current_user)):
+async def list_all_jobs(workspace_id: Optional[int] = None, content_type: str = "job", type: Optional[str] = None, user: dict = Depends(current_user)):
     try:
-        jobs = list_jobs(user["id"], workspace_id=workspace_id)
+        requested_type = type or content_type or "job"
+        jobs = list_jobs(user["id"], workspace_id=workspace_id, content_type=requested_type)
         return jobs
     except Exception as e:
         logger.error(f"Error listing jobs: {e}")
@@ -1398,6 +1407,47 @@ def _filter_discovered_opportunities(items: list[dict[str, Any]], payload: Disco
             item["opportunity_type"] = payload.opportunity_type
         filtered.append(item)
     return filtered
+
+
+def _profile_has_resume_context(profile: dict[str, Any] | None) -> bool:
+    if not profile:
+        return False
+    return any(str(profile.get(key) or "").strip() for key in ["cv_text", "skills", "target_roles", "preferred_role"])
+
+
+def _profile_search_terms(profile: dict[str, Any]) -> tuple[str, list[str]]:
+    role_text = str(profile.get("preferred_role") or profile.get("target_roles") or "").strip()
+    skills = [
+        part.strip()
+        for part in re.split(r",|\n|;", str(profile.get("skills") or ""))
+        if len(part.strip()) >= 2
+    ]
+    industries = [
+        part.strip()
+        for part in re.split(r",|\n|;", str(profile.get("industries") or ""))
+        if len(part.strip()) >= 2
+    ]
+    fallback_resume_terms = [
+        term
+        for term in re.findall(r"[A-Za-z][A-Za-z0-9+.#-]{2,}", str(profile.get("cv_text") or ""))
+        if term.lower() not in {"and", "the", "with", "for", "from", "that", "this", "resume", "experience"}
+    ][:8]
+    terms: list[str] = []
+    if role_text:
+        terms.extend(role_text.split()[:5])
+    terms.extend(skills[:5])
+    terms.extend(industries[:2])
+    if not terms:
+        terms.extend(fallback_resume_terms[:6])
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(term)
+    return " ".join(deduped[:8]).strip(), deduped[:12]
 
 
 @router.post("/discovery/extract")
@@ -1479,10 +1529,93 @@ async def discovery_public(payload: DiscoveryPublicIn, user: dict = Depends(curr
     try:
         sources = payload.sources or ["RemoteJobs.org", "Arbeitnow", "Remotive", "Jobicy", "Hacker News Who is hiring"]
         opportunities = [annotate_opportunity(item) for item in discover_public_opportunities(payload.query, sources, payload.limit_per_source)]
+        if payload.opportunity_type in {"auto", "job"}:
+            opportunities = [item for item in opportunities if is_job_like(item)]
         return {"status": "success", "opportunities": _filter_discovered_opportunities(opportunities, payload)}
     except Exception as e:
         logger.error(f"Error discovering public opportunities: {e}")
         raise HTTPException(status_code=502, detail=f"Public discovery failed: {e}")
+
+
+@router.post("/discovery/from-profile")
+async def discovery_from_profile(payload: DiscoveryFromProfileIn, user: dict = Depends(current_user)):
+    profile = get_profile(user["id"])
+    if not _profile_has_resume_context(profile):
+        raise HTTPException(status_code=400, detail="Add resume or profile details before finding jobs.")
+
+    query, keywords = _profile_search_terms(profile or {})
+    if not query:
+        raise HTTPException(status_code=400, detail="No useful search terms were found in your profile.")
+
+    sources = payload.sources or ["RemoteJobs.org", "Arbeitnow", "Remotive", "Jobicy", "Hacker News Who is hiring"]
+    try:
+        raw = discover_public_opportunities(query, sources, payload.limit_per_source)
+    except Exception as exc:
+        logger.error("Profile-based job discovery failed for user %s: %s", user["id"], exc)
+        raise HTTPException(status_code=502, detail=f"Public discovery failed: {exc}")
+
+    opportunities = [annotate_opportunity(item) for item in raw]
+    opportunities = [item for item in opportunities if is_job_like(item)]
+    if not opportunities:
+        return {
+            "status": "success",
+            "query": query,
+            "keywords": keywords,
+            "opportunities": [],
+            "found": 0,
+            "imported": 0,
+            "scored": 0,
+            "using_fallback_scoring": ai_orchestrator.resolve_route(user["id"], task_type="opportunity_scoring").source == "fallback",
+            "message": "No jobs were found from your profile search terms.",
+        }
+
+    using_fallback_scoring = ai_orchestrator.resolve_route(user["id"], task_type="opportunity_scoring").source == "fallback"
+    scored = 0
+    if payload.score_results:
+        for opportunity in opportunities:
+            try:
+                evaluation = score_job(profile or {}, opportunity, user_id=user["id"])
+                opportunity["evaluation"] = evaluation
+                opportunity["match_score"] = evaluation.get("match_score")
+                opportunity["score"] = evaluation.get("match_score")
+                scored += 1
+            except Exception as exc:
+                opportunity["scoring_error"] = str(exc)
+                logger.warning("Profile discovery scoring failed user_id=%s title=%s error=%s", user["id"], opportunity.get("title"), exc)
+    opportunities.sort(key=lambda item: int(item.get("match_score") or -1), reverse=True)
+
+    imported = 0
+    imported_ids: list[int] = []
+    warnings: list[str] = []
+    errors: list[str] = []
+    if payload.save_results:
+        import_result = import_opportunities(opportunities, user["id"])
+        imported = import_result.imported
+        imported_ids = import_result.ids
+        warnings = import_result.warnings
+        errors = import_result.errors
+        if payload.score_results and imported_ids:
+            saved_jobs = [get_job(job_id, user["id"]) for job_id in imported_ids]
+            for saved_job in [job for job in saved_jobs if job]:
+                try:
+                    evaluation = score_job(profile or {}, saved_job, user_id=user["id"])
+                    save_evaluation(int(saved_job["id"]), evaluation, user["id"])
+                except Exception as exc:
+                    logger.warning("Profile discovery saved-job scoring failed user_id=%s job_id=%s error=%s", user["id"], saved_job.get("id"), exc)
+
+    return {
+        "status": "success" if not errors else "partial_success",
+        "query": query,
+        "keywords": keywords,
+        "opportunities": opportunities,
+        "found": len(opportunities),
+        "imported": imported,
+        "ids": imported_ids,
+        "scored": scored,
+        "using_fallback_scoring": using_fallback_scoring,
+        "warnings": warnings,
+        "errors": errors,
+    }
 
 
 @router.post("/discovery/rapidapi-linkedin")
@@ -1501,7 +1634,8 @@ async def discovery_rapidapi_linkedin(payload: DiscoveryRapidApiIn, user: dict =
             config.get("host", ""),
             config.get("endpoint", ""),
         )
-        return {"status": "success", "opportunities": [annotate_opportunity(item) for item in rapidapi_items_to_opportunities(items)], "raw_count": len(items)}
+        opportunities = [annotate_opportunity(item) for item in rapidapi_items_to_opportunities(items)]
+        return {"status": "success", "opportunities": [item for item in opportunities if is_job_like(item)], "raw_count": len(items)}
     except Exception as e:
         logger.error(f"Error searching RapidAPI LinkedIn jobs: {e}")
         raise HTTPException(status_code=502, detail=f"LinkedIn API search failed: {e}")
@@ -1519,7 +1653,7 @@ async def discovery_apify(payload: DiscoveryApifyIn, user: dict = Depends(curren
         run_input = build_run_input(payload.url, config.get("input_template", ""))
         items = run_actor_for_items(api_key, actor_id, run_input)
         opportunities = [annotate_opportunity(item) for item in apify_items_to_opportunities(items, source=f"Apify:{actor_id}")]
-        return {"status": "success", "opportunities": opportunities, "raw_count": len(items)}
+        return {"status": "success", "opportunities": [item for item in opportunities if is_job_like(item)], "raw_count": len(items)}
     except Exception as e:
         logger.error(f"Error running Apify discovery: {e}")
         raise HTTPException(status_code=502, detail=f"Apify scraper failed: {e}")
@@ -1618,8 +1752,13 @@ async def get_job_detail(job_id: int, workspace_id: Optional[int] = None, user: 
 @router.delete("/jobs/{job_id}")
 async def delete_job_endpoint(job_id: int, workspace_id: Optional[int] = None, user: dict = Depends(current_user)):
     try:
+        job = get_job(job_id, user["id"], workspace_id=workspace_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
         delete_job(job_id, user["id"], workspace_id=workspace_id)
-        return {"status": "success", "message": "Opportunity deleted"}
+        return {"status": "success", "message": "Job deleted"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error deleting job: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete job")
@@ -1653,41 +1792,88 @@ async def score_single_job(job_id: int, user: dict = Depends(current_user)):
 async def score_jobs_batch(payload: BatchScoreIn, user: dict = Depends(current_user)):
     profile = get_profile(user["id"])
     if not profile:
-        raise HTTPException(status_code=400, detail="Profile not configured")
-    candidate_jobs = list_jobs(user["id"])
-    ids = payload.job_ids
+        raise HTTPException(status_code=400, detail="Add your resume profile before scoring jobs.")
+
+    candidate_jobs = list_jobs(user["id"], content_type="job")
+    ids = [int(job_id) for job_id in payload.job_ids]
     if payload.score_all_unscored:
         ids = [int(job["id"]) for job in candidate_jobs if job.get("match_score") is None]
     if not ids:
-        raise HTTPException(status_code=400, detail="No jobs selected for scoring")
+        detail = "No unscored jobs are available for scoring." if payload.score_all_unscored else "Select at least one job to score."
+        raise HTTPException(status_code=400, detail=detail)
+
+    route = ai_orchestrator.resolve_route(user["id"], task_type="opportunity_scoring")
+    using_fallback_scoring = route.source == "fallback"
+    logger.info(
+        "Starting bulk job scoring user_id=%s requested=%s score_all_unscored=%s fallback_scoring=%s",
+        user["id"],
+        len(ids),
+        payload.score_all_unscored,
+        using_fallback_scoring,
+    )
     results = []
     for job_id in ids:
         try:
             job = get_job(int(job_id), user["id"])
             if not job:
                 results.append({"job_id": job_id, "status": "failed", "error": "Job not found"})
+                logger.warning("Bulk scoring failed: job not found user_id=%s job_id=%s", user["id"], job_id)
+                continue
+            title = str(job.get("title") or f"Job {job_id}")
+            if not is_job_like(job):
+                reason = "Only jobs, internships, contracts, and freelance roles can be bulk scored."
+                results.append({
+                    "job_id": job_id,
+                    "title": title,
+                    "status": "skipped",
+                    "classification": job.get("classification") or job.get("opportunity_type") or "unknown",
+                    "reason": reason,
+                })
+                logger.info("Bulk scoring skipped non-job user_id=%s job_id=%s reason=%s", user["id"], job_id, reason)
+                continue
+            if not str(job.get("description") or job.get("raw_text") or "").strip():
+                reason = "Job description is missing."
+                results.append({"job_id": job_id, "title": title, "status": "skipped", "reason": reason})
+                logger.info("Bulk scoring skipped missing description user_id=%s job_id=%s", user["id"], job_id)
                 continue
             gate = scoring_gate(job)
             if not gate.importable:
+                reason = gate.blocked_reason or gate.reason or "This saved item is not ready to score."
                 results.append({
                     "job_id": job_id,
-                    "status": "skipped_non_opportunity",
+                    "title": title,
+                    "status": "skipped",
                     "classification": gate.classification,
-                    "reason": gate.blocked_reason or gate.reason,
+                    "reason": reason,
                 })
+                logger.info("Bulk scoring skipped gated job user_id=%s job_id=%s reason=%s", user["id"], job_id, reason)
                 continue
             evaluation = score_job(profile, job, user_id=user["id"])
             save_evaluation(int(job_id), evaluation, user["id"])
-            results.append({"job_id": job_id, "status": "success", "evaluation": evaluation})
+            results.append({"job_id": job_id, "title": title, "status": "success", "evaluation": evaluation})
         except Exception as exc:
             logger.error("Batch scoring failed for job %s: %s", job_id, exc)
             results.append({"job_id": job_id, "status": "failed", "error": str(exc)})
+    succeeded = len([item for item in results if item["status"] == "success"])
+    skipped = len([item for item in results if item["status"] == "skipped"])
+    failed = len([item for item in results if item["status"] == "failed"])
+    logger.info(
+        "Bulk job scoring completed user_id=%s requested=%s scored=%s skipped=%s failed=%s",
+        user["id"],
+        len(ids),
+        succeeded,
+        skipped,
+        failed,
+    )
     return {
-        "status": "success" if all(item["status"] == "success" for item in results) else "partial_success",
+        "status": "success" if failed == 0 and skipped == 0 else "partial_success",
         "total": len(results),
-        "succeeded": len([item for item in results if item["status"] == "success"]),
-        "skipped": len([item for item in results if item["status"].startswith("skipped")]),
-        "failed": len([item for item in results if item["status"] == "failed"]),
+        "total_requested": len(ids),
+        "succeeded": succeeded,
+        "scored": succeeded,
+        "skipped": skipped,
+        "failed": failed,
+        "using_fallback_scoring": using_fallback_scoring,
         "results": results,
     }
 
@@ -1720,6 +1906,110 @@ def _generate_resume_review(profile: dict[str, Any], job: dict[str, Any] | None,
         ],
         "improved_resume_response": "Draft improvement: emphasize measurable outcomes, relevant tools, and the exact target role in the summary and first experience section.",
     }
+
+
+def _keywords_from_job(job: dict[str, Any]) -> list[str]:
+    text = " ".join(str(job.get(key) or "") for key in ["title", "description", "raw_text"])
+    important = [
+        term
+        for term in re.findall(r"[A-Za-z][A-Za-z0-9+.#-]{2,}", text)
+        if term.lower() not in {"and", "the", "with", "for", "from", "that", "this", "you", "our", "are", "will", "role", "job"}
+    ]
+    seen: set[str] = set()
+    keywords: list[str] = []
+    for term in important:
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        keywords.append(term)
+    return keywords[:18]
+
+
+def _generate_tailored_resume(profile: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
+    role = job.get("title") or "target role"
+    company = job.get("company") or "the company"
+    skills = [part.strip() for part in re.split(r",|\n|;", str(profile.get("skills") or "")) if part.strip()]
+    keywords = _keywords_from_job(job)
+    emphasized_skills = [skill for skill in skills if skill.lower() in " ".join(keywords).lower()] or skills[:8] or keywords[:8]
+    summary = (
+        f"{profile.get('years_experience') or 'Experienced'} professional targeting {role} at {company}, "
+        f"with hands-on experience in {', '.join(emphasized_skills[:5]) or 'the role requirements'}."
+    )
+    bullets = [
+        f"Delivered work aligned with {role} requirements using {', '.join(emphasized_skills[:4]) or 'relevant tools and practices'}.",
+        "Translated business and user needs into maintainable, measurable solutions.",
+        "Collaborated across stakeholders to ship reliable improvements and communicate tradeoffs clearly.",
+    ]
+    draft = "\n".join(
+        [
+            "Professional Summary",
+            summary,
+            "",
+            "Selected Experience Bullets",
+            *[f"- {bullet}" for bullet in bullets],
+            "",
+            "Skills",
+            ", ".join(emphasized_skills[:12] or keywords[:12]),
+        ]
+    )
+    return {
+        "type": "tailored_resume",
+        "target_role": role,
+        "company": company,
+        "tailored_summary": summary,
+        "tailored_experience_bullets": bullets,
+        "skills_to_emphasize": emphasized_skills[:12],
+        "keywords_to_include": keywords,
+        "optional_cover_note": f"I am interested in the {role} role at {company} because my background maps directly to the job's core responsibilities.",
+        "application_guidance": [
+            "Keep claims grounded in your real resume and project history.",
+            "Add metrics to the bullets before submitting.",
+            "Mirror the most relevant job keywords where they truthfully match your experience.",
+        ],
+        "resume_draft": draft,
+        "generation_source": "local_fallback",
+    }
+
+
+def _llm_tailored_resume(profile: dict[str, Any], job: dict[str, Any], user_id: int) -> dict[str, Any]:
+    fallback = _generate_tailored_resume(profile, job)
+    route = ai_orchestrator.resolve_route(user_id, task_type="resume_tailoring")
+    system = (
+        "You are an expert resume writer. Return JSON only. Create a truthful tailored resume draft grounded only in "
+        "the supplied resume/profile and job description. Do not invent employers, degrees, certifications, metrics, or credentials."
+    )
+    context = {
+        "resume_text": profile.get("cv_text") or "",
+        "profile": profile,
+        "job": {
+            "title": job.get("title"),
+            "company": job.get("company"),
+            "description": job.get("description") or job.get("raw_text") or "",
+            "location": job.get("location"),
+        },
+        "required_output_keys": [
+            "tailored_summary",
+            "tailored_experience_bullets",
+            "skills_to_emphasize",
+            "keywords_to_include",
+            "optional_cover_note",
+            "application_guidance",
+            "resume_draft",
+        ],
+    }
+    tailored = ai_orchestrator.ask_json(system, json.dumps(context), fallback, user_id=user_id, task_type="resume_tailoring")
+    for key, value in fallback.items():
+        tailored.setdefault(key, value)
+    tailored["type"] = "tailored_resume"
+    tailored["target_role"] = tailored.get("target_role") or job.get("title") or "target role"
+    tailored["company"] = tailored.get("company") or job.get("company") or ""
+    tailored["using_fallback"] = route.source == "fallback" or bool(tailored.get("_ai_error"))
+    tailored["generation_source"] = "local_fallback" if tailored["using_fallback"] else "llm"
+    if tailored.get("_ai_error"):
+        tailored["ai_error"] = "AI generation failed; local fallback was used."
+        tailored.pop("_ai_error", None)
+    return tailored
 
 
 def _generate_interview_prep(profile: dict[str, Any], job: dict[str, Any], evaluation: dict[str, Any]) -> dict[str, Any]:
@@ -1839,6 +2129,20 @@ async def get_profile_resume_reviews(job_id: Optional[int] = None, user: dict = 
 async def post_job_resume_review(job_id: int, payload: ResumeReviewIn, user: dict = Depends(current_user)):
     payload.job_id = job_id
     return await post_profile_resume_review(payload, user)
+
+
+@router.post("/jobs/{job_id}/tailor-resume")
+async def post_job_tailored_resume(job_id: int, user: dict = Depends(current_user)):
+    profile = get_profile(user["id"])
+    if not _profile_has_resume_context(profile):
+        raise HTTPException(status_code=400, detail="Add resume or profile details before tailoring a resume.")
+    job = get_job(job_id, user["id"])
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not str(job.get("description") or job.get("raw_text") or "").strip():
+        raise HTTPException(status_code=400, detail="This job does not have enough description detail to tailor a resume.")
+    tailored = _llm_tailored_resume(profile or {}, job, user["id"])
+    return save_resume_review(user["id"], tailored, job_id)
 
 
 @router.post("/jobs/{job_id}/interview-prep")

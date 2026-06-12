@@ -16,6 +16,7 @@ from job_assistant.crypto import decrypt_text, encrypt_text
 
 STATUSES = ["New", "Reviewed", "Needs Review", "Non-Opportunity", "Apply manually", "Applied", "Interview", "Rejected", "Offer", "Archived", "Skip"]
 OPPORTUNITY_TYPES = ["job", "internship", "contract", "freelance", "hackathon", "competition", "grant", "scholarship", "webinar", "event", "newsletter", "blog_post", "marketing_email", "announcement", "unknown", "other"]
+JOB_LIKE_TYPES = ("job", "internship", "contract", "freelance")
 DEFAULT_USER_EMAIL = "local@example.com"
 DEFAULT_LOCAL_PASSWORD = os.getenv("LOCAL_USER_PASSWORD", "ChangeMe123!")
 PASSWORD_HASH_ITERATIONS = 600_000
@@ -1322,21 +1323,35 @@ def job_url_exists(url: str, user_id: int = 1, workspace_id: int | None = None) 
         return bool(row)
 
 
-def list_jobs(user_id: int = 1, workspace_id: int | None = None) -> list[dict[str, Any]]:
+def list_jobs(user_id: int = 1, workspace_id: int | None = None, content_type: str = "job") -> list[dict[str, Any]]:
     with connect() as con:
         scoped_workspace_id, _ = _workspace_scope_for_user(con, user_id, workspace_id)
+        filters = ["j.user_id = ?", "j.workspace_id = ?"]
+        params: list[Any] = [user_id, scoped_workspace_id]
+        normalized_content_type = (content_type or "job").strip().lower()
+        if normalized_content_type in {"job", "jobs"}:
+            placeholders = ",".join(["?"] * len(JOB_LIKE_TYPES))
+            filters.append(
+                f"(lower(COALESCE(j.classification, j.opportunity_type, '')) IN ({placeholders}) "
+                f"OR lower(COALESCE(j.opportunity_type, '')) IN ({placeholders}))"
+            )
+            params.extend(JOB_LIKE_TYPES)
+            params.extend(JOB_LIKE_TYPES)
+        elif normalized_content_type not in {"all", "any"}:
+            filters.append("(lower(COALESCE(j.classification, j.opportunity_type, '')) = ? OR lower(COALESCE(j.opportunity_type, '')) = ?)")
+            params.extend([normalized_content_type, normalized_content_type])
         rows = con.execute(
-            """
+            f"""
             SELECT j.*, a.status, a.notes, e.match_score, e.priority,
                    m.cover_letter, m.screening_answers
             FROM jobs j
             LEFT JOIN applications a ON a.job_id = j.id
             LEFT JOIN evaluations e ON e.job_id = j.id
             LEFT JOIN application_materials m ON m.job_id = j.id
-            WHERE j.user_id = ? AND j.workspace_id = ?
+            WHERE {' AND '.join(filters)}
             ORDER BY COALESCE(e.match_score, -1) DESC, j.updated_at DESC
             """,
-            (user_id, scoped_workspace_id),
+            params,
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1380,11 +1395,24 @@ def delete_job(job_id: int, user_id: int = 1, workspace_id: int | None = None) -
     with connect() as con:
         if workspace_id is None:
             row = con.execute("SELECT workspace_id, organization_id FROM jobs WHERE id=? AND user_id=?", (job_id, user_id)).fetchone()
-            con.execute("DELETE FROM jobs WHERE id=? AND user_id=?", (job_id, user_id))
+            if not row:
+                return
         else:
             scoped_workspace_id, _ = _workspace_scope_for_user(con, user_id, workspace_id)
             row = con.execute("SELECT workspace_id, organization_id FROM jobs WHERE id=? AND user_id=? AND workspace_id=?", (job_id, user_id, scoped_workspace_id)).fetchone()
-            con.execute("DELETE FROM jobs WHERE id=? AND user_id=? AND workspace_id=?", (job_id, user_id, scoped_workspace_id))
+            if not row:
+                return
+        for table in [
+            "evaluations",
+            "application_materials",
+            "applications",
+            "reminders",
+            "resume_reviews",
+            "interview_prep_sessions",
+            "recordings",
+        ]:
+            con.execute(f"DELETE FROM {table} WHERE job_id=?", (job_id,))
+        con.execute("DELETE FROM jobs WHERE id=? AND user_id=?", (job_id, user_id))
         if row:
             add_audit_log(user_id, "opportunity.delete", "job", str(job_id), {}, con=con, workspace_id=row["workspace_id"], organization_id=row["organization_id"])
 

@@ -27,10 +27,10 @@ export function SettingsView() {
   const adminConfigs = useQuery({ queryKey: ["admin-configs"], queryFn: providerService.adminConfigs });
   return (
     <div className="space-y-5">
-      <div><h1 className="text-2xl font-semibold">System</h1><p className="text-sm text-muted-foreground">Feedback, audit logs, usage, health, and runtime settings.</p></div>
+      <div><h1 className="text-2xl font-semibold">Settings</h1><p className="text-sm text-muted-foreground">Manage your resume profile, AI provider, Gmail import, and app preferences.</p></div>
       <div className="grid gap-4 md:grid-cols-3">
         <Card><CardContent className="p-5"><HeartPulse className="mb-3 h-5 w-5 text-success" /><div className="text-2xl font-semibold">{String(health.data?.status ?? "unknown")}</div><div className="text-sm text-muted-foreground">Health</div></CardContent></Card>
-        <Card><CardContent className="p-5"><ShieldCheck className="mb-3 h-5 w-5 text-primary" /><div className="text-2xl font-semibold">{audit.data?.length ?? 0}</div><div className="text-sm text-muted-foreground">Audit events</div></CardContent></Card>
+        <Card><CardContent className="p-5"><ShieldCheck className="mb-3 h-5 w-5 text-primary" /><div className="text-2xl font-semibold">{audit.data?.length ?? 0}</div><div className="text-sm text-muted-foreground">Account events</div></CardContent></Card>
         <Card><CardContent className="p-5"><Activity className="mb-3 h-5 w-5 text-warning" /><div className="text-2xl font-semibold">{feedback.data?.length ?? 0}</div><div className="text-sm text-muted-foreground">Feedback items</div></CardContent></Card>
       </div>
       {tab === "profile" ? (
@@ -62,8 +62,8 @@ function AdminConfiguration({ data, loading }: { data?: { configs: AdminConfig[]
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl font-semibold">Admin Configuration</h2>
-        <p className="text-sm text-muted-foreground">Manage database-backed runtime settings used by AI generation, Gmail OAuth, and recording upload.</p>
+        <h2 className="text-xl font-semibold">Connected Services</h2>
+        <p className="text-sm text-muted-foreground">Manage the services used for AI generation, Gmail import, and recording upload.</p>
       </div>
       <div className="grid gap-4 md:grid-cols-3">
         {CONFIG_TYPES.map((item) => {

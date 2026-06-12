@@ -1,5 +1,5 @@
 import { apiClient, getJson } from "@/services/client";
-import type { Opportunity, Profile } from "@/types/api";
+import type { BatchScoreResult, Opportunity, OpportunityContentType, Profile, ProfileJobDiscoveryResult, TailoredResume } from "@/types/api";
 
 export interface OpportunityCreate {
   workspace_id?: number;
@@ -22,19 +22,28 @@ export interface OpportunityCreate {
   blocked_reason?: string;
 }
 
+export interface OpportunityListParams {
+  workspace_id?: number;
+  content_type?: OpportunityContentType;
+}
+
 export const opportunityService = {
-  list: (workspace_id?: number) => getJson<Opportunity[]>("/jobs", workspace_id ? { workspace_id } : undefined),
+  list: (params?: OpportunityListParams | number) => {
+    const requestParams = typeof params === "number" ? { workspace_id: params, content_type: "job" } : { content_type: "job", ...(params ?? {}) };
+    return getJson<Opportunity[]>("/jobs", requestParams);
+  },
   detail: (id: number, workspace_id?: number) => getJson<Opportunity>(`/jobs/${id}`, workspace_id ? { workspace_id } : undefined),
   create: async (payload: OpportunityCreate) => (await apiClient.post("/jobs", payload)).data,
   remove: async (id: number, workspace_id?: number) => (await apiClient.delete(`/jobs/${id}`, { params: { workspace_id } })).data,
   score: async (id: number) => (await apiClient.post(`/jobs/${id}/score`)).data,
   scoreBatch: async (payload: { job_ids: number[]; score_all_unscored?: boolean }) =>
-    (await apiClient.post<{ status: string; total: number; succeeded: number; skipped?: number; failed: number; results: Array<{ job_id: number; status: string; error?: string; reason?: string }> }>("/jobs/score-batch", payload)).data,
+    (await apiClient.post<BatchScoreResult>("/jobs/score-batch", payload)).data,
   materials: (id: number) => getJson<Record<string, unknown>>(`/jobs/${id}/materials`),
   generateMaterials: async (id: number) => (await apiClient.post(`/jobs/${id}/generate-materials`)).data,
+  tailorResume: async (id: number) => (await apiClient.post<TailoredResume>(`/jobs/${id}/tailor-resume`)).data,
   resumeReview: async (id: number, payload: { resume_text?: string; target_role?: string } = {}) =>
     (await apiClient.post<Record<string, unknown>>(`/jobs/${id}/resume-review`, payload)).data,
-  resumeReviews: (id: number) => getJson<Record<string, unknown>[]>("/profile/resume-reviews", { job_id: id }),
+  resumeReviews: (id: number) => getJson<TailoredResume[]>("/profile/resume-reviews", { job_id: id }),
   interviewPrep: async (id: number) => (await apiClient.post<Record<string, unknown>>(`/jobs/${id}/interview-prep`)).data,
   interviewPrepSessions: (id: number) => getJson<Record<string, unknown>[]>(`/jobs/${id}/interview-prep`),
   recordings: (id?: number) => getJson<Record<string, unknown>[]>("/recordings", id ? { job_id: id } : undefined),
@@ -69,6 +78,8 @@ export const opportunityService = {
     keywords: string;
     country?: string;
   }) => (await apiClient.post<{ status: string; opportunities: Opportunity[] }>("/discovery/public", payload)).data,
+  discoverFromProfile: async (payload: { sources?: string[]; limit_per_source?: number; save_results?: boolean; score_results?: boolean } = {}) =>
+    (await apiClient.post<ProfileJobDiscoveryResult>("/discovery/from-profile", payload)).data,
   discoverRapidApiLinkedIn: async (payload: { title_filter: string; location_filter: string; offset: number; workspace_id?: number }) =>
     (await apiClient.post<{ status: string; opportunities: Opportunity[]; raw_count: number }>("/discovery/rapidapi-linkedin", payload)).data,
   discoverApify: async (payload: { url: string; workspace_id?: number }) =>

@@ -1,4 +1,5 @@
 export type ApiList<T> = T[];
+export type OpportunityContentType = "job" | "all" | "internship" | "contract" | "freelance";
 
 export interface User {
   id: number;
@@ -53,6 +54,62 @@ export interface Opportunity {
   match_score?: number | null;
   score?: number | null;
   evaluation?: Record<string, unknown> | null;
+}
+
+export interface BatchScoreResultItem {
+  job_id: number;
+  title?: string;
+  status: "success" | "skipped" | "failed" | string;
+  classification?: string;
+  reason?: string;
+  error?: string;
+  evaluation?: Record<string, unknown>;
+}
+
+export interface BatchScoreResult {
+  status: string;
+  total: number;
+  total_requested?: number;
+  succeeded: number;
+  scored?: number;
+  skipped: number;
+  failed: number;
+  using_fallback_scoring?: boolean;
+  results: BatchScoreResultItem[];
+}
+
+export interface TailoredResume {
+  id?: number;
+  job_id?: number;
+  type?: string;
+  target_role?: string;
+  company?: string;
+  tailored_summary?: string;
+  tailored_experience_bullets?: string[];
+  skills_to_emphasize?: string[];
+  keywords_to_include?: string[];
+  optional_cover_note?: string;
+  application_guidance?: string[];
+  resume_draft?: string;
+  generation_source?: string;
+  using_fallback?: boolean;
+  ai_error?: string;
+  created_at?: string;
+}
+
+export interface ProfileJobDiscoveryResult {
+  status: string;
+  query: string;
+  keywords: string[];
+  opportunities: Opportunity[];
+  found: number;
+  imported: number;
+  ids?: number[];
+  scored: number;
+  using_fallback_scoring?: boolean;
+  warnings?: string[];
+  errors?: string[];
+  message?: string;
 }
 
 export interface Profile {

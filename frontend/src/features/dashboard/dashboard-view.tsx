@@ -2,12 +2,10 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Bot, Briefcase, CalendarClock, ClipboardCheck, Sparkles, Workflow } from "lucide-react";
+import { Briefcase, CalendarClock, ClipboardCheck, Sparkles } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SourceChart, ScoreDistribution, TrendChart } from "@/components/charts/analytics-charts";
 import { opportunityService } from "@/services/opportunity.service";
-import { automationService } from "@/services/automation.service";
-import { providerService } from "@/services/provider.service";
 
 function Kpi({ label, value, icon: Icon }: { label: string; value: string | number; icon: typeof Briefcase }) {
   return (
@@ -25,54 +23,47 @@ function Kpi({ label, value, icon: Icon }: { label: string; value: string | numb
 
 export function DashboardView() {
   const jobs = useQuery({ queryKey: ["opportunities"], queryFn: () => opportunityService.list() });
-  const rules = useQuery({ queryKey: ["automation-rules"], queryFn: () => automationService.rules() });
-  const runs = useQuery({ queryKey: ["automation-runs"], queryFn: () => automationService.runs() });
-  const errors = useQuery({ queryKey: ["automation-errors"], queryFn: () => automationService.errors() });
-  const generations = useQuery({ queryKey: ["ai-generations"], queryFn: () => providerService.generations() });
 
-  const opportunities = useMemo(() => jobs.data ?? [], [jobs.data]);
+  const savedJobs = useMemo(() => jobs.data ?? [], [jobs.data]);
   const chartData = useMemo(() => {
-    const sources = Object.entries(opportunities.reduce<Record<string, number>>((acc, item) => {
+    const sources = Object.entries(savedJobs.reduce<Record<string, number>>((acc, item) => {
       acc[item.source || "unknown"] = (acc[item.source || "unknown"] ?? 0) + 1;
       return acc;
     }, {})).map(([name, value]) => ({ name, value }));
     const buckets = ["0-39", "40-59", "60-79", "80-100"].map((bucket) => ({ bucket, count: 0 }));
-    opportunities.forEach((item) => {
+    savedJobs.forEach((item) => {
       const score = Number(item.match_score ?? item.score ?? 0);
       buckets[score >= 80 ? 3 : score >= 60 ? 2 : score >= 40 ? 1 : 0].count += 1;
     });
     const weekly = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((name) => ({ name, value: 0 }));
-    opportunities.forEach((item) => {
+    savedJobs.forEach((item) => {
       const date = item.created_at ? new Date(item.created_at) : null;
       if (date && !Number.isNaN(date.getTime())) weekly[date.getDay()].value += 1;
     });
     return { sources, buckets, weekly };
-  }, [opportunities]);
+  }, [savedJobs]);
   const hasWeeklyData = chartData.weekly.some((item) => item.value > 0);
-  const isLoading = jobs.isLoading || rules.isLoading || runs.isLoading || errors.isLoading || generations.isLoading;
-  const hasError = jobs.isError || rules.isError || runs.isError || errors.isError || generations.isError;
+  const isLoading = jobs.isLoading;
+  const hasError = jobs.isError;
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <p className="text-sm text-muted-foreground">AI activity, deadlines, scoring, and automation health across your workspace.</p>
+        <p className="text-sm text-muted-foreground">Track saved jobs, match scores, reviews, and upcoming deadlines.</p>
       </div>
       {isLoading ? <div className="rounded-md border p-4 text-sm text-muted-foreground">Loading dashboard data...</div> : null}
       {hasError ? <div className="rounded-md border border-destructive/30 p-4 text-sm text-destructive">Some dashboard data could not be loaded. Refresh or check the API connection.</div> : null}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
-        <Kpi label="Total Opportunities" value={opportunities.length} icon={Briefcase} />
-        <Kpi label="High Match" value={opportunities.filter((j) => Number(j.match_score ?? j.score ?? 0) >= 80).length} icon={Sparkles} />
-        <Kpi label="Pending Reviews" value={opportunities.filter((j) => (j.status ?? "new").includes("review")).length} icon={ClipboardCheck} />
-        <Kpi label="Upcoming Deadlines" value={opportunities.filter((j) => j.deadline).length} icon={CalendarClock} />
-        <Kpi label="Active Automations" value={(rules.data ?? []).filter((r) => r.is_active).length} icon={Workflow} />
-        <Kpi label="AI Activity" value={(generations.data ?? []).length} icon={Bot} />
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Kpi label="Saved Jobs" value={savedJobs.length} icon={Briefcase} />
+        <Kpi label="High Match" value={savedJobs.filter((j) => Number(j.match_score ?? j.score ?? 0) >= 80).length} icon={Sparkles} />
+        <Kpi label="Pending Reviews" value={savedJobs.filter((j) => (j.status ?? "new").includes("review")).length} icon={ClipboardCheck} />
+        <Kpi label="Upcoming Deadlines" value={savedJobs.filter((j) => j.deadline).length} icon={CalendarClock} />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card><CardHeader><CardTitle>Opportunity Sources</CardTitle></CardHeader><CardContent><SourceChart data={chartData.sources.length ? chartData.sources : [{ name: "No data", value: 1 }]} /></CardContent></Card>
+        <Card><CardHeader><CardTitle>Job Sources</CardTitle></CardHeader><CardContent><SourceChart data={chartData.sources.length ? chartData.sources : [{ name: "No data", value: 1 }]} /></CardContent></Card>
         <Card><CardHeader><CardTitle>Match Score Distribution</CardTitle></CardHeader><CardContent><ScoreDistribution data={chartData.buckets} /></CardContent></Card>
         <Card><CardHeader><CardTitle>Weekly Activity</CardTitle></CardHeader><CardContent>{hasWeeklyData ? <TrendChart data={chartData.weekly} /> : <div className="py-12 text-center text-sm text-muted-foreground">No data available</div>}</CardContent></Card>
-        <Card><CardHeader><CardTitle>Automation Statistics</CardTitle></CardHeader><CardContent><TrendChart data={[{ name: "Rules", value: rules.data?.length ?? 0 }, { name: "Runs", value: runs.data?.length ?? 0 }, { name: "Failures", value: errors.data?.length ?? 0 }]} /></CardContent></Card>
       </div>
     </div>
   );

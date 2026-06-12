@@ -2,7 +2,7 @@
 
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
-import { Laptop, LogOut, Moon, Sun } from "lucide-react";
+import { Laptop, LogOut, Moon, Sparkles, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { authService } from "@/services/auth.service";
 import { useAuthStore } from "@/stores/auth-store";
@@ -14,6 +14,10 @@ export function Topbar() {
 
   return (
     <header className="glass-strong sticky top-0 z-20 flex h-16 items-center gap-3 border-b px-4">
+      <div className="flex items-center gap-3 lg:hidden">
+        <span className="grid h-9 w-9 place-items-center rounded-md bg-primary text-primary-foreground"><Sparkles className="h-5 w-5" /></span>
+        <span className="font-semibold">Job Assistant</span>
+      </div>
       <div className="flex-1" />
       <Button
         variant="ghost"
