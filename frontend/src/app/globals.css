@@ -1,0 +1,115 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 220 33% 98%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --muted: 220 14% 96%;
+  --muted-foreground: 215 16% 47%;
+  --secondary: 220 14% 96%;
+  --secondary-foreground: 222 47% 11%;
+  --border: 220 13% 91%;
+  --input: 220 13% 91%;
+  --ring: 263 70% 50%;
+  --glass-bg: rgba(255, 255, 255, 0.66);
+  --glass-bg-strong: rgba(255, 255, 255, 0.78);
+  --glass-bg-subtle: rgba(255, 255, 255, 0.48);
+  --glass-border: rgba(255, 255, 255, 0.72);
+  --glass-shadow: 0 18px 48px rgba(15, 23, 42, 0.12);
+}
+
+.dark {
+  --background: 222 47% 11%;
+  --foreground: 210 40% 98%;
+  --card: 221 39% 14%;
+  --card-foreground: 210 40% 98%;
+  --muted: 217 33% 18%;
+  --muted-foreground: 215 20% 65%;
+  --secondary: 217 33% 18%;
+  --secondary-foreground: 210 40% 98%;
+  --border: 217 33% 22%;
+  --input: 217 33% 22%;
+  --ring: 258 90% 66%;
+  --glass-bg: rgba(17, 24, 39, 0.58);
+  --glass-bg-strong: rgba(15, 23, 42, 0.74);
+  --glass-bg-subtle: rgba(30, 41, 59, 0.38);
+  --glass-border: rgba(255, 255, 255, 0.13);
+  --glass-shadow: 0 18px 56px rgba(0, 0, 0, 0.34);
+}
+
+* {
+  @apply border-border;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+  background:
+    radial-gradient(circle at 18% 10%, rgba(124, 58, 237, 0.16), transparent 32rem),
+    radial-gradient(circle at 86% 4%, rgba(16, 185, 129, 0.12), transparent 28rem),
+    radial-gradient(circle at 76% 78%, rgba(14, 165, 233, 0.1), transparent 34rem),
+    hsl(var(--background));
+  background-attachment: fixed;
+  letter-spacing: 0;
+}
+
+@layer utilities {
+  .glass {
+    background: var(--glass-bg);
+    border-color: var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    backdrop-filter: blur(22px) saturate(1.35);
+    -webkit-backdrop-filter: blur(22px) saturate(1.35);
+  }
+
+  .glass-strong {
+    background: var(--glass-bg-strong);
+    border-color: var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    backdrop-filter: blur(28px) saturate(1.45);
+    -webkit-backdrop-filter: blur(28px) saturate(1.45);
+  }
+
+  .glass-subtle {
+    background: var(--glass-bg-subtle);
+    border-color: var(--glass-border);
+    backdrop-filter: blur(16px) saturate(1.25);
+    -webkit-backdrop-filter: blur(16px) saturate(1.25);
+  }
+}
+
+::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(124, 58, 237, 0.42);
+  border-radius: 999px;
+}
+
+@media print {
+  body {
+    background: #fff !important;
+    color: #111827 !important;
+  }
+
+  header,
+  nav,
+  .no-print {
+    display: none !important;
+  }
+
+  .print-area,
+  .print-area * {
+    color: #111827 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  .print-break-inside-avoid {
+    break-inside: avoid;
+  }
+}

@@ -5,14 +5,16 @@ services:
     environment:
       ENVIRONMENT: prod
       DEPLOYMENT_PROFILE: production
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
       SESSION_COOKIE_SECURE: "true"
+      SESSION_COOKIE_SAMESITE: "lax"
+      SESSION_COOKIE_PATH: "/api/v1/auth"
       SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
-      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS to your HTTPS Streamlit/app domain}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS to your HTTPS Next.js app domain}
+      CORS_ALLOW_CREDENTIALS: "true"
     restart: always
 
-  streamlit:
+  frontend:
     environment:
-      ENVIRONMENT: prod
-      DEPLOYMENT_PROFILE: production
-      SESSION_COOKIE_SECURE: "true"
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Set NEXT_PUBLIC_API_URL to your HTTPS API domain}
     restart: always
