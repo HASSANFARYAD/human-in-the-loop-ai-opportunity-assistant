@@ -32,6 +32,7 @@ from job_assistant.db import (
     create_reminder,
     cleanup_non_opportunity_records,
     count_ai_generations_today,
+    record_score_feedback,
     db_health,
     delete_job,
     delete_user_data,
@@ -414,6 +415,11 @@ class AIAskIn(BaseModel):
 class AgentChatIn(BaseModel):
     message: str
     history: list[Dict[str, str]] = Field(default_factory=list)
+    workspace_id: Optional[int] = None
+
+
+class ScoreFeedbackIn(BaseModel):
+    signal: str  # "relevant" | "irrelevant"
     workspace_id: Optional[int] = None
 
 
@@ -1281,6 +1287,18 @@ async def ai_usage(user: dict = Depends(current_user)):
         "remaining": max(0, limit - used) if limit > 0 else None,
         "unlimited": limit <= 0,
     }
+
+
+@router.post("/jobs/{job_id}/score-feedback")
+async def post_score_feedback(job_id: int, payload: ScoreFeedbackIn, user: dict = Depends(current_user)):
+    job = get_job(job_id, user["id"], workspace_id=payload.workspace_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    try:
+        record_score_feedback(user["id"], job_id, payload.signal, workspace_id=payload.workspace_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "success", "signal": payload.signal.strip().lower()}
 
 
 def _resolve_job_for_reference(user_id: int, reference: str, workspace_id: Optional[int] = None) -> Optional[dict[str, Any]]:

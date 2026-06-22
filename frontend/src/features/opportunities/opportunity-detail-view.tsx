@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, FileText, Mic, Printer, Sparkles, Square, Trash2 } from "lucide-react";
+import { ExternalLink, FileText, Mic, Printer, Sparkles, Square, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -86,6 +86,7 @@ export function OpportunityDetailView() {
   const resumeReviews = useQuery({ queryKey: ["resume-reviews", id], queryFn: () => opportunityService.resumeReviews(id), enabled: Number.isFinite(id) });
   const recordings = useQuery({ queryKey: ["recordings", id], queryFn: () => opportunityService.recordings(id), enabled: Number.isFinite(id) });
   const score = useMutation({ mutationFn: () => opportunityService.score(id), onSuccess: () => { toast.success("AI evaluation refreshed"); qc.invalidateQueries({ queryKey: ["opportunity", id] }); qc.invalidateQueries({ queryKey: ["ai-usage"] }); } });
+  const scoreFeedback = useMutation({ mutationFn: (signal: "relevant" | "irrelevant") => opportunityService.scoreFeedback(id, signal), onSuccess: () => toast.success("Thanks — I'll use this to calibrate future scoring."), onError: (error) => toast.error(error.message) });
   const generate = useMutation({ mutationFn: () => opportunityService.generateMaterials(id), onSuccess: () => { toast.success("Materials generated"); qc.invalidateQueries({ queryKey: ["materials", id] }); qc.invalidateQueries({ queryKey: ["ai-usage"] }); }, onError: (error) => toast.error(error.message) });
   const tailorResume = useMutation({ mutationFn: () => opportunityService.tailorResume(id), onSuccess: () => { toast.success("Tailored resume generated"); qc.invalidateQueries({ queryKey: ["resume-reviews", id] }); qc.invalidateQueries({ queryKey: ["ai-usage"] }); }, onError: (error) => toast.error(tailorResumeErrorMessage(error)) });
   const prep = useMutation({ mutationFn: () => opportunityService.interviewPrep(id), onSuccess: () => { toast.success("Interview preparation generated"); qc.invalidateQueries({ queryKey: ["interview-prep", id] }); qc.invalidateQueries({ queryKey: ["ai-usage"] }); }, onError: (error) => toast.error(error.message) });
@@ -196,6 +197,7 @@ export function OpportunityDetailView() {
             <div className="flex justify-between"><span className="text-muted-foreground">Source</span><span>{item.source}</span></div><div className="flex justify-between"><span className="text-muted-foreground">Classification</span><span>{item.classification || item.opportunity_type || "unknown"}</span></div><div className="flex justify-between"><span className="text-muted-foreground">Confidence</span><span>{Math.round(Number(item.opportunity_confidence ?? item.classification_confidence ?? 0) * 100)}%</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Deadline</span><span>{formatDate(item.deadline)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Match score</span><span className={`font-semibold ${scoreTone(scoreValue)}`}>{scoreValue == null ? "Skipped" : Number(scoreValue)}</span></div>
+            <div className="flex items-center justify-between"><span className="text-muted-foreground">Is this relevant?</span><span className="flex gap-2"><Button size="icon" variant="outline" className="h-8 w-8" disabled={scoreFeedback.isPending} onClick={() => scoreFeedback.mutate("relevant")} aria-label="Mark relevant"><ThumbsUp className="h-4 w-4" /></Button><Button size="icon" variant="outline" className="h-8 w-8" disabled={scoreFeedback.isPending} onClick={() => scoreFeedback.mutate("irrelevant")} aria-label="Mark irrelevant"><ThumbsDown className="h-4 w-4" /></Button></span></div>
             {item.url && importable ? <Button asChild variant="outline" className="w-full"><a href={item.url} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4" /> Apply</a></Button> : <Button variant="outline" className="w-full" disabled>Apply unavailable</Button>}
             {item.source_email_open_url || item.source_url ? <Button asChild variant="outline" className="w-full"><a href={item.source_email_open_url || item.source_url || ""} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4" /> Open original source</a></Button> : null}<Button variant="outline" className="w-full" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button>
             <Button variant="outline" className="w-full" onClick={() => statusUpdate.mutate("Applied")}><ExternalLink className="h-4 w-4" /> Mark applied</Button>

@@ -1181,6 +1181,15 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS score_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                workspace_id INTEGER,
+                job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
+                signal TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS audit_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -2595,6 +2604,37 @@ def log_ai_generation(user_id: int | None, *, provider: str = "", model: str = "
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (user_id, scoped_workspace_id, organization_id, provider, model, task_type, prompt_version, prompt_hash, int(input_tokens or 0), int(output_tokens or 0), float(estimated_cost or 0), latency_ms, status, error_message, utc_now()))
         return int(cur.lastrowid)
+
+
+def record_score_feedback(user_id: int, job_id: int, signal: str, workspace_id: int | None = None) -> int:
+    """Record a user's relevance signal ('relevant'/'irrelevant') for a scored job."""
+    signal = (signal or "").strip().lower()
+    if signal not in ("relevant", "irrelevant"):
+        raise ValueError("signal must be 'relevant' or 'irrelevant'")
+    with connect() as con:
+        scoped_workspace_id, _ = _workspace_scope_for_user(con, user_id, workspace_id)
+        cur = con.execute(
+            "INSERT INTO score_feedback(user_id, workspace_id, job_id, signal, created_at) VALUES (?,?,?,?,?)",
+            (user_id, scoped_workspace_id, job_id, signal, utc_now()),
+        )
+        return int(cur.lastrowid)
+
+
+def recent_score_feedback(user_id: int, limit: int = 10, workspace_id: int | None = None) -> list[dict[str, Any]]:
+    """Most recent relevance signals for a user, with the job's title/company for context."""
+    with connect() as con:
+        rows = con.execute(
+            """
+            SELECT sf.signal, sf.created_at, j.title, j.company
+            FROM score_feedback sf
+            LEFT JOIN jobs j ON j.id = sf.job_id
+            WHERE sf.user_id = ?
+            ORDER BY sf.id DESC
+            LIMIT ?
+            """,
+            (user_id, max(1, min(int(limit), 50))),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def count_ai_generations_today(user_id: int) -> int:

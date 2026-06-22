@@ -225,6 +225,31 @@ def _score_webinar(profile: Dict[str, Any], webinar: Dict[str, Any]) -> Dict[str
     }
 
 
+def _feedback_calibration_block(user_id: int | None) -> str:
+    """Build a few-shot calibration block from the user's recent relevance signals."""
+    if not user_id:
+        return ""
+    try:
+        from job_assistant.db import recent_score_feedback
+
+        signals = recent_score_feedback(user_id, limit=10)
+    except Exception:
+        return ""
+    if not signals:
+        return ""
+    lines = []
+    for item in signals:
+        label = "RELEVANT" if item.get("signal") == "relevant" else "IRRELEVANT"
+        descriptor = " ".join(str(item.get(k, "")) for k in ("title", "company") if item.get(k)).strip() or "(unnamed opportunity)"
+        lines.append(f"- {label}: {descriptor}")
+    examples = "\n".join(lines)
+    return (
+        "\nThis user previously marked these opportunities as relevant or irrelevant. "
+        "Use them only as calibration for this user's preferences; never infer protected characteristics:\n"
+        f"{examples}\n"
+    )
+
+
 def score_opportunity(profile: Dict[str, Any], opportunity: Dict[str, Any], opp_type: str = "job", user_id: int | None = None) -> Dict[str, Any]:
     """Route to appropriate scoring function based on opportunity type"""
     if opp_type == "hackathon":
@@ -247,10 +272,12 @@ def score_opportunity(profile: Dict[str, Any], opportunity: Dict[str, Any], opp_
         "webinar": "Score this webinar from 0-100 for the user. Use these components: topic_relevance, speaker_reputation, skill_level_match, time_investment_score, certification_value.",
     }
 
+    calibration = _feedback_calibration_block(user_id)
+
     user = f"""
 {prompt_map.get(opp_type, prompt_map['job'])}
 Return JSON with: match_score, priority High/Medium/Low/Skip, component scores, good_fit, weak_areas, red_flags.
-
+{calibration}
 USER PROFILE:\n{profile}
 
 OPPORTUNITY:\n{opportunity}

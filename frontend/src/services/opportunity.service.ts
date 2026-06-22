@@ -38,6 +38,8 @@ export const opportunityService = {
   score: async (id: number) => (await apiClient.post(`/jobs/${id}/score`)).data,
   scoreBatch: async (payload: { job_ids: number[]; score_all_unscored?: boolean }) =>
     (await apiClient.post<BatchScoreResult>("/jobs/score-batch", payload)).data,
+  scoreFeedback: async (id: number, signal: "relevant" | "irrelevant") =>
+    (await apiClient.post(`/jobs/${id}/score-feedback`, { signal })).data,
   materials: (id: number) => getJson<Record<string, unknown>>(`/jobs/${id}/materials`),
   generateMaterials: async (id: number) => (await apiClient.post(`/jobs/${id}/generate-materials`)).data,
   tailorResume: async (id: number) => (await apiClient.post<TailoredResume>(`/jobs/${id}/tailor-resume`)).data,
