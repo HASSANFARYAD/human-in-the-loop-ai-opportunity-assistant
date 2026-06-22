@@ -174,6 +174,31 @@ export interface ProviderConfig {
   updated_at?: string;
 }
 
+export interface AgentJobListing {
+  title: string;
+  company: string;
+  location: string;
+  url: string;
+  source: string;
+  opportunity_type: string;
+  match_score: number;
+  priority: string;
+  good_fit: string;
+}
+
+export interface AgentSection {
+  agent: "job_search" | "tailor_resume" | "interview_prep" | "chat";
+  type: "listings" | "tailored_resume" | "interview_prep" | "message" | "error";
+  message?: string;
+  data?: unknown;
+  job?: { id: number; title?: string; company?: string };
+}
+
+export interface AgentChatResponse {
+  intents: string[];
+  sections: AgentSection[];
+}
+
 export interface AIUsage {
   used: number;
   limit: number;

@@ -20,7 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 
 const groups = [
-  { label: "Overview", items: [{ href: "/dashboard", label: "Dashboard", icon: Gauge }, { href: "/analytics", label: "Insights", icon: BarChart3 }] },
+  { label: "Overview", items: [{ href: "/dashboard", label: "Dashboard", icon: Gauge }, { href: "/agent", label: "Assistant", icon: Sparkles }, { href: "/analytics", label: "Insights", icon: BarChart3 }] },
   {
     label: "Jobs",
     items: [
