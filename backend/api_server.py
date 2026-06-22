@@ -73,6 +73,11 @@ def create_app() -> FastAPI:
             start_backup_scheduler()
         except Exception as e:
             logger.error(f"Failed to start backup scheduler: {e}")
+        try:
+            from job_assistant.followups import start_followup_scheduler
+            start_followup_scheduler()
+        except Exception as e:
+            logger.error(f"Failed to start follow-up scheduler: {e}")
 
     @app.on_event("shutdown")
     async def shutdown_event():
@@ -88,6 +93,11 @@ def create_app() -> FastAPI:
             stop_backup_scheduler()
         except Exception as e:
             logger.error(f"Failed to stop backup scheduler: {e}")
+        try:
+            from job_assistant.followups import stop_followup_scheduler
+            stop_followup_scheduler()
+        except Exception as e:
+            logger.error(f"Failed to stop follow-up scheduler: {e}")
 
     @app.exception_handler(Exception)
     async def general_exception_handler(request, exc):

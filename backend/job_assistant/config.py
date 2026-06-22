@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     backup_s3_secret_key: str = os.getenv("BACKUP_S3_SECRET_KEY", "")
     backup_s3_prefix: str = os.getenv("BACKUP_S3_PREFIX", "db")
 
+    # Automated follow-up reminders for stale applications (own scheduler).
+    followup_reminders_enabled: bool = _bool_env("FOLLOWUP_REMINDERS_ENABLED", False)
+    followup_after_days: int = int(os.getenv("FOLLOWUP_AFTER_DAYS", "7"))
+    followup_interval_hours: int = int(os.getenv("FOLLOWUP_INTERVAL_HOURS", "24"))
+
     # Error monitoring (Sentry). Leave blank to disable.
     sentry_dsn: str = os.getenv("SENTRY_DSN", "")
     sentry_traces_sample_rate: float = float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.0"))

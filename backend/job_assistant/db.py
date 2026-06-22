@@ -2176,6 +2176,41 @@ def create_reminder(job_id: int, kind: str, remind_at: str, note: str, user_id: 
         )
 
 
+def create_followup_reminders(after_days: int = 7) -> int:
+    """Create follow-up reminders for applications stuck in 'Applied' with no
+    status change in ``after_days`` days. Idempotent: skips jobs that already
+    have an open auto follow-up reminder. Runs across all users (system job).
+    Returns the number of reminders created.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, after_days))).isoformat(timespec="seconds")
+    now = utc_now()
+    with connect() as con:
+        rows = con.execute(
+            """
+            SELECT a.job_id, j.company FROM applications a
+            JOIN jobs j ON j.id = a.job_id
+            WHERE a.status = 'Applied' AND a.last_updated <= ?
+              AND NOT EXISTS (
+                SELECT 1 FROM reminders r
+                WHERE r.job_id = a.job_id AND r.kind = 'followup' AND r.done = 0
+              )
+            """,
+            (cutoff,),
+        ).fetchall()
+        created = 0
+        for row in rows:
+            company = (row["company"] or "this company").strip() or "this company"
+            note = f"No response from {company} in {after_days} days — consider following up."
+            con.execute(
+                "INSERT INTO reminders(job_id, kind, remind_at, note, created_at) VALUES (?,?,?,?,?)",
+                (row["job_id"], "followup", now, note, now),
+            )
+            created += 1
+    return created
+
+
 def due_reminders(user_id: int = 1) -> list[dict[str, Any]]:
     with connect() as con:
         rows = con.execute(
