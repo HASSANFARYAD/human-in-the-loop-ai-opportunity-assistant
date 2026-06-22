@@ -147,6 +147,24 @@ def sanitize_imported_text(value, *, strip_html: bool = True, max_length: int | 
     return neutralize_csv_formula(text)
 
 
+def extract_text_from_upload(filename: str, data: bytes) -> str:
+    """Extract plain text from an uploaded resume (.pdf/.docx/.txt) given raw bytes."""
+    name = (filename or "").lower()
+    if name.endswith(".pdf"):
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(data))
+        return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+    if name.endswith(".docx"):
+        from docx import Document
+
+        doc = Document(io.BytesIO(data))
+        return "\n".join(p.text for p in doc.paragraphs).strip()
+    if name.endswith(".doc"):
+        raise ValueError("Legacy .doc files are not supported. Please upload a .docx, .pdf, or .txt file.")
+    return data.decode("utf-8", errors="ignore").strip()
+
+
 def extract_profile_from_resume(cv_text: str, user_id: int | None = None) -> Dict:
     text = cv_text or ""
     fallback = _fallback_profile_from_resume(text)

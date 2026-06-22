@@ -57,7 +57,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <Suspense fallback={null}>
         <Sidebar />
       </Suspense>
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col lg:pl-64 xl:pl-72">
         <Topbar />
         <Suspense fallback={null}>
           <MobileNav />

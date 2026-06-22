@@ -170,7 +170,9 @@ def _create_minimal_schema(db_path) -> None:
             );
             CREATE TABLE profile (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL DEFAULT 'Default',
+                is_default INTEGER NOT NULL DEFAULT 0,
                 cv_text TEXT,
                 target_roles TEXT,
                 industries TEXT,
@@ -189,7 +191,9 @@ def _create_minimal_schema(db_path) -> None:
                 platforms TEXT,
                 resume_name TEXT,
                 integration_status TEXT,
-                updated_at TEXT NOT NULL
+                created_at TEXT,
+                updated_at TEXT NOT NULL,
+                UNIQUE(user_id, name)
             );
             CREATE TABLE evaluations (
                 job_id INTEGER PRIMARY KEY,
@@ -679,6 +683,174 @@ def test_find_jobs_from_profile_filters_non_job_content_and_scores(tmp_path, mon
     assert body["opportunities"][0]["classification"] == "job"
     assert body["opportunities"][0]["match_score"] == 82
     assert "Backend" in body["query"]
+
+
+def test_upload_resume_extracts_text_and_applies_to_profile(tmp_path, monkeypatch):
+    client, headers = _client(tmp_path, monkeypatch)
+    import job_assistant.ai_orchestrator as orch
+    from job_assistant.db import get_profile, get_user_by_email
+
+    monkeypatch.setattr(orch.ai_orchestrator, "ask_json", lambda system, user, fallback, **kwargs: dict(fallback))
+
+    resume = (
+        "Jane Doe\nSenior Backend Engineer\n\n"
+        "Skills: Python, FastAPI, React, TypeScript, SQL\n"
+        "Experience: 7 years building APIs. Remote.\n"
+    ).encode("utf-8")
+
+    response = client.post(
+        "/api/v1/profile/upload-resume",
+        headers=headers,
+        files={"file": ("jane-resume.txt", resume, "text/plain")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["applied_to_profile"] is True
+    assert body["characters"] > 0
+    assert body["extracted"]["cv_text"].startswith("Jane Doe")
+
+    user_id = get_user_by_email("jobs@example.com")["id"]
+    profile = get_profile(user_id)
+    assert "FastAPI" in (profile.get("cv_text") or "")
+    assert profile.get("resume_name") == "jane-resume.txt"
+
+
+def test_multiple_profiles_crud_and_default(tmp_path, monkeypatch):
+    client, headers = _client(tmp_path, monkeypatch)
+
+    # The base profile (created via upsert) is the implicit default.
+    client.post("/api/v1/profile", json={"full_name": "Primary", "skills": "Python"}, headers=headers)
+
+    listed = client.get("/api/v1/profiles", headers=headers)
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
+    assert listed.json()[0]["is_default"] == 1
+
+    created = client.post("/api/v1/profiles", json={"name": "Data roles", "skills": "SQL, Spark"}, headers=headers)
+    assert created.status_code == 200
+    new_id = created.json()["id"]
+
+    listed = client.get("/api/v1/profiles", headers=headers).json()
+    assert len(listed) == 2
+    # New non-default profile did not steal default.
+    assert {p["name"]: p["is_default"] for p in listed}["Data roles"] == 0
+
+    # Promote the new profile to default.
+    assert client.post(f"/api/v1/profiles/{new_id}/default", headers=headers).status_code == 200
+    default_profile = client.get("/api/v1/profile", headers=headers).json()
+    assert default_profile["name"] == "Data roles"
+
+    # Update fields on a specific profile.
+    assert client.put(f"/api/v1/profiles/{new_id}", json={"name": "Data roles", "skills": "SQL, dbt"}, headers=headers).status_code == 200
+    assert client.get(f"/api/v1/profiles/{new_id}", headers=headers).json()["skills"] == "SQL, dbt"
+
+    # Delete it; default falls back to the remaining profile.
+    assert client.delete(f"/api/v1/profiles/{new_id}", headers=headers).status_code == 200
+    remaining = client.get("/api/v1/profiles", headers=headers).json()
+    assert len(remaining) == 1
+    assert remaining[0]["is_default"] == 1
+
+
+def test_score_uses_selected_profile(tmp_path, monkeypatch):
+    client, headers = _client(tmp_path, monkeypatch)
+    import job_assistant.api as api
+    from job_assistant.db import get_user_by_email, insert_job
+
+    # Capture which profile score_job receives.
+    monkeypatch.setattr(api.ai_orchestrator, "resolve_route", lambda *a, **k: SimpleNamespace(source="fallback"))
+    monkeypatch.setattr(
+        api,
+        "score_job",
+        lambda profile, job, user_id=None: {"match_score": 80, "priority": "High", "good_fit": profile.get("skills", ""), "weak_areas": "", "red_flags": ""},
+    )
+
+    # Default profile (Python) + a second profile (Rust).
+    client.post("/api/v1/profile", json={"full_name": "Me", "skills": "Python"}, headers=headers)
+    created = client.post("/api/v1/profiles", json={"name": "Rust roles", "skills": "Rust"}, headers=headers)
+    rust_id = created.json()["id"]
+
+    user_id = get_user_by_email("jobs@example.com")["id"]
+    job_id = insert_job(_job_payload("Engineer", "job"), user_id)
+
+    default_score = client.post(f"/api/v1/jobs/{job_id}/score", headers=headers)
+    assert default_score.json()["good_fit"] == "Python"
+
+    rust_score = client.post(f"/api/v1/jobs/{job_id}/score", params={"profile_id": rust_id}, headers=headers)
+    assert rust_score.json()["good_fit"] == "Rust"
+
+
+def test_resume_document_returns_docx(tmp_path, monkeypatch):
+    client, headers = _client(tmp_path, monkeypatch)
+    import job_assistant.api as api
+    from job_assistant.db import get_user_by_email, insert_job
+
+    # Return a structured resume from the AI layer.
+    structure = {
+        "full_name": "Jane Doe",
+        "headline": "Senior Backend Engineer",
+        "contact": {"email": "jane@example.com", "location": "London, UK"},
+        "summary": "Backend engineer with FastAPI experience.",
+        "skills": ["Python", "FastAPI"],
+        "experience": [{"title": "Engineer", "company": "Acme", "location": "Remote", "start": "2020", "end": "2024", "bullets": ["Built APIs."]}],
+        "education": [{"degree": "BSc CS", "institution": "Uni", "year": "2018"}],
+        "certifications": ["AWS SAA"],
+        "projects": [],
+    }
+    monkeypatch.setattr(api.ai_orchestrator, "ask_json", lambda *a, **k: dict(structure))
+
+    _seed_profile(get_user_by_email("jobs@example.com")["id"])
+    user_id = get_user_by_email("jobs@example.com")["id"]
+    job_id = insert_job(_job_payload("Backend Engineer", "job"), user_id)
+
+    # Templates endpoint.
+    templates = client.get("/api/v1/resume-templates", headers=headers)
+    assert templates.status_code == 200
+    assert any(t["id"] == "uk" for t in templates.json())
+
+    resp = client.post(f"/api/v1/jobs/{job_id}/resume-document", params={"template": "uk"}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    # DOCX files are zip archives; verify the magic bytes and that text is embedded.
+    assert resp.content[:2] == b"PK"
+
+    import io
+    from docx import Document
+
+    doc = Document(io.BytesIO(resp.content))
+    text = "\n".join(p.text for p in doc.paragraphs)
+    assert "Jane Doe" in text
+    assert "PERSONAL STATEMENT" in text  # UK template label (rendered uppercase)
+    assert "Built APIs." in text
+
+
+def test_resume_document_rejects_unknown_template(tmp_path, monkeypatch):
+    client, headers = _client(tmp_path, monkeypatch)
+    from job_assistant.db import get_user_by_email, insert_job
+
+    _seed_profile(get_user_by_email("jobs@example.com")["id"])
+    user_id = get_user_by_email("jobs@example.com")["id"]
+    job_id = insert_job(_job_payload("Backend Engineer", "job"), user_id)
+    resp = client.post(f"/api/v1/jobs/{job_id}/resume-document", params={"template": "mars"}, headers=headers)
+    assert resp.status_code == 400
+
+
+def test_cannot_delete_only_profile(tmp_path, monkeypatch):
+    client, headers = _client(tmp_path, monkeypatch)
+    client.post("/api/v1/profile", json={"full_name": "Solo"}, headers=headers)
+    only_id = client.get("/api/v1/profiles", headers=headers).json()[0]["id"]
+    resp = client.delete(f"/api/v1/profiles/{only_id}", headers=headers)
+    assert resp.status_code == 400
+    assert "only profile" in resp.json()["detail"]
+
+
+def test_upload_resume_rejects_empty_file(tmp_path, monkeypatch):
+    client, headers = _client(tmp_path, monkeypatch)
+    response = client.post(
+        "/api/v1/profile/upload-resume",
+        headers=headers,
+        files={"file": ("empty.txt", b"", "text/plain")},
+    )
+    assert response.status_code == 400
 
 
 def test_find_jobs_from_profile_requires_profile_context(tmp_path, monkeypatch):

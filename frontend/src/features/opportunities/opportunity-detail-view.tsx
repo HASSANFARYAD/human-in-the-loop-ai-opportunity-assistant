@@ -85,11 +85,16 @@ export function OpportunityDetailView() {
   const prepSessions = useQuery({ queryKey: ["interview-prep", id], queryFn: () => opportunityService.interviewPrepSessions(id), enabled: Number.isFinite(id) });
   const resumeReviews = useQuery({ queryKey: ["resume-reviews", id], queryFn: () => opportunityService.resumeReviews(id), enabled: Number.isFinite(id) });
   const recordings = useQuery({ queryKey: ["recordings", id], queryFn: () => opportunityService.recordings(id), enabled: Number.isFinite(id) });
-  const score = useMutation({ mutationFn: () => opportunityService.score(id), onSuccess: () => { toast.success("AI evaluation refreshed"); qc.invalidateQueries({ queryKey: ["opportunity", id] }); qc.invalidateQueries({ queryKey: ["ai-usage"] }); } });
+  const profiles = useQuery({ queryKey: ["profiles"], queryFn: opportunityService.profiles });
+  const resumeTemplates = useQuery({ queryKey: ["resume-templates"], queryFn: opportunityService.resumeTemplates });
+  const [selectedProfileId, setSelectedProfileId] = useState<number | undefined>(undefined);
+  const [resumeTemplate, setResumeTemplate] = useState<string>("international");
+  const score = useMutation({ mutationFn: () => opportunityService.score(id, selectedProfileId), onSuccess: () => { toast.success("AI evaluation refreshed"); qc.invalidateQueries({ queryKey: ["opportunity", id] }); qc.invalidateQueries({ queryKey: ["ai-usage"] }); } });
   const scoreFeedback = useMutation({ mutationFn: (signal: "relevant" | "irrelevant") => opportunityService.scoreFeedback(id, signal), onSuccess: () => toast.success("Thanks — I'll use this to calibrate future scoring."), onError: (error) => toast.error(error.message) });
   const generate = useMutation({ mutationFn: () => opportunityService.generateMaterials(id), onSuccess: () => { toast.success("Materials generated"); qc.invalidateQueries({ queryKey: ["materials", id] }); qc.invalidateQueries({ queryKey: ["ai-usage"] }); }, onError: (error) => toast.error(error.message) });
-  const tailorResume = useMutation({ mutationFn: () => opportunityService.tailorResume(id), onSuccess: () => { toast.success("Tailored resume generated"); qc.invalidateQueries({ queryKey: ["resume-reviews", id] }); qc.invalidateQueries({ queryKey: ["ai-usage"] }); }, onError: (error) => toast.error(tailorResumeErrorMessage(error)) });
+  const tailorResume = useMutation({ mutationFn: () => opportunityService.tailorResume(id, selectedProfileId), onSuccess: () => { toast.success("Tailored resume generated"); qc.invalidateQueries({ queryKey: ["resume-reviews", id] }); qc.invalidateQueries({ queryKey: ["ai-usage"] }); }, onError: (error) => toast.error(tailorResumeErrorMessage(error)) });
   const prep = useMutation({ mutationFn: () => opportunityService.interviewPrep(id), onSuccess: () => { toast.success("Interview preparation generated"); qc.invalidateQueries({ queryKey: ["interview-prep", id] }); qc.invalidateQueries({ queryKey: ["ai-usage"] }); }, onError: (error) => toast.error(error.message) });
+  const buildResume = useMutation({ mutationFn: () => opportunityService.buildResumeDocument(id, resumeTemplate, selectedProfileId), onSuccess: () => { toast.success("Resume document downloaded"); qc.invalidateQueries({ queryKey: ["ai-usage"] }); }, onError: (error) => toast.error(error.message) });
   const saveRecording = useMutation({ mutationFn: (payload: { title: string; blob: Blob; duration_ms: number }) => opportunityService.uploadRecording({ ...payload, job_id: id }), onSuccess: () => { toast.success("Recording saved"); qc.invalidateQueries({ queryKey: ["recordings", id] }); }, onError: (error) => toast.error(error.message) });
   const remove = useMutation({
     mutationFn: () => opportunityService.remove(id),
@@ -201,9 +206,37 @@ export function OpportunityDetailView() {
             {item.url && importable ? <Button asChild variant="outline" className="w-full"><a href={item.url} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4" /> Apply</a></Button> : <Button variant="outline" className="w-full" disabled>Apply unavailable</Button>}
             {item.source_email_open_url || item.source_url ? <Button asChild variant="outline" className="w-full"><a href={item.source_email_open_url || item.source_url || ""} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4" /> Open original source</a></Button> : null}<Button variant="outline" className="w-full" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button>
             <Button variant="outline" className="w-full" onClick={() => statusUpdate.mutate("Applied")}><ExternalLink className="h-4 w-4" /> Mark applied</Button>
+            {(profiles.data?.length ?? 0) > 1 ? (
+              <label className="block text-xs text-muted-foreground">
+                Profile for scoring & tailoring
+                <select
+                  className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm"
+                  value={selectedProfileId ?? ""}
+                  onChange={(e) => setSelectedProfileId(e.target.value ? Number(e.target.value) : undefined)}
+                >
+                  <option value="">Default profile</option>
+                  {(profiles.data ?? []).map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}{p.is_default ? " (default)" : ""}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <Button className="w-full" disabled={!importable} onClick={() => score.mutate()}><Sparkles className="h-4 w-4" /> Refresh AI score</Button>
             <Button className="w-full" variant="secondary" disabled={!importable} onClick={() => generate.mutate()}><FileText className="h-4 w-4" /> Generate materials</Button>
             <Button className="w-full" variant="secondary" disabled={!importable || tailorResume.isPending} onClick={() => tailorResume.mutate()}><FileText className="h-4 w-4" /> {tailorResume.isPending ? "Tailoring..." : "Tailor resume"}</Button>
+            <label className="block text-xs text-muted-foreground">
+              Resume document format
+              <select
+                className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm"
+                value={resumeTemplate}
+                onChange={(e) => setResumeTemplate(e.target.value)}
+              >
+                {(resumeTemplates.data ?? [{ id: "international", label: "International (Generic)" }]).map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </select>
+            </label>
+            <Button className="w-full" variant="secondary" disabled={!importable || buildResume.isPending} onClick={() => buildResume.mutate()}><FileText className="h-4 w-4" /> {buildResume.isPending ? "Building..." : "Build resume (DOCX)"}</Button>
             <Button className="w-full" variant="secondary" disabled={prep.isPending} onClick={() => prep.mutate()}><Sparkles className="h-4 w-4" /> {prep.isPending ? "Generating..." : "Generate interview prep"}</Button>
             <Button className="w-full" variant={recording ? "destructive" : "outline"} onClick={recording ? stopRecording : startRecording}>{recording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />} {recording ? "Stop recording" : "Start practice recording"}</Button>
             <Button className="w-full" variant="destructive" disabled={remove.isPending} onClick={confirmDelete}><Trash2 className="h-4 w-4" /> {remove.isPending ? "Deleting..." : "Delete job"}</Button>

@@ -35,6 +35,20 @@ const CONTENT_FILTERS: Array<{ value: OpportunityContentType; label: string }> =
   { value: "all", label: "All saved" },
 ];
 
+// Mirrors the backend STATUSES list so the status filter actually matches stored values.
+const STATUS_FILTERS: Array<{ value: string; label: string }> = [
+  { value: "all", label: "All statuses" },
+  { value: "new", label: "New" },
+  { value: "reviewed", label: "Reviewed" },
+  { value: "needs review", label: "Needs review" },
+  { value: "applied", label: "Applied" },
+  { value: "interview", label: "Interview" },
+  { value: "offer", label: "Offer" },
+  { value: "rejected", label: "Rejected" },
+  { value: "archived", label: "Archived" },
+  { value: "skip", label: "Skip" },
+];
+
 function isImportableOpportunity(item: Opportunity) {
   const classification = String(item.classification || item.opportunity_type || "").toLowerCase();
   return item.importable !== false && item.importable !== 0 && VALID_OPPORTUNITY_TYPES.has(classification);
@@ -100,7 +114,7 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
   const [batchResult, setBatchResult] = useState<BatchScoreResult | null>(null);
   const jobs = useQuery({ queryKey: ["opportunities", contentType], queryFn: () => opportunityService.list({ content_type: contentType }) });
   const scoreMutation = useMutation({
-    mutationFn: opportunityService.score,
+    mutationFn: (id: number) => opportunityService.score(id),
     onSuccess: () => { toast.success("AI score updated"); qc.invalidateQueries({ queryKey: ["opportunities"] }); },
     onError: (error) => toast.error(error.message),
   });
@@ -200,12 +214,8 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
           <select className="h-10 rounded-md border bg-background px-3 text-sm" value={contentType} onChange={(e) => setContentType(e.target.value as OpportunityContentType)} aria-label="Job type filter">
             {CONTENT_FILTERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
-          <select className="h-10 rounded-md border bg-background px-3 text-sm" value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="all">All statuses</option>
-            <option value="new">New</option>
-            <option value="review">Review</option>
-            <option value="applied">Applied</option>
-            <option value="archived">Archived</option>
+          <select className="h-10 rounded-md border bg-background px-3 text-sm" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status filter">
+            {STATUS_FILTERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
         </CardContent>
       </Card>

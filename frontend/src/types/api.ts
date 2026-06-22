@@ -113,6 +113,9 @@ export interface ProfileJobDiscoveryResult {
 }
 
 export interface Profile {
+  id?: number;
+  name?: string;
+  is_default?: number;
   cv_text?: string;
   target_roles?: string;
   industries?: string;

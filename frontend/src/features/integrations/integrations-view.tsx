@@ -217,7 +217,7 @@ export function IntegrationsView() {
         <CardContent className="space-y-5">
           <ServiceForm service={service.service} selected={selected} form={form} onSave={(config) => save.mutate({ apiKey: form.apiKey, config })} saving={save.isPending} />
           <div className="flex flex-wrap items-center gap-3 border-t pt-4">
-            <Badge>{selected?.has_api_key ? "stored key present" : "no stored key"}</Badge>
+            <Badge>{selected?.has_api_key ? "✓ Key saved" : "No key saved"}</Badge>
             <Button variant="destructive" disabled={!selected || remove.isPending} onClick={() => remove.mutate()}>
               <Trash2 className="h-4 w-4" /> Remove settings
             </Button>
@@ -416,7 +416,16 @@ function AiProviderForm({
 
   return (
     <div className="grid gap-4 md:grid-cols-2">
-      <Field label="Provider API key"><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={provider === "huggingface_local" ? "Not required for local HF models" : localOllama ? "Optional for local Ollama" : selected?.has_api_key ? "Enter key to fetch models, or leave blank to keep saved key" : "Paste provider API key"} /></Field>
+      <Field label="Provider API key">
+        <Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={provider === "huggingface_local" ? "Not required for local HF models" : localOllama ? "Optional for local Ollama" : selected?.has_api_key ? "Leave blank to keep saved key" : "Paste provider API key"} />
+        {apiKeyRequired ? (
+          selected?.has_api_key ? (
+            <p className="mt-1 text-xs text-success">✓ A key is saved. Leave this blank to keep it, or paste a new key to replace it.</p>
+          ) : (
+            <p className="mt-1 text-xs text-warning">No key saved yet — paste your provider API key, then Save.</p>
+          )
+        ) : null}
+      </Field>
       <Field label="Provider"><select className="h-10 rounded-md border bg-background px-3 text-sm" value={provider} onChange={(event) => handleProviderChange(event.target.value)}>{AI_PROVIDERS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
       {provider === "openai" || provider === "langchain_openai" ? <Field label={provider === "langchain_openai" ? "Base URL (Ollama or compatible)" : "Base URL (optional)"}><Input value={config.base_url ?? ""} onChange={(event) => update("base_url", event.target.value)} placeholder={provider === "langchain_openai" ? "http://localhost:11434/v1" : "Leave blank for OpenAI default"} /></Field> : null}
       {provider === "huggingface_local" ? <Field label="Local model"><Input value={config.model ?? providerDefaults.model} onChange={(event) => update("model", event.target.value)} placeholder="Qwen/Qwen2.5-0.5B-Instruct" /></Field> : null}

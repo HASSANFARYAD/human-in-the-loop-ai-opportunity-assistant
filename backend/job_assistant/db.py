@@ -440,6 +440,7 @@ def _run_migrations(con) -> None:
     _ensure_personal_workspace_for_all_users(con)
     _migrate_profile_table(con)
     _ensure_profile_columns(con)
+    _migrate_profile_multi(con)
     _migrate_jobs_table(con)
     _ensure_workspace_scope_columns(con)
     _rebuild_jobs_workspace_unique(con)
@@ -912,6 +913,57 @@ def _migrate_profile_table(con) -> None:
     con.execute("DROP TABLE profile_legacy")
 
 
+def _migrate_profile_multi(con) -> None:
+    """Allow multiple profiles per user by dropping the UNIQUE(user_id) constraint
+    and adding name/is_default. Existing single profiles become the named 'Default'."""
+    columns = _table_columns(con, "profile")
+    if not columns or "is_default" in columns:
+        return  # not yet created, or already migrated
+
+    con.execute("PRAGMA foreign_keys = OFF")
+    con.execute("ALTER TABLE profile RENAME TO profile_legacy")
+    con.execute(
+        """
+        CREATE TABLE profile (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL DEFAULT 'Default',
+            is_default INTEGER NOT NULL DEFAULT 0,
+            cv_text TEXT,
+            target_roles TEXT,
+            industries TEXT,
+            locations TEXT,
+            remote_preference TEXT,
+            salary_expectations TEXT,
+            work_authorization TEXT,
+            years_experience TEXT,
+            skills TEXT,
+            deal_breakers TEXT,
+            full_name TEXT,
+            email TEXT,
+            preferred_role TEXT,
+            country TEXT,
+            job_preferences TEXT,
+            platforms TEXT,
+            resume_name TEXT,
+            integration_status TEXT,
+            created_at TEXT,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, name)
+        )
+        """
+    )
+    legacy_cols = _table_columns(con, "profile_legacy")
+    new_cols = _table_columns(con, "profile")
+    copy_cols = [c for c in legacy_cols if c in new_cols and c not in ("name", "is_default")]
+    col_list = ", ".join(copy_cols)
+    con.execute(
+        f"INSERT INTO profile ({col_list}, name, is_default) SELECT {col_list}, 'Default', 1 FROM profile_legacy"
+    )
+    con.execute("DROP TABLE profile_legacy")
+    con.execute("PRAGMA foreign_keys = ON")
+
+
 def _ensure_profile_columns(con) -> None:
     extra_columns = {
         "full_name": "TEXT",
@@ -1228,42 +1280,145 @@ def get_user(user_id: int) -> dict[str, Any]:
         return dict(row) if row else {}
 
 
-def upsert_profile(profile: Dict[str, Any], user_id: int = 1) -> None:
-    fields = [
-        "cv_text",
-        "target_roles",
-        "industries",
-        "locations",
-        "remote_preference",
-        "salary_expectations",
-        "work_authorization",
-        "years_experience",
-        "skills",
-        "deal_breakers",
-        "full_name",
-        "email",
-        "preferred_role",
-        "country",
-        "job_preferences",
-        "platforms",
-        "resume_name",
-        "integration_status",
-    ]
-    values = {k: profile.get(k, "") for k in fields}
-    values["updated_at"] = utc_now()
+PROFILE_FIELDS = [
+    "cv_text",
+    "target_roles",
+    "industries",
+    "locations",
+    "remote_preference",
+    "salary_expectations",
+    "work_authorization",
+    "years_experience",
+    "skills",
+    "deal_breakers",
+    "full_name",
+    "email",
+    "preferred_role",
+    "country",
+    "job_preferences",
+    "platforms",
+    "resume_name",
+    "integration_status",
+]
+
+
+def _default_profile_id(con, user_id: int) -> int | None:
+    row = con.execute(
+        "SELECT id FROM profile WHERE user_id=? ORDER BY is_default DESC, id ASC LIMIT 1",
+        (user_id,),
+    ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def upsert_profile(profile: Dict[str, Any], user_id: int = 1, profile_id: int | None = None) -> int:
+    """Update an existing profile (the default, or the one identified by profile_id),
+    or create the user's first profile. Returns the profile id."""
+    now = utc_now()
+    values = {k: profile.get(k, "") for k in PROFILE_FIELDS}
     with connect() as con:
-        con.execute(
-            f"""
-            INSERT INTO profile (user_id, {', '.join(values.keys())}) VALUES (?, {', '.join(['?'] * len(values))})
-            ON CONFLICT(user_id) DO UPDATE SET {', '.join([f'{k}=excluded.{k}' for k in values.keys()])}
-            """,
-            [user_id, *list(values.values())],
+        target_id = profile_id or _default_profile_id(con, user_id)
+        if target_id is not None:
+            assignments = ", ".join(f"{k}=?" for k in values.keys())
+            con.execute(
+                f"UPDATE profile SET {assignments}, updated_at=? WHERE id=? AND user_id=?",
+                [*values.values(), now, target_id, user_id],
+            )
+            return int(target_id)
+        # First profile for this user -> create it as the default.
+        name = (profile.get("name") or "Default").strip() or "Default"
+        cur = con.execute(
+            f"INSERT INTO profile (user_id, name, is_default, {', '.join(values.keys())}, created_at, updated_at) "
+            f"VALUES (?, ?, 1, {', '.join(['?'] * len(values))}, ?, ?)",
+            [user_id, name, *values.values(), now, now],
         )
+        return int(cur.lastrowid)
 
 
-def get_profile(user_id: int = 1) -> Dict[str, Any]:
+def create_profile(user_id: int, profile: Dict[str, Any], name: str = "", make_default: bool = False) -> int:
+    now = utc_now()
+    values = {k: profile.get(k, "") for k in PROFILE_FIELDS}
+    clean_name = (name or profile.get("name") or "").strip() or "New profile"
     with connect() as con:
-        row = con.execute("SELECT * FROM profile WHERE user_id=?", (user_id,)).fetchone()
+        has_any = con.execute("SELECT 1 FROM profile WHERE user_id=? LIMIT 1", (user_id,)).fetchone()
+        is_default = 1 if (make_default or not has_any) else 0
+        # Ensure unique name per user.
+        base, suffix = clean_name, 2
+        while con.execute("SELECT 1 FROM profile WHERE user_id=? AND name=?", (user_id, clean_name)).fetchone():
+            clean_name = f"{base} ({suffix})"
+            suffix += 1
+        if is_default:
+            con.execute("UPDATE profile SET is_default=0 WHERE user_id=?", (user_id,))
+        cur = con.execute(
+            f"INSERT INTO profile (user_id, name, is_default, {', '.join(values.keys())}, created_at, updated_at) "
+            f"VALUES (?, ?, ?, {', '.join(['?'] * len(values))}, ?, ?)",
+            [user_id, clean_name, is_default, *values.values(), now, now],
+        )
+        return int(cur.lastrowid)
+
+
+def update_profile_fields(user_id: int, profile_id: int, profile: Dict[str, Any]) -> bool:
+    now = utc_now()
+    values = {k: profile.get(k, "") for k in PROFILE_FIELDS}
+    with connect() as con:
+        if not con.execute("SELECT 1 FROM profile WHERE id=? AND user_id=?", (profile_id, user_id)).fetchone():
+            return False
+        if profile.get("name"):
+            new_name = profile["name"].strip()
+            if new_name and not con.execute(
+                "SELECT 1 FROM profile WHERE user_id=? AND name=? AND id<>?", (user_id, new_name, profile_id)
+            ).fetchone():
+                con.execute("UPDATE profile SET name=? WHERE id=? AND user_id=?", (new_name, profile_id, user_id))
+        assignments = ", ".join(f"{k}=?" for k in values.keys())
+        con.execute(
+            f"UPDATE profile SET {assignments}, updated_at=? WHERE id=? AND user_id=?",
+            [*values.values(), now, profile_id, user_id],
+        )
+        return True
+
+
+def set_default_profile(user_id: int, profile_id: int) -> bool:
+    with connect() as con:
+        if not con.execute("SELECT 1 FROM profile WHERE id=? AND user_id=?", (profile_id, user_id)).fetchone():
+            return False
+        con.execute("UPDATE profile SET is_default=0 WHERE user_id=?", (user_id,))
+        con.execute("UPDATE profile SET is_default=1 WHERE id=? AND user_id=?", (profile_id, user_id))
+        return True
+
+
+def delete_profile(user_id: int, profile_id: int) -> bool:
+    with connect() as con:
+        count = con.execute("SELECT COUNT(*) AS c FROM profile WHERE user_id=?", (user_id,)).fetchone()["c"]
+        if count <= 1:
+            raise ValueError("Cannot delete your only profile.")
+        row = con.execute("SELECT is_default FROM profile WHERE id=? AND user_id=?", (profile_id, user_id)).fetchone()
+        if not row:
+            return False
+        con.execute("DELETE FROM profile WHERE id=? AND user_id=?", (profile_id, user_id))
+        if row["is_default"]:
+            # Promote the most recent remaining profile to default.
+            con.execute(
+                "UPDATE profile SET is_default=1 WHERE id=(SELECT id FROM profile WHERE user_id=? ORDER BY id DESC LIMIT 1)",
+                (user_id,),
+            )
+        return True
+
+
+def list_profiles(user_id: int) -> list[dict[str, Any]]:
+    with connect() as con:
+        rows = con.execute(
+            "SELECT * FROM profile WHERE user_id=? ORDER BY is_default DESC, name ASC", (user_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_profile(user_id: int = 1, profile_id: int | None = None) -> Dict[str, Any]:
+    with connect() as con:
+        if profile_id is not None:
+            row = con.execute("SELECT * FROM profile WHERE id=? AND user_id=?", (profile_id, user_id)).fetchone()
+            return dict(row) if row else {}
+        row = con.execute(
+            "SELECT * FROM profile WHERE user_id=? ORDER BY is_default DESC, id ASC LIMIT 1", (user_id,)
+        ).fetchone()
         return dict(row) if row else {}
 
 

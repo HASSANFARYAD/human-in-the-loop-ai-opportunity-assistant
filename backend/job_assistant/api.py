@@ -94,6 +94,11 @@ from job_assistant.db import (
     user_has_permission,
     update_status,
     upsert_profile,
+    create_profile,
+    list_profiles,
+    update_profile_fields,
+    set_default_profile,
+    delete_profile,
 )
 from job_assistant.runtime import runtime_status, validate_startup_configuration
 from job_assistant.provider_registry import provider_registry
@@ -115,7 +120,8 @@ from job_assistant.services.opportunity_classifier import (
     scoring_gate,
 )
 from job_assistant.services.job_source_scrapers import ScraperError, UnsupportedSourceUrl, indeed_url_with_work_location_intent, get_scraper_for_url, is_job_listing_url
-from job_assistant.services.parsing import extract_job_from_text, jobs_from_csv
+from job_assistant.services.parsing import extract_job_from_text, extract_profile_from_resume, extract_text_from_upload, jobs_from_csv
+from job_assistant.services.resume_builder import RESUME_TEMPLATES, RESUME_STRUCTURE_KEYS, is_valid_template, render_resume_docx
 from job_assistant.services.public_discovery import discover_public_opportunities
 from job_assistant.services.rapidapi_linkedin import search_linkedin_jobs, rapidapi_items_to_opportunities
 from job_assistant.services.scoring import score_job
@@ -137,6 +143,7 @@ def _frontend_redirect(path: str, params: dict[str, str]) -> str:
 
 
 class ProfileCreate(BaseModel):
+    name: str = ""
     cv_text: str = ""
     target_roles: str = ""
     industries: str = ""
@@ -530,6 +537,7 @@ class DeletionApproveIn(BaseModel):
 class BatchScoreIn(BaseModel):
     job_ids: list[int] = Field(default_factory=list)
     score_all_unscored: bool = False
+    profile_id: Optional[int] = None
 
 
 class ResumeReviewIn(BaseModel):
@@ -1489,6 +1497,115 @@ async def update_profile(profile_data: ProfileCreate, user: dict = Depends(curre
         raise HTTPException(status_code=500, detail="Failed to update profile")
 
 
+@router.get("/profiles")
+async def list_user_profiles(user: dict = Depends(current_user)):
+    return list_profiles(user["id"])
+
+
+@router.post("/profiles")
+async def create_user_profile(profile_data: ProfileCreate, make_default: bool = False, user: dict = Depends(current_user)):
+    try:
+        data = profile_data.dict()
+        profile_id = create_profile(user["id"], data, name=data.get("name", ""), make_default=make_default)
+        return {"status": "success", "id": profile_id}
+    except Exception as e:
+        logger.error(f"Error creating profile: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create profile")
+
+
+@router.get("/profiles/{profile_id}")
+async def get_user_profile_by_id(profile_id: int, user: dict = Depends(current_user)):
+    profile = get_profile(user["id"], profile_id=profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return profile
+
+
+@router.put("/profiles/{profile_id}")
+async def update_user_profile(profile_id: int, profile_data: ProfileCreate, user: dict = Depends(current_user)):
+    if not update_profile_fields(user["id"], profile_id, profile_data.dict()):
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return {"status": "success"}
+
+
+@router.post("/profiles/{profile_id}/default")
+async def make_profile_default(profile_id: int, user: dict = Depends(current_user)):
+    if not set_default_profile(user["id"], profile_id):
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return {"status": "success"}
+
+
+@router.delete("/profiles/{profile_id}")
+async def remove_user_profile(profile_id: int, user: dict = Depends(current_user)):
+    try:
+        if not delete_profile(user["id"], profile_id):
+            raise HTTPException(status_code=404, detail="Profile not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "success"}
+
+
+# Resume fields that are derived from the uploaded document. We only overwrite
+# these with extracted values; user-curated preferences are preserved.
+_RESUME_DERIVED_FIELDS = (
+    "cv_text",
+    "target_roles",
+    "industries",
+    "locations",
+    "remote_preference",
+    "work_authorization",
+    "years_experience",
+    "skills",
+)
+
+_MAX_RESUME_BYTES = 5 * 1024 * 1024
+
+
+@router.post("/profile/upload-resume")
+async def upload_resume(file: UploadFile = File(...), apply_to_profile: bool = Form(True), profile_id: Optional[int] = Form(None), user: dict = Depends(current_user)):
+    """Upload a resume (.pdf/.docx/.txt), extract text + structured fields via AI,
+    and (optionally) merge the extracted fields into the user's profile."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(raw) > _MAX_RESUME_BYTES:
+        raise HTTPException(status_code=400, detail="Resume file is too large (max 5 MB).")
+
+    try:
+        cv_text = extract_text_from_upload(file.filename or "", raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Resume text extraction failed: {exc}")
+        raise HTTPException(status_code=400, detail="Could not read text from this file. Try a .pdf, .docx, or .txt resume.")
+
+    if not cv_text.strip():
+        raise HTTPException(status_code=400, detail="No readable text found in the resume.")
+
+    extracted = extract_profile_from_resume(cv_text, user["id"])
+    extracted.pop("_ai_error", None)
+
+    saved = False
+    if apply_to_profile:
+        existing = get_profile(user["id"], profile_id=profile_id) or {}
+        merged = {**existing}
+        for field in _RESUME_DERIVED_FIELDS:
+            value = extracted.get(field)
+            if value:
+                merged[field] = value
+        merged["resume_name"] = file.filename or merged.get("resume_name") or "resume"
+        upsert_profile(merged, user["id"], profile_id=profile_id or (existing.get("id") if existing else None))
+        saved = True
+
+    return {
+        "status": "success",
+        "filename": file.filename,
+        "applied_to_profile": saved,
+        "characters": len(cv_text),
+        "extracted": {field: extracted.get(field, "") for field in _RESUME_DERIVED_FIELDS},
+    }
+
+
 @router.get("/jobs")
 async def list_all_jobs(workspace_id: Optional[int] = None, content_type: str = "job", type: Optional[str] = None, user: dict = Depends(current_user)):
     try:
@@ -1891,9 +2008,9 @@ async def delete_job_endpoint(job_id: int, workspace_id: Optional[int] = None, u
 
 
 @router.post("/jobs/{job_id}/score")
-async def score_single_job(job_id: int, user: dict = Depends(current_user)):
+async def score_single_job(job_id: int, profile_id: Optional[int] = None, user: dict = Depends(current_user)):
     try:
-        profile = get_profile(user["id"])
+        profile = get_profile(user["id"], profile_id=profile_id)
         if not profile:
             raise HTTPException(status_code=400, detail="Profile not configured")
 
@@ -1916,7 +2033,7 @@ async def score_single_job(job_id: int, user: dict = Depends(current_user)):
 
 @router.post("/jobs/score-batch")
 async def score_jobs_batch(payload: BatchScoreIn, user: dict = Depends(current_user)):
-    profile = get_profile(user["id"])
+    profile = get_profile(user["id"], profile_id=payload.profile_id)
     if not profile:
         raise HTTPException(status_code=400, detail="Add your resume profile before scoring jobs.")
 
@@ -2340,8 +2457,8 @@ async def post_job_resume_review(job_id: int, payload: ResumeReviewIn, user: dic
 
 
 @router.post("/jobs/{job_id}/tailor-resume")
-async def post_job_tailored_resume(job_id: int, user: dict = Depends(current_user)):
-    profile = get_profile(user["id"])
+async def post_job_tailored_resume(job_id: int, profile_id: Optional[int] = None, user: dict = Depends(current_user)):
+    profile = get_profile(user["id"], profile_id=profile_id)
     if not _profile_has_resume_context(profile):
         raise HTTPException(status_code=400, detail="Add resume or profile details before tailoring a resume.")
     job = get_job(job_id, user["id"])
@@ -2351,6 +2468,109 @@ async def post_job_tailored_resume(job_id: int, user: dict = Depends(current_use
         raise HTTPException(status_code=400, detail="This job does not have enough description detail to tailor a resume.")
     tailored = _llm_tailored_resume(profile or {}, job, user["id"])
     return save_resume_review(user["id"], tailored, job_id)
+
+
+def _fallback_resume_structure(profile: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
+    """Best-effort structured resume from profile fields when AI is unavailable."""
+    skills = [s.strip() for s in str(profile.get("skills") or "").split(",") if s.strip()]
+    return {
+        "full_name": profile.get("full_name") or "Your Name",
+        "headline": job.get("title") or profile.get("preferred_role") or profile.get("target_roles") or "",
+        "contact": {
+            "email": profile.get("email") or "",
+            "location": profile.get("locations") or profile.get("country") or "",
+            "phone": "",
+            "linkedin": "",
+            "website": "",
+        },
+        "summary": (str(profile.get("cv_text") or "").strip()[:600]) or "Experienced professional aligned to the target role.",
+        "skills": skills,
+        "experience": [],
+        "education": [],
+        "certifications": [],
+        "projects": [],
+    }
+
+
+def _llm_structured_resume(profile: dict[str, Any], job: dict[str, Any], user_id: int) -> dict[str, Any]:
+    fallback = _fallback_resume_structure(profile, job)
+    job_context = build_job_context(profile, job)
+    system = (
+        "You are an expert resume writer. Return JSON only describing a truthful, ATS-friendly resume tailored to the "
+        "target job, grounded strictly in the supplied resume text and profile. Do NOT invent employers, job titles, "
+        "dates, degrees, certifications, or metrics that are not present in the source. Leave fields empty if unknown."
+    )
+    context = {
+        "resume_text": profile.get("cv_text") or "",
+        "profile": profile,
+        "job": {
+            "title": job.get("title"),
+            "company": job.get("company"),
+            "description": job.get("description") or job.get("raw_text") or "",
+            "keywords": job_context["keywords"],
+            "focus_areas": job_context["focus_areas"],
+        },
+        "output_schema": {
+            "full_name": "string",
+            "headline": "string (target job title)",
+            "contact": {"email": "string", "phone": "string", "location": "string", "linkedin": "string", "website": "string"},
+            "summary": "string (3-4 sentence professional summary tailored to the job)",
+            "skills": ["string"],
+            "experience": [{"title": "string", "company": "string", "location": "string", "start": "string", "end": "string", "bullets": ["string"]}],
+            "education": [{"degree": "string", "institution": "string", "location": "string", "year": "string"}],
+            "certifications": ["string"],
+            "projects": [{"name": "string", "description": "string"}],
+        },
+        "required_output_keys": RESUME_STRUCTURE_KEYS,
+    }
+    structure = ai_orchestrator.ask_json(
+        system,
+        json.dumps(context),
+        fallback,
+        user_id=user_id,
+        task_type="resume_document",
+        workspace_id=job.get("workspace_id"),
+    )
+    if structure.get("_ai_error"):
+        structure = fallback
+    # Backfill any keys the model omitted so rendering never KeyErrors.
+    for key in RESUME_STRUCTURE_KEYS:
+        structure.setdefault(key, fallback.get(key))
+    return structure
+
+
+@router.get("/resume-templates")
+async def get_resume_templates(user: dict = Depends(current_user)):
+    return RESUME_TEMPLATES
+
+
+@router.post("/jobs/{job_id}/resume-document")
+async def build_resume_document(job_id: int, template: str = "international", profile_id: Optional[int] = None, user: dict = Depends(current_user)):
+    if not is_valid_template(template):
+        raise HTTPException(status_code=400, detail="Unknown resume template.")
+    profile = get_profile(user["id"], profile_id=profile_id)
+    if not _profile_has_resume_context(profile):
+        raise HTTPException(status_code=400, detail="Add resume or profile details before building a resume.")
+    job = get_job(job_id, user["id"])
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not str(job.get("description") or job.get("raw_text") or "").strip():
+        raise HTTPException(status_code=400, detail="This job does not have enough description detail to build a resume.")
+
+    structure = _llm_structured_resume(profile or {}, job, user["id"])
+    try:
+        docx_bytes = render_resume_docx(structure, template)
+    except Exception as exc:
+        logger.error(f"Resume document rendering failed: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to build the resume document.")
+
+    safe_company = re.sub(r"[^A-Za-z0-9]+", "-", str(job.get("company") or job.get("title") or "resume")).strip("-").lower() or "resume"
+    filename = f"resume-{safe_company}-{template}.docx"
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/jobs/{job_id}/interview-prep")

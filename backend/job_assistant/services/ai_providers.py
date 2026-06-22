@@ -126,7 +126,17 @@ def _azure_openai(api_key: str, model: str, system: str, user: str, config: dict
     endpoint = config.get("endpoint") or ""
     api_version = config.get("api_version") or "2024-10-21"
     deployment = config.get("deployment") or model
+    # Reasoning/codex deployments (e.g. gpt-5.x, o-series, *-codex) only expose the
+    # Responses API; classic chat models use Chat Completions. "auto" picks based on
+    # the deployment name, or set api_style explicitly to "responses"/"chat".
+    api_style = (config.get("api_style") or "auto").strip().lower()
+    if api_style == "auto":
+        name = (deployment or model or "").lower()
+        api_style = "responses" if any(tag in name for tag in ("codex", "gpt-5", "o1", "o3", "o4")) else "chat"
     client = AzureOpenAI(api_key=api_key, azure_endpoint=endpoint, api_version=api_version)
+    if api_style == "responses":
+        response = client.responses.create(model=deployment, instructions=system, input=user)
+        return response.output_text or ""
     response = client.chat.completions.create(model=deployment, messages=_messages(system, user), temperature=0.2)
     return response.choices[0].message.content or ""
 

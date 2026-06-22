@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import { Activity, Bot, Database, HeartPulse, Mail, Save, ShieldCheck, TestTube2 } from "lucide-react";
@@ -23,7 +24,6 @@ export function SettingsView() {
   const health = useQuery({ queryKey: ["health"], queryFn: auditService.health });
   const usage = useQuery({ queryKey: ["usage"], queryFn: auditService.usage });
   const feedback = useQuery({ queryKey: ["feedback"], queryFn: () => feedbackService.list() });
-  const profile = useQuery({ queryKey: ["profile"], queryFn: opportunityService.profile });
   const adminConfigs = useQuery({ queryKey: ["admin-configs"], queryFn: providerService.adminConfigs });
   return (
     <div className="space-y-5">
@@ -34,7 +34,7 @@ export function SettingsView() {
         <Card><CardContent className="p-5"><Activity className="mb-3 h-5 w-5 text-warning" /><div className="text-2xl font-semibold">{feedback.data?.length ?? 0}</div><div className="text-sm text-muted-foreground">Feedback items</div></CardContent></Card>
       </div>
       {tab === "profile" ? (
-        <ProfileForm profile={profile.data ?? {}} />
+        <ProfileManager />
       ) : tab === "feedback" ? (
         <Card><CardHeader><CardTitle>Feedback</CardTitle></CardHeader><CardContent><DataTable rows={(feedback.data ?? []) as unknown as Record<string, unknown>[]} columns={["title", "category", "severity", "status", "created_at"]} /></CardContent></Card>
       ) : tab === "audit" ? (
@@ -59,14 +59,29 @@ const CONFIG_TYPES = [
 function AdminConfiguration({ data, loading }: { data?: { configs: AdminConfig[]; statuses: Record<string, { status: string; configured: boolean; count: number; active_count: number }> }; loading: boolean }) {
   const configs = data?.configs ?? [];
   const statuses = data?.statuses ?? {};
+  // AI provider configuration lives on the dedicated AI Provider page to avoid two
+  // competing config surfaces; Settings manages only Gmail and recording storage here.
+  const serviceConfigTypes = CONFIG_TYPES.filter((item) => item.type !== "ai_provider");
   return (
     <div className="space-y-5">
       <div>
         <h2 className="text-xl font-semibold">Connected Services</h2>
-        <p className="text-sm text-muted-foreground">Manage the services used for AI generation, Gmail import, and recording upload.</p>
+        <p className="text-sm text-muted-foreground">Manage the services used for Gmail import and recording upload. Your AI provider is configured on its own page.</p>
       </div>
-      <div className="grid gap-4 md:grid-cols-3">
-        {CONFIG_TYPES.map((item) => {
+      <Card>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
+          <div className="flex items-center gap-3">
+            <Bot className="h-5 w-5 text-primary" />
+            <div>
+              <div className="font-medium">AI Provider</div>
+              <div className="text-xs text-muted-foreground">Set your AI key and model (OpenAI, Azure OpenAI, Claude, Gemini, and more).</div>
+            </div>
+          </div>
+          <Button asChild variant="outline"><Link href="/integrations?service=ai_provider">Configure AI Provider</Link></Button>
+        </CardContent>
+      </Card>
+      <div className="grid gap-4 md:grid-cols-2">
+        {serviceConfigTypes.map((item) => {
           const Icon = item.icon;
           const status = statuses[item.type]?.status ?? "missing";
           return (
@@ -81,7 +96,7 @@ function AdminConfiguration({ data, loading }: { data?: { configs: AdminConfig[]
           );
         })}
       </div>
-      {CONFIG_TYPES.map((item) => <AdminConfigForm key={item.type} type={item.type} title={item.title} defaults={item.defaults} selected={configs.find((config) => config.type === item.type && config.is_active) ?? configs.find((config) => config.type === item.type)} />)}
+      {serviceConfigTypes.map((item) => <AdminConfigForm key={item.type} type={item.type} title={item.title} defaults={item.defaults} selected={configs.find((config) => config.type === item.type && config.is_active) ?? configs.find((config) => config.type === item.type)} />)}
     </div>
   );
 }
@@ -197,23 +212,136 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className="grid gap-2 text-sm font-medium">{label}{children}</label>;
 }
 
-function ProfileForm({ profile }: { profile: Profile }) {
+function ProfileManager() {
+  const qc = useQueryClient();
+  const profiles = useQuery({ queryKey: ["profiles"], queryFn: opportunityService.profiles });
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  const list = profiles.data ?? [];
+  // Default selection: the default profile, else the first.
+  useEffect(() => {
+    if (list.length && (selectedId === null || !list.some((p) => p.id === selectedId))) {
+      const def = list.find((p) => p.is_default) ?? list[0];
+      setSelectedId(def?.id ?? null);
+    }
+  }, [list, selectedId]);
+
+  const create = useMutation({
+    mutationFn: () => opportunityService.createProfile({ name: "New profile" }),
+    onSuccess: (result) => {
+      toast.success("Profile created");
+      qc.invalidateQueries({ queryKey: ["profiles"] });
+      setSelectedId(result.id);
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const makeDefault = useMutation({
+    mutationFn: (id: number) => opportunityService.setDefaultProfile(id),
+    onSuccess: () => {
+      toast.success("Default profile updated");
+      qc.invalidateQueries({ queryKey: ["profiles"] });
+      qc.invalidateQueries({ queryKey: ["profile"] });
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const remove = useMutation({
+    mutationFn: (id: number) => opportunityService.deleteProfile(id),
+    onSuccess: () => {
+      toast.success("Profile deleted");
+      setSelectedId(null);
+      qc.invalidateQueries({ queryKey: ["profiles"] });
+      qc.invalidateQueries({ queryKey: ["profile"] });
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const selected = list.find((p) => p.id === selectedId) ?? null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>User Profiles</CardTitle>
+        <p className="text-sm text-muted-foreground">Keep separate profiles/resumes for different roles. The default profile is used for scoring and tailoring unless you pick another.</p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          {list.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => setSelectedId(p.id ?? null)}
+              className={`rounded-full border px-3 py-1.5 text-sm transition ${p.id === selectedId ? "glass-subtle border-primary text-foreground" : "text-muted-foreground hover:bg-white/30 dark:hover:bg-white/10"}`}
+            >
+              {p.name || "Untitled"}{p.is_default ? " ★" : ""}
+            </button>
+          ))}
+          <Button variant="outline" size="sm" disabled={create.isPending} onClick={() => create.mutate()}>+ New profile</Button>
+        </div>
+        {selected ? (
+          <div className="flex flex-wrap items-center gap-2 border-b pb-3">
+            {!selected.is_default ? (
+              <Button variant="outline" size="sm" disabled={makeDefault.isPending} onClick={() => selected.id && makeDefault.mutate(selected.id)}>Set as default</Button>
+            ) : <span className="text-xs text-muted-foreground">This is your default profile.</span>}
+            {list.length > 1 ? (
+              <Button variant="outline" size="sm" disabled={remove.isPending} onClick={() => selected.id && remove.mutate(selected.id)}>Delete</Button>
+            ) : null}
+          </div>
+        ) : null}
+        {selected ? <ProfileForm key={selected.id} profile={selected} profileId={selected.id ?? null} /> : <p className="text-sm text-muted-foreground">Create a profile to get started.</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ProfileForm({ profile, profileId }: { profile: Profile; profileId: number | null }) {
   const qc = useQueryClient();
   const [form, setForm] = useState<Profile>(profile);
   useEffect(() => setForm(profile), [profile]);
   const save = useMutation({
-    mutationFn: () => opportunityService.updateProfile(form),
+    mutationFn: () => (profileId ? opportunityService.updateProfileById(profileId, form) : opportunityService.updateProfile(form)),
     onSuccess: () => {
-      toast.success("Profile updated");
+      toast.success("Profile saved");
+      qc.invalidateQueries({ queryKey: ["profiles"] });
+      qc.invalidateQueries({ queryKey: ["profile"] });
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const upload = useMutation({
+    mutationFn: (file: File) => opportunityService.uploadResume(file, profileId ?? undefined),
+    onSuccess: (result) => {
+      toast.success(`Resume imported (${result.characters.toLocaleString()} characters). Review the fields below, then Save.`);
+      qc.invalidateQueries({ queryKey: ["profiles"] });
       qc.invalidateQueries({ queryKey: ["profile"] });
     },
     onError: (error) => toast.error(error.message),
   });
   const update = (key: keyof Profile, value: string) => setForm((current) => ({ ...current, [key]: value }));
   return (
-    <Card>
-      <CardHeader><CardTitle>User Profile</CardTitle></CardHeader>
-      <CardContent className="grid gap-4 md:grid-cols-2">
+    <div className="grid gap-4 md:grid-cols-2">
+        <Input className="md:col-span-2" placeholder="Profile name (e.g. Backend roles)" value={form.name ?? ""} onChange={(e) => update("name", e.target.value)} />
+        <div className="md:col-span-2 rounded-lg border border-dashed p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium">Import from resume</div>
+              <div className="text-xs text-muted-foreground">Upload a PDF, DOCX, or TXT. We extract your details and pre-fill the fields below — nothing is saved until you click Save profile.</div>
+              {form.resume_name ? <div className="mt-1 text-xs text-muted-foreground">Current: {form.resume_name}</div> : null}
+            </div>
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition hover:bg-white/30 dark:hover:bg-white/10">
+              {upload.isPending ? "Importing…" : "Upload resume"}
+              <input
+                type="file"
+                accept=".pdf,.docx,.txt"
+                className="hidden"
+                disabled={upload.isPending}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) upload.mutate(file);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          </div>
+        </div>
         <Input placeholder="Full name" value={form.full_name ?? ""} onChange={(e) => update("full_name", e.target.value)} />
         <Input placeholder="Email" value={form.email ?? ""} onChange={(e) => update("email", e.target.value)} />
         <Input placeholder="Preferred role" value={form.preferred_role ?? form.target_roles ?? ""} onChange={(e) => { update("preferred_role", e.target.value); update("target_roles", e.target.value); }} />
@@ -229,7 +357,6 @@ function ProfileForm({ profile }: { profile: Profile }) {
         <Textarea className="md:col-span-2" placeholder="Resume / CV text" value={form.cv_text ?? ""} onChange={(e) => update("cv_text", e.target.value)} />
         <Textarea className="md:col-span-2" placeholder="Deal breakers" value={form.deal_breakers ?? ""} onChange={(e) => update("deal_breakers", e.target.value)} />
         <Button className="md:col-span-2" disabled={save.isPending} onClick={() => save.mutate()}>Save profile</Button>
-      </CardContent>
-    </Card>
+    </div>
   );
 }
