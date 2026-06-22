@@ -102,6 +102,7 @@ from job_assistant.services.apify_integration import apify_items_to_opportunitie
 from job_assistant.services.generation import generate_materials
 from job_assistant.services.gmail_ingest import build_gmail_authorization_url, disconnect_gmail, exchange_gmail_code, get_gmail_connection
 from job_assistant.services.job_import import import_opportunities
+from job_assistant.services.job_context import build_job_context, choose_primary_focus_area, extract_profile_skills
 from job_assistant.services.opportunity_classifier import (
     VALID_OPPORTUNITY_CATEGORIES,
     annotate_opportunity,
@@ -537,16 +538,12 @@ class GmailMessagesIn(BaseModel):
 def _recording_storage_config(user_id: int) -> dict[str, Any]:
     settings = get_integration_settings(user_id, "recording_storage")
     config = settings.get("config") or {}
-    if not settings:
-        raise HTTPException(status_code=400, detail="Recording storage configuration is missing in database settings.")
-    if config.get("is_active") is False:
+    if settings and config.get("is_active") is False:
         raise HTTPException(status_code=400, detail="Recording storage configuration is inactive.")
     storage_type = str(config.get("storage_type") or "local").strip().lower()
     if storage_type != "local":
         raise HTTPException(status_code=400, detail=f"Recording storage type '{storage_type}' is not supported by this deployment.")
-    storage_path = str(config.get("storage_path") or "").strip()
-    if not storage_path:
-        raise HTTPException(status_code=400, detail="Recording storage path is missing in database settings.")
+    storage_path = str(config.get("storage_path") or "data/recordings").strip()
     allowed = config.get("allowed_mime_types") or ["audio/webm", "audio/wav", "audio/mpeg", "audio/mp4", "audio/ogg"]
     if isinstance(allowed, str):
         allowed = [item.strip() for item in allowed.replace(",", " ").split() if item.strip()]
@@ -1880,31 +1877,40 @@ async def score_jobs_batch(payload: BatchScoreIn, user: dict = Depends(current_u
 
 def _generate_resume_review(profile: dict[str, Any], job: dict[str, Any] | None, resume_text: str = "", target_role: str = "") -> dict[str, Any]:
     resume = resume_text.strip() or str(profile.get("cv_text") or "")
-    job_text = " ".join(str((job or {}).get(key, "")) for key in ["title", "company", "description"])
-    profile_terms = {term.lower() for term in str(profile.get("skills") or "").replace("\n", ",").split(",") if term.strip()}
-    job_terms = {term.lower() for term in job_text.replace("\n", " ").replace("/", " ").split() if len(term) > 3}
-    missing = sorted(list((job_terms - profile_terms) & {"python", "react", "next.js", "sql", "aws", "azure", "fastapi", "typescript", "leadership", "analytics"}))
+    job = job or {}
+    context = build_job_context(profile, job)
+    primary_focus = choose_primary_focus_area(context["focus_areas"])
+    profile_terms = {term.lower() for term in extract_profile_skills(profile, limit=20)}
+    missing = sorted(
+        list(
+            {keyword.lower() for keyword in context["keywords"]}
+            .difference(profile_terms)
+            & {"python", "react", "next.js", "sql", "aws", "azure", "fastapi", "typescript", "leadership", "analytics", "openai", "claude", "zapier", "n8n"}
+        )
+    )
     return {
-        "summary": f"Resume review for {target_role or (job or {}).get('title') or profile.get('preferred_role') or 'target role'}.",
+        "summary": f"Resume review for {target_role or job.get('title') or profile.get('preferred_role') or 'target role'}.",
         "strengths": [
             "Existing resume/profile text is available for tailoring." if resume else "Add resume text to unlock stronger feedback.",
-            "Profile skills can be mapped into opportunity-specific language.",
+            f"Profile skills can be mapped into {primary_focus.lower()} language.",
         ],
         "weaknesses": [
             "Quantify recent achievements with business or delivery impact.",
-            "Move the most relevant role keywords into the top third of the resume.",
+            f"Move the most relevant keywords for {context['title']} into the top third of the resume.",
         ],
         "missing_keywords": missing,
+        "job_focus_areas": context["focus_areas"],
+        "job_highlights": context["highlights"],
         "formatting_suggestions": [
             "Use concise bullets that start with action verbs.",
             "Keep sections scan-friendly for ATS and recruiter review.",
         ],
-        "role_alignment": "Good baseline alignment; improve by mirroring the job title, core stack, and responsibility language.",
+        "role_alignment": f"Good baseline alignment; improve by mirroring the {context['title']} title, core stack, and responsibility language.",
         "recommended_changes": [
-            "Add 2-3 bullets tied directly to the selected job responsibilities.",
+            f"Add 2-3 bullets tied directly to {primary_focus.lower()} job responsibilities.",
             "Replace generic summaries with target-role positioning.",
         ],
-        "improved_resume_response": "Draft improvement: emphasize measurable outcomes, relevant tools, and the exact target role in the summary and first experience section.",
+        "improved_resume_response": f"Draft improvement: emphasize measurable outcomes, relevant tools, and the exact {context['title']} target role in the summary and first experience section.",
     }
 
 
@@ -1927,19 +1933,25 @@ def _keywords_from_job(job: dict[str, Any]) -> list[str]:
 
 
 def _generate_tailored_resume(profile: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
-    role = job.get("title") or "target role"
-    company = job.get("company") or "the company"
-    skills = [part.strip() for part in re.split(r",|\n|;", str(profile.get("skills") or "")) if part.strip()]
-    keywords = _keywords_from_job(job)
+    context = build_job_context(profile, job)
+    role = context["title"]
+    company = context["company"]
+    skills = context["skills"]
+    keywords = context["keywords"]
+    focus_areas = context["focus_areas"]
+    highlights = context["highlights"]
     emphasized_skills = [skill for skill in skills if skill.lower() in " ".join(keywords).lower()] or skills[:8] or keywords[:8]
+    primary_focus = choose_primary_focus_area(focus_areas)
+    secondary_focus = next((area for area in focus_areas if area != primary_focus), primary_focus)
+    highlight = highlights[0] if highlights else ""
     summary = (
         f"{profile.get('years_experience') or 'Experienced'} professional targeting {role} at {company}, "
-        f"with hands-on experience in {', '.join(emphasized_skills[:5]) or 'the role requirements'}."
+        f"with hands-on experience in {', '.join(emphasized_skills[:5]) or 'the role requirements'} and a clear fit for {primary_focus.lower()}."
     )
     bullets = [
-        f"Delivered work aligned with {role} requirements using {', '.join(emphasized_skills[:4]) or 'relevant tools and practices'}.",
-        "Translated business and user needs into maintainable, measurable solutions.",
-        "Collaborated across stakeholders to ship reliable improvements and communicate tradeoffs clearly.",
+        f"Delivered work aligned with {primary_focus.lower()} using {', '.join(emphasized_skills[:4]) or 'relevant tools and practices'}.",
+        f"Translated {secondary_focus.lower()} requirements into maintainable, measurable solutions that can be referenced in the {role} resume.",
+        f"Collaborated across stakeholders to ship reliable improvements; job-specific cue: {highlight[:120] or 'highlight the most relevant project outcome from your history'}.",
     ]
     draft = "\n".join(
         [
@@ -1961,7 +1973,9 @@ def _generate_tailored_resume(profile: dict[str, Any], job: dict[str, Any]) -> d
         "tailored_experience_bullets": bullets,
         "skills_to_emphasize": emphasized_skills[:12],
         "keywords_to_include": keywords,
-        "optional_cover_note": f"I am interested in the {role} role at {company} because my background maps directly to the job's core responsibilities.",
+        "job_focus_areas": focus_areas,
+        "job_highlights": highlights,
+        "optional_cover_note": f"I am interested in the {role} role at {company} because the posting emphasizes {primary_focus.lower()} and {secondary_focus.lower()}, which maps directly to my background.",
         "application_guidance": [
             "Keep claims grounded in your real resume and project history.",
             "Add metrics to the bullets before submitting.",
@@ -1975,6 +1989,7 @@ def _generate_tailored_resume(profile: dict[str, Any], job: dict[str, Any]) -> d
 def _llm_tailored_resume(profile: dict[str, Any], job: dict[str, Any], user_id: int) -> dict[str, Any]:
     fallback = _generate_tailored_resume(profile, job)
     route = ai_orchestrator.resolve_route(user_id, task_type="resume_tailoring")
+    job_context = build_job_context(profile, job)
     system = (
         "You are an expert resume writer. Return JSON only. Create a truthful tailored resume draft grounded only in "
         "the supplied resume/profile and job description. Do not invent employers, degrees, certifications, metrics, or credentials."
@@ -1987,6 +2002,10 @@ def _llm_tailored_resume(profile: dict[str, Any], job: dict[str, Any], user_id: 
             "company": job.get("company"),
             "description": job.get("description") or job.get("raw_text") or "",
             "location": job.get("location"),
+            "remote_type": job.get("remote_type"),
+            "keywords": job_context["keywords"],
+            "focus_areas": job_context["focus_areas"],
+            "highlights": job_context["highlights"],
         },
         "required_output_keys": [
             "tailored_summary",
@@ -1998,7 +2017,14 @@ def _llm_tailored_resume(profile: dict[str, Any], job: dict[str, Any], user_id: 
             "resume_draft",
         ],
     }
-    tailored = ai_orchestrator.ask_json(system, json.dumps(context), fallback, user_id=user_id, task_type="resume_tailoring")
+    tailored = ai_orchestrator.ask_json(
+        system,
+        json.dumps(context),
+        fallback,
+        user_id=user_id,
+        task_type="resume_tailoring",
+        workspace_id=job.get("workspace_id"),
+    )
     for key, value in fallback.items():
         tailored.setdefault(key, value)
     tailored["type"] = "tailored_resume"
@@ -2013,36 +2039,71 @@ def _llm_tailored_resume(profile: dict[str, Any], job: dict[str, Any], user_id: 
 
 
 def _generate_interview_prep(profile: dict[str, Any], job: dict[str, Any], evaluation: dict[str, Any]) -> dict[str, Any]:
-    role = job.get("title") or "this role"
-    company = job.get("company") or "the company"
+    context = build_job_context(profile, job)
+    role = context["title"]
+    company = context["company"]
+    focus_areas = context["focus_areas"]
+    highlights = context["highlights"]
+    skills = context["skills"]
+    primary_focus = choose_primary_focus_area(focus_areas)
+    other_focuses = [area for area in focus_areas if area != primary_focus]
+    secondary_focus = other_focuses[0] if other_focuses else primary_focus
+    third_focus = other_focuses[1] if len(other_focuses) > 1 else primary_focus
+    skill_line = ", ".join(skills[:4] or context["keywords"][:4] or ["your stack"])
+    highlight_line = highlights[0] if highlights else f"the requirements for {role}"
     return {
         "summary": f"Interview preparation for {role} at {company}.",
         "behavioral_questions": [
-            "Tell me about a time you handled ambiguity in a project.",
-            "Describe a conflict with a stakeholder and how you resolved it.",
-            "Give an example of improving a process or system.",
+            f"Tell me about a time you delivered {primary_focus.lower()} under a tight timeline.",
+            f"Describe a situation where you had to balance {secondary_focus.lower()} with quality or stakeholder expectations.",
+            f"Give an example of improving a process or system similar to the work described in this posting.",
         ],
         "technical_questions": [
-            f"Walk through how your skills in {profile.get('skills') or 'your stack'} apply to this role.",
-            "How would you approach debugging a production issue with limited information?",
-            "What tradeoffs would you consider when designing a scalable feature?",
+            f"Walk through how your skills in {skill_line} apply to {primary_focus.lower()} for this role.",
+            f"How would you approach a production issue that touches {secondary_focus.lower()} and needs careful validation?",
+            f"What tradeoffs would you consider when designing a solution for {third_focus.lower()} in a fast-moving environment?",
         ],
         "role_specific_questions": [
-            f"What attracts you to the {role} responsibilities?",
-            "Which requirement in the job description best matches your recent experience?",
+            f"What attracts you to the {role} responsibilities at {company}?",
+            f"Which requirement in the job description best matches your recent experience with {primary_focus.lower()}?",
         ],
-        "suggested_answers": [
-            "Use STAR: situation, task, action, result. Keep each answer under two minutes.",
-            f"Connect your answer back to {company}'s needs and the role requirements.",
+        "company_job_specific_questions": [
+            f"The posting highlights: {highlight_line[:140]}. How would you show direct experience with that?",
+            f"What part of the {role} role at {company} feels most aligned with your background?",
+        ],
+        "suggested_answer_outlines": [
+            f"Use STAR, then close by tying the answer back to {primary_focus.lower()} and the impact you delivered.",
+            f"Reference a concrete project that shows {secondary_focus.lower()} and keep the answer under two minutes.",
+        ],
+        "star_format_guidance": [
+            "Situation: give only the minimum context needed.",
+            "Task: state the goal or constraint clearly.",
+            "Action: focus on what you personally did.",
+            "Result: include a measurable or observable outcome.",
+        ],
+        "weakness_improvement_prompts": [
+            f"Prepare one example that proves you can handle {primary_focus.lower()} without inventing details.",
+            f"Prepare one example that proves you can communicate tradeoffs around {secondary_focus.lower()}.",
+        ],
+        "candidate_questions": [
+            f"What does success look like for {role} in the first 30, 60, and 90 days?",
+            f"Where does {company} need the most help relative to {highlight_line[:90]}?",
+        ],
+        "final_preparation_checklist": [
+            f"Have one example ready for {primary_focus.lower()}",
+            f"Have one example ready for {secondary_focus.lower()}",
+            "Prepare one metric-driven story and one learning story.",
+            "Review the company, the job description, and your resume side by side before the interview.",
         ],
         "talking_points": [
-            evaluation.get("good_fit") or "Highlight direct overlap between your experience and the job.",
-            "Prepare one metric-driven achievement and one learning story.",
+            evaluation.get("good_fit") or f"Highlight direct overlap between your experience and the {role} responsibilities.",
+            f"Prepare one metric-driven achievement and one story tied to {primary_focus.lower()}.",
         ],
         "questions_to_ask": [
             "What would success look like in the first 90 days?",
-            "Which team priorities are driving this opening?",
+            f"Which team priorities are driving this opening at {company}?",
         ],
+        "generation_source": "local_fallback",
     }
 
 
@@ -2076,7 +2137,14 @@ def _llm_resume_review(profile: dict[str, Any], job: dict[str, Any] | None, resu
             "platforms": profile.get("platforms"),
         },
     }
-    review = ai_orchestrator.ask_json(system, json.dumps(context), fallback, user_id=user_id, task_type="resume_review")
+    review = ai_orchestrator.ask_json(
+        system,
+        json.dumps(context),
+        fallback,
+        user_id=user_id,
+        task_type="resume_review",
+        workspace_id=job.get("workspace_id") if job else None,
+    )
     if review.get("_ai_error"):
         raise HTTPException(status_code=502, detail=f"LLM resume review failed: {review.get('_ai_error')}")
     review.setdefault("generation_source", "llm")
@@ -2087,6 +2155,7 @@ def _llm_interview_prep(profile: dict[str, Any], job: dict[str, Any], evaluation
     _require_ai_configuration(user_id, "interview_prep")
     fallback = _generate_interview_prep(profile, job, evaluation)
     latest_reviews = list_resume_reviews(user_id, job_id=int(job["id"]), limit=1)
+    job_context = build_job_context(profile, job)
     system = (
         "You are an expert interview coach. Return JSON only with keys: behavioral_questions, technical_questions, "
         "role_specific_questions, company_job_specific_questions, suggested_answer_outlines, star_format_guidance, "
@@ -2100,10 +2169,20 @@ def _llm_interview_prep(profile: dict[str, Any], job: dict[str, Any], evaluation
         "role_title": job.get("title"),
         "job_description": job.get("description"),
         "required_skills": job.get("raw_text") or job.get("description"),
+        "job_keywords": job_context["keywords"],
+        "job_focus_areas": job_context["focus_areas"],
+        "job_highlights": job_context["highlights"],
         "ai_score": evaluation,
         "resume_review_findings": latest_reviews[0] if latest_reviews else {},
     }
-    prep = ai_orchestrator.ask_json(system, json.dumps(context), fallback, user_id=user_id, task_type="interview_prep")
+    prep = ai_orchestrator.ask_json(
+        system,
+        json.dumps(context),
+        fallback,
+        user_id=user_id,
+        task_type="interview_prep",
+        workspace_id=job.get("workspace_id"),
+    )
     if prep.get("_ai_error"):
         raise HTTPException(status_code=502, detail=f"LLM interview preparation failed: {prep.get('_ai_error')}")
     prep.setdefault("generation_source", "llm")
@@ -2153,8 +2232,28 @@ async def post_job_interview_prep(job_id: int, user: dict = Depends(current_user
     job = get_job(job_id, user["id"])
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    evaluation = get_evaluation(job_id, user["id"]) or score_job(profile, job, user_id=user["id"])
-    prep = _llm_interview_prep(profile, job, evaluation, user["id"])
+    evaluation = get_evaluation(job_id, user["id"])
+    if not evaluation:
+        try:
+            evaluation = score_job(profile, job, user_id=user["id"])
+        except Exception:
+            evaluation = {
+                "match_score": 0,
+                "priority": "Low",
+                "good_fit": "Highlight direct overlap between your experience and the job.",
+                "weak_areas": "Review the job description and practice concrete examples.",
+                "red_flags": "No automated score was available.",
+            }
+    fallback = _generate_interview_prep(profile, job, evaluation)
+    generation_source = "local_fallback"
+    try:
+        prep = _llm_interview_prep(profile, job, evaluation, user["id"])
+        generation_source = "llm"
+    except HTTPException:
+        prep = fallback
+    except Exception:
+        prep = fallback
+    prep.setdefault("generation_source", generation_source)
     return save_interview_prep(user["id"], job_id, prep)
 
 
@@ -2299,7 +2398,7 @@ async def generate_job_materials(job_id: int, user: dict = Depends(current_user)
             evaluation = score_job(profile, job, user_id=user["id"])
             save_evaluation(job_id, evaluation, user["id"])
 
-        materials = generate_materials(profile, job, evaluation, user_id=user["id"])
+        materials = generate_materials(profile, job, evaluation, user_id=user["id"], workspace_id=job.get("workspace_id"))
         save_materials(job_id, materials, user["id"])
         return materials
     except HTTPException:

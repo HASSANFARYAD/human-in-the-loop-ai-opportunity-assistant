@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
@@ -23,6 +23,7 @@ type AuthFormValues = z.infer<typeof schema>;
 
 export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const setUser = useAuthStore((state) => state.setUser);
   const form = useForm<AuthFormValues>({ resolver: zodResolver(schema), defaultValues: { email: "", password: "", full_name: "" } });
   const mutation = useMutation({
@@ -32,7 +33,8 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         : authService.register({ email: values.email, password: values.password, full_name: values.full_name ?? "" }),
     onSuccess: (data) => {
       setUser(data.user);
-      router.replace("/dashboard");
+      const next = searchParams.get("next");
+      router.replace(next && next.startsWith("/") ? next : "/dashboard");
     },
     onError: (error) => toast.error(error.message),
   });

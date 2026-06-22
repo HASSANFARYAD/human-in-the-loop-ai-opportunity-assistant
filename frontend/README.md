@@ -1,6 +1,6 @@
-# Opportunity Intelligence Frontend
+# Job Assistant Frontend
 
-Production Next.js frontend for the opportunity assistant. FastAPI remains the source of truth for authentication, data models, scoring, provider orchestration, automation, audit, and workspace isolation.
+Production Next.js frontend for Job Assistant. FastAPI remains the source of truth for authentication, data models, scoring, provider orchestration, automation, audit, and workspace isolation.
 
 ## Local Development
 

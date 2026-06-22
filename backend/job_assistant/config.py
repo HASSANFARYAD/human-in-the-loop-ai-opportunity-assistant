@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # User-owned provider API keys are stored encrypted in the database from the Integrations UI.
     # Env provider keys are intentionally not part of normal user workflows.
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    default_ai_provider: str = os.getenv("DEFAULT_AI_PROVIDER", "openai")
+    default_ai_provider: str = os.getenv("DEFAULT_AI_PROVIDER", "huggingface_local")
 
     google_credentials_file: str = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
     google_token_file: str = os.getenv("GOOGLE_TOKEN_FILE", "token.json")

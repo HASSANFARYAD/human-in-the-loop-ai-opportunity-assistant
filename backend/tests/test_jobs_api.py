@@ -317,6 +317,17 @@ def _mock_ai_json(monkeypatch, payload: dict | None = None) -> None:
     monkeypatch.setattr(api.ai_orchestrator, "ask_json", lambda *args, **kwargs: payload or {})
 
 
+def _mock_recording_storage(monkeypatch, config: dict | None = None) -> None:
+    import job_assistant.api as api
+
+    monkeypatch.setattr(api, "_recording_storage_config", lambda user_id: config or {
+        "storage_type": "local",
+        "storage_path": "data/recordings",
+        "max_upload_size": 25 * 1024 * 1024,
+        "allowed_mime_types": ["audio/webm", "audio/wav", "audio/mpeg", "audio/mp4", "audio/ogg"],
+    })
+
+
 def test_jobs_endpoint_defaults_to_job_like_content(tmp_path, monkeypatch):
     client, headers = _client(tmp_path, monkeypatch)
     from job_assistant.db import get_user_by_email, insert_job
@@ -603,6 +614,44 @@ def test_tailor_resume_returns_structured_resume_sections(tmp_path, monkeypatch)
     assert body["tailored_summary"] == "Backend engineer with FastAPI experience."
     assert body["tailored_experience_bullets"] == ["Built APIs with FastAPI."]
     assert body["resume_draft"].startswith("Professional Summary")
+
+
+def test_interview_prep_falls_back_without_ai_provider(tmp_path, monkeypatch):
+    client, headers = _client(tmp_path, monkeypatch)
+    from job_assistant.db import get_user_by_email, insert_job
+
+    user_id = get_user_by_email("jobs@example.com")["id"]
+    _seed_profile(user_id)
+    job_id = insert_job(_job_payload("Backend Engineer", "job"), user_id)
+
+    response = client.post(f"/api/v1/jobs/{job_id}/interview-prep", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job_id"] == job_id
+    assert body["summary"].startswith("Interview preparation for Backend Engineer")
+    assert body["behavioral_questions"]
+    assert body["generation_source"] == "local_fallback"
+
+
+def test_recording_upload_uses_default_storage_when_config_missing(tmp_path, monkeypatch):
+    client, headers = _client(tmp_path, monkeypatch)
+    from job_assistant.db import get_user_by_email, insert_job
+
+    user_id = get_user_by_email("jobs@example.com")["id"]
+    job_id = insert_job(_job_payload("Backend Engineer", "job"), user_id)
+    _mock_recording_storage(monkeypatch)
+
+    response = client.post(
+        "/api/v1/recordings/upload",
+        headers=headers,
+        files={"file": ("recording.webm", b"test-bytes", "audio/webm")},
+        data={"job_id": str(job_id), "title": "Practice recording", "duration_ms": "1234"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job_id"] == job_id
+    assert body["title"] == "Practice recording"
+    assert body["storage_type"] == "local"
 
 
 def test_find_jobs_from_profile_filters_non_job_content_and_scores(tmp_path, monkeypatch):

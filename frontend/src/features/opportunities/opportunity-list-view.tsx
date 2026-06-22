@@ -245,8 +245,14 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
                   type="checkbox"
                   aria-label="Select page"
                   disabled={scoringBusy}
-                  checked={pageItems.length > 0 && pageItems.every((item) => selected.includes(item.id))}
-                  onChange={(e) => setSelected(e.target.checked ? Array.from(new Set([...selected, ...pageItems.filter(isImportableOpportunity).map((item) => item.id)])) : selected.filter((id) => !pageItems.some((item) => item.id === id)))}
+                  checked={pageItems.filter(isImportableOpportunity).length > 0 && pageItems.filter(isImportableOpportunity).every((item) => selected.includes(item.id))}
+                  onChange={(e) =>
+                    setSelected(
+                      e.target.checked
+                        ? Array.from(new Set([...selected, ...pageItems.filter(isImportableOpportunity).map((item) => item.id)]))
+                        : selected.filter((id) => !pageItems.filter(isImportableOpportunity).some((item) => item.id === id)),
+                    )
+                  }
                 />
               </th>
               <th className="p-3">Job</th>

@@ -110,6 +110,43 @@ def clean_html(text: str) -> str:
         return re.sub(r"<[^>]+>", "\n", text or "")
 
 
+# Characters that, when leading a spreadsheet cell, can trigger formula
+# execution if the exported CSV is later opened in Excel/Sheets.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def neutralize_csv_formula(value: str) -> str:
+    """Defang CSV/Excel formula injection by prefixing risky cells with a quote.
+
+    A cell beginning with =, +, -, @ (or tab/CR) is treated as a formula by
+    spreadsheet apps. Prefixing with a single quote forces it to be read as
+    literal text. See https://owasp.org/www-community/attacks/CSV_Injection.
+    """
+    if not isinstance(value, str):
+        return value
+    if value and value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def sanitize_imported_text(value, *, strip_html: bool = True, max_length: int | None = None):
+    """Sanitize a free-text field arriving from an untrusted import source.
+
+    Strips HTML/markup, removes control characters, neutralizes spreadsheet
+    formula injection, and trims to ``max_length`` when given. Non-string
+    values are returned unchanged.
+    """
+    if not isinstance(value, str):
+        return value
+    text = clean_html(value) if strip_html else value
+    # Drop ASCII control chars except tab/newline/carriage-return.
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    text = text.strip()
+    if max_length is not None:
+        text = text[:max_length]
+    return neutralize_csv_formula(text)
+
+
 def extract_profile_from_resume(cv_text: str, user_id: int | None = None) -> Dict:
     text = cv_text or ""
     fallback = _fallback_profile_from_resume(text)
@@ -391,28 +428,36 @@ Source is {source}. Text:\n{text[:12000]}
 def jobs_from_csv(uploaded_file, default_opportunity_type: str = "job") -> List[Dict]:
     import pandas as pd
 
-    df = pd.read_csv(uploaded_file)
+    df = pd.read_csv(uploaded_file, dtype=str)
     jobs = []
     for _, row in df.fillna("").iterrows():
         d = row.to_dict()
+
+        def field(*keys, max_length: int | None = 2000):
+            for key in keys:
+                value = d.get(key)
+                if value:
+                    return sanitize_imported_text(str(value), max_length=max_length)
+            return ""
+
         jobs.append({
-            "title": d.get("title") or d.get("Job title") or d.get("job_title") or "Untitled role",
-            "company": d.get("company") or d.get("Company") or "",
-            "location": d.get("location") or d.get("Location") or "",
-            "remote_type": d.get("remote_type") or d.get("remote") or "",
-            "url": d.get("url") or d.get("Job URL") or d.get("link") or "",
-            "source": d.get("source") or "CSV",
-            "date_received": d.get("date_received") or "",
-            "description": d.get("description") or d.get("job_description") or "",
-            "recruiter_email": d.get("recruiter_email") or "",
+            "title": field("title", "Job title", "job_title", max_length=300) or "Untitled role",
+            "company": field("company", "Company", max_length=300),
+            "location": field("location", "Location", max_length=300),
+            "remote_type": field("remote_type", "remote", max_length=100),
+            "url": field("url", "Job URL", "link", max_length=2000),
+            "source": field("source", max_length=100) or "CSV",
+            "date_received": field("date_received", max_length=100),
+            "description": field("description", "job_description", max_length=20000),
+            "recruiter_email": field("recruiter_email", max_length=320),
             "salary_min": d.get("salary_min") or None,
             "salary_max": d.get("salary_max") or None,
-            "deadline": d.get("deadline") or "",
-            "opportunity_type": (d.get("opportunity_type") or d.get("type") or default_opportunity_type or "job").lower(),
-            "classification": (d.get("classification") or d.get("opportunity_type") or d.get("type") or default_opportunity_type or "job").lower(),
-            "classification_confidence": d.get("classification_confidence") or "",
-            "classification_reason": d.get("classification_reason") or "",
-            "opportunity_confidence": d.get("opportunity_confidence") or "",
+            "deadline": field("deadline", max_length=100),
+            "opportunity_type": (field("opportunity_type", "type", max_length=50) or default_opportunity_type or "job").lower(),
+            "classification": (field("classification", "opportunity_type", "type", max_length=50) or default_opportunity_type or "job").lower(),
+            "classification_confidence": field("classification_confidence", max_length=50),
+            "classification_reason": field("classification_reason", max_length=500),
+            "opportunity_confidence": field("opportunity_confidence", max_length=50),
             "raw_text": str(d),
         })
     return jobs

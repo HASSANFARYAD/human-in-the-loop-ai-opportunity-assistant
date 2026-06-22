@@ -509,12 +509,16 @@ def _run_migrations(con) -> None:
     con.execute("CREATE INDEX IF NOT EXISTS idx_interview_prep_user_job ON interview_prep_sessions(user_id, job_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_gmail_messages_user_message ON gmail_messages(user_id, message_id)")
     _rebuild_legacy_job_child_tables(con)
-    con.execute("DELETE FROM applications WHERE job_id NOT IN (SELECT id FROM jobs)")
-    con.execute("DELETE FROM evaluations WHERE job_id NOT IN (SELECT id FROM jobs)")
-    con.execute("DELETE FROM application_materials WHERE job_id NOT IN (SELECT id FROM jobs)")
-    con.execute("DELETE FROM resume_reviews WHERE job_id IS NOT NULL AND job_id NOT IN (SELECT id FROM jobs)")
-    con.execute("DELETE FROM interview_prep_sessions WHERE job_id NOT IN (SELECT id FROM jobs)")
-    con.execute("DELETE FROM recordings WHERE job_id IS NOT NULL AND job_id NOT IN (SELECT id FROM jobs)")
+    try:
+        con.execute("PRAGMA foreign_keys=OFF")
+        con.execute("DELETE FROM applications WHERE job_id NOT IN (SELECT id FROM jobs)")
+        con.execute("DELETE FROM evaluations WHERE job_id NOT IN (SELECT id FROM jobs)")
+        con.execute("DELETE FROM application_materials WHERE job_id NOT IN (SELECT id FROM jobs)")
+        con.execute("DELETE FROM resume_reviews WHERE job_id IS NOT NULL AND job_id NOT IN (SELECT id FROM jobs)")
+        con.execute("DELETE FROM interview_prep_sessions WHERE job_id NOT IN (SELECT id FROM jobs)")
+        con.execute("DELETE FROM recordings WHERE job_id IS NOT NULL AND job_id NOT IN (SELECT id FROM jobs)")
+    finally:
+        con.execute("PRAGMA foreign_keys=ON")
 
 
 def _ensure_default_user(con) -> int:
@@ -626,7 +630,6 @@ def _rebuild_legacy_job_child_tables(con) -> None:
             f"INSERT OR IGNORE INTO {table} ({','.join(common)}) SELECT {','.join(common)} FROM {table}_legacy_fk WHERE job_id IN (SELECT id FROM jobs)"
         )
         con.execute(f"DROP TABLE {table}_legacy_fk")
-    con.execute("PRAGMA foreign_keys=ON")
 
 
 def _workspace_scope_for_user(con, user_id: int, workspace_id: int | None = None) -> tuple[int, int]:
@@ -721,6 +724,15 @@ def _rebuild_jobs_workspace_unique(con) -> None:
     markers = {row["version"] for row in con.execute("SELECT version FROM schema_migrations").fetchall()}
     if "20260525_workspace_unique_jobs" in markers:
         return
+    if "jobs" in {row["name"] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}:
+        current_columns = _table_columns(con, "jobs")
+        if {"workspace_id", "organization_id"}.issubset(current_columns):
+            now = utc_now()
+            con.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, description, applied_at) VALUES (?,?,?)",
+                ("20260525_workspace_unique_jobs", "Workspace scoped opportunity unique constraint", now),
+            )
+            return
     now = utc_now()
     con.execute("PRAGMA foreign_keys=OFF")
     con.execute("ALTER TABLE jobs RENAME TO jobs_legacy_ws")

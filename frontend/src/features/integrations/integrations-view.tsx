@@ -18,7 +18,9 @@ import { providerService } from "@/services/provider.service";
 import type { Integration, ProviderConfig } from "@/types/api";
 
 const AI_PROVIDERS = [
+  ["huggingface_local", "Hugging Face Local (Transformers)"],
   ["openai", "OpenAI-compatible"],
+  ["langchain_openai", "LangChain + OpenAI-compatible"],
   ["azure_openai", "Azure OpenAI"],
   ["grok", "Grok / xAI"],
   ["claude", "Anthropic Claude"],
@@ -27,7 +29,9 @@ const AI_PROVIDERS = [
 ] as const;
 
 const AI_PROVIDER_DEFAULTS: Record<string, Record<string, string>> = {
+  huggingface_local: { model: "Qwen/Qwen2.5-0.5B-Instruct" },
   openai: { model: "gpt-4o-mini", base_url: "" },
+  langchain_openai: { model: "llama3.1", base_url: "http://localhost:11434/v1" },
   azure_openai: { model: "Kimi-K2.5", endpoint: "", api_version: "2024-10-21", deployment: "" },
   grok: { model: "grok-3-mini", base_url: "https://api.x.ai/v1" },
   claude: { model: "claude-3-5-sonnet-latest" },
@@ -36,7 +40,9 @@ const AI_PROVIDER_DEFAULTS: Record<string, Record<string, string>> = {
 };
 
 const AI_PROVIDER_MODEL_FALLBACKS: Record<string, string[]> = {
+  huggingface_local: ["Qwen/Qwen2.5-0.5B-Instruct", "HuggingFaceTB/SmolLM2-360M-Instruct", "TinyLlama/TinyLlama-1.1B-Chat-v1.0"],
   openai: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"],
+  langchain_openai: ["llama3.1", "llama3.1:8b", "gpt-4o-mini"],
   azure_openai: ["Kimi-K2.5"],
   grok: ["grok-3-mini", "grok-3", "grok-2-latest"],
   claude: ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"],
@@ -44,12 +50,39 @@ const AI_PROVIDER_MODEL_FALLBACKS: Record<string, string[]> = {
   huggingface: ["mistralai/Mistral-7B-Instruct-v0.3", "meta-llama/Meta-Llama-3-8B-Instruct"],
 };
 
+function isLocalOllamaBaseUrl(baseUrl: string) {
+  const normalized = baseUrl.trim().replace(/\/$/, "");
+  return normalized.startsWith("http://localhost:11434") || normalized.startsWith("http://127.0.0.1:11434") || normalized.startsWith("http://[::1]:11434");
+}
+
 async function fetchAiModels(provider: string, apiKey: string, config: Record<string, string>) {
-  if (!apiKey.trim()) throw new Error("Enter the provider API key before fetching models");
+  const baseUrl = (config.base_url || "").trim().replace(/\/$/, "");
+  const localOllama = provider === "langchain_openai" && isLocalOllamaBaseUrl(baseUrl || "http://localhost:11434/v1");
+
+  if (provider !== "huggingface_local" && !apiKey.trim() && !localOllama) throw new Error("Enter the provider API key before fetching models");
+
+  if (provider === "huggingface_local") {
+    return AI_PROVIDER_MODEL_FALLBACKS.huggingface_local;
+  }
 
   if (provider === "openai" || provider === "grok") {
     const baseUrl = (provider === "grok" ? config.base_url || AI_PROVIDER_DEFAULTS.grok.base_url : config.base_url || "https://api.openai.com/v1").replace(/\/$/, "");
     const response = await fetch(`${baseUrl}/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!response.ok) throw new Error(`Model fetch failed with ${response.status}`);
+    const data = await response.json();
+    return ((data.data ?? []) as Array<{ id?: string }>).map((item) => item.id).filter(Boolean) as string[];
+  }
+
+  if (provider === "langchain_openai" && localOllama) {
+    const ollamaBase = baseUrl.replace(/\/v1$/, "");
+    const response = await fetch(`${ollamaBase || "http://localhost:11434"}/api/tags`);
+    if (!response.ok) throw new Error(`Model fetch failed with ${response.status}`);
+    const data = await response.json();
+    return ((data.models ?? []) as Array<{ name?: string; model?: string }>).map((item) => item.name || item.model).filter(Boolean) as string[];
+  }
+
+  if (provider === "langchain_openai") {
+    const response = await fetch(`${baseUrl || "https://api.openai.com/v1"}/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
     if (!response.ok) throw new Error(`Model fetch failed with ${response.status}`);
     const data = await response.json();
     return ((data.data ?? []) as Array<{ id?: string }>).map((item) => item.id).filter(Boolean) as string[];
@@ -269,11 +302,11 @@ function ServiceForm({
           <Field label="Apify API token"><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={selected?.has_api_key ? "Leave blank to keep saved token" : "Paste Apify API token"} /></Field>
           <Field label="Actor id"><Input value={config.actor_id ?? ""} onChange={(event) => update("actor_id", event.target.value)} placeholder="username/actor-name or actor id" /></Field>
         </div>
-        <Field label="Input JSON template"><Textarea value={config.input_template ?? '{\n  "startUrls": [{"url": "{{url}}"]}\n}'} onChange={(event) => update("input_template", event.target.value)} /></Field>
+        <Field label="Input JSON template"><Textarea value={config.input_template ?? '{\n  "startUrls": [{"url": "{{url}}"}]\n}'} onChange={(event) => update("input_template", event.target.value)} /></Field>
         <SaveButton disabled={saving || (!apiKey && !selected?.has_api_key)} onClick={() => {
           try {
             JSON.parse(config.input_template || "{}");
-            onSave({ actor_id: config.actor_id || "", input_template: config.input_template || '{\n  "startUrls": [{"url": "{{url}}"]}\n}' });
+            onSave({ actor_id: config.actor_id || "", input_template: config.input_template || '{\n  "startUrls": [{"url": "{{url}}"}]\n}' });
           } catch (error) {
             toast.error(`Input template is not valid JSON: ${(error as Error).message}`);
           }
@@ -327,12 +360,14 @@ function AiProviderForm({
   saving: boolean;
 }) {
   const { apiKey, setApiKey, config, setConfig } = form;
-  const provider = config.provider || "openai";
+  const provider = config.provider || "huggingface_local";
   const providerDefaults = AI_PROVIDER_DEFAULTS[provider] ?? AI_PROVIDER_DEFAULTS.openai;
   const [modelOptions, setModelOptions] = useState<string[]>(AI_PROVIDER_MODEL_FALLBACKS[provider] ?? [providerDefaults.model].filter(Boolean));
   const [modelsLoading, setModelsLoading] = useState(false);
   const update = (key: string, value: string) => setConfig((current) => ({ ...current, [key]: value }));
   const modelValue = config.model || providerDefaults.model || "";
+  const localOllama = provider === "langchain_openai" && isLocalOllamaBaseUrl(config.base_url || providerDefaults.base_url || "http://localhost:11434/v1");
+  const apiKeyRequired = provider !== "huggingface_local" && !localOllama;
 
   const handleProviderChange = (nextProvider: string) => {
     const defaults = AI_PROVIDER_DEFAULTS[nextProvider] ?? AI_PROVIDER_DEFAULTS.openai;
@@ -348,7 +383,11 @@ function AiProviderForm({
   };
 
   const saveConfig: Record<string, unknown> = { provider, model: modelValue };
+  if (provider === "huggingface_local") {
+    saveConfig.model = modelValue || providerDefaults.model || AI_PROVIDER_DEFAULTS.huggingface_local.model;
+  }
   if (provider === "openai" && config.base_url) saveConfig.base_url = config.base_url;
+  if (provider === "langchain_openai") saveConfig.base_url = config.base_url || providerDefaults.base_url || "http://localhost:11434/v1";
   if (provider === "grok") saveConfig.base_url = config.base_url || providerDefaults.base_url;
   if (provider === "azure_openai") {
     saveConfig.endpoint = config.endpoint || "";
@@ -377,9 +416,10 @@ function AiProviderForm({
 
   return (
     <div className="grid gap-4 md:grid-cols-2">
-      <Field label="Provider API key"><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={selected?.has_api_key ? "Enter key to fetch models, or leave blank to keep saved key" : "Paste provider API key"} /></Field>
+      <Field label="Provider API key"><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={provider === "huggingface_local" ? "Not required for local HF models" : localOllama ? "Optional for local Ollama" : selected?.has_api_key ? "Enter key to fetch models, or leave blank to keep saved key" : "Paste provider API key"} /></Field>
       <Field label="Provider"><select className="h-10 rounded-md border bg-background px-3 text-sm" value={provider} onChange={(event) => handleProviderChange(event.target.value)}>{AI_PROVIDERS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
-      {provider === "openai" ? <Field label="Base URL (optional)"><Input value={config.base_url ?? ""} onChange={(event) => update("base_url", event.target.value)} placeholder="Leave blank for OpenAI default" /></Field> : null}
+      {provider === "openai" || provider === "langchain_openai" ? <Field label={provider === "langchain_openai" ? "Base URL (Ollama or compatible)" : "Base URL (optional)"}><Input value={config.base_url ?? ""} onChange={(event) => update("base_url", event.target.value)} placeholder={provider === "langchain_openai" ? "http://localhost:11434/v1" : "Leave blank for OpenAI default"} /></Field> : null}
+      {provider === "huggingface_local" ? <Field label="Local model"><Input value={config.model ?? providerDefaults.model} onChange={(event) => update("model", event.target.value)} placeholder="Qwen/Qwen2.5-0.5B-Instruct" /></Field> : null}
       {provider === "grok" ? <Field label="Base URL"><Input value={config.base_url || providerDefaults.base_url} onChange={(event) => update("base_url", event.target.value)} /></Field> : null}
       {provider === "azure_openai" ? (
         <>
@@ -398,13 +438,13 @@ function AiProviderForm({
               </select>
             </Field>
           </div>
-          <Button variant="outline" disabled={modelsLoading || !apiKey.trim()} onClick={handleFetchModels}>
+          <Button variant="outline" disabled={modelsLoading || provider === "huggingface_local" || (!apiKey.trim() && !localOllama)} onClick={handleFetchModels}>
             <RefreshCw className={modelsLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"} /> Fetch models
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground">Enter the API key first, then fetch models. If the provider blocks browser model-list calls, recommended models are shown.</p>
+        <p className="text-xs text-muted-foreground">{provider === "huggingface_local" ? "Local HF models do not need an API key. Pick a small instruct model like Qwen/Qwen2.5-0.5B-Instruct, then save." : localOllama ? "Ollama can be queried locally without an API key. Use the local OpenAI-compatible endpoint, then fetch installed models." : "Enter the API key first, then fetch models. If the provider blocks browser model-list calls, recommended models are shown."}</p>
       </div>
-      <SaveButton disabled={saving || (!apiKey && !selected?.has_api_key)} onClick={() => onSave(saveConfig)} />
+      <SaveButton disabled={saving || (apiKeyRequired && !apiKey && !selected?.has_api_key)} onClick={() => onSave(saveConfig)} />
     </div>
   );
 }
