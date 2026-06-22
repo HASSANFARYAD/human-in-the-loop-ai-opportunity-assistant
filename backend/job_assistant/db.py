@@ -2597,6 +2597,25 @@ def log_ai_generation(user_id: int | None, *, provider: str = "", model: str = "
         return int(cur.lastrowid)
 
 
+def count_ai_generations_today(user_id: int) -> int:
+    """Count today's (UTC) billable AI generations for a user.
+
+    Only rows that hit a real provider are counted (``provider != 'none'``),
+    so local/fallback responses do not consume the user's daily budget.
+    """
+    today = datetime.now(timezone.utc).date().isoformat()
+    with connect() as con:
+        row = con.execute(
+            """
+            SELECT COUNT(*) AS n FROM ai_generations
+            WHERE user_id=? AND substr(created_at, 1, 10)=?
+              AND provider IS NOT NULL AND provider != '' AND provider != 'none'
+            """,
+            (user_id, today),
+        ).fetchone()
+    return int(row["n"]) if row else 0
+
+
 def list_ai_generations(user_id: int, limit: int = 100, workspace_id: int | None = None) -> list[dict[str, Any]]:
     with connect() as con:
         scoped_workspace_id, _ = _workspace_scope_for_user(con, user_id, workspace_id)

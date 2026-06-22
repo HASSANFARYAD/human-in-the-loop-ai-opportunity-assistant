@@ -174,6 +174,13 @@ export interface ProviderConfig {
   updated_at?: string;
 }
 
+export interface AIUsage {
+  used: number;
+  limit: number;
+  remaining: number | null;
+  unlimited: boolean;
+}
+
 export interface Integration {
   service: string;
   has_api_key: boolean;

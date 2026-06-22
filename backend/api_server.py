@@ -18,7 +18,27 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+def _init_sentry() -> None:
+    if not settings.sentry_dsn:
+        return
+    try:
+        import sentry_sdk
+
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment=settings.environment.value,
+            release=settings.app_version,
+            traces_sample_rate=settings.sentry_traces_sample_rate,
+        )
+        logger.info("Sentry error monitoring initialized")
+    except ModuleNotFoundError:
+        logger.error("SENTRY_DSN set but sentry-sdk is not installed; error monitoring disabled.")
+    except Exception as exc:
+        logger.error("Failed to initialize Sentry: %s", exc)
+
+
 def create_app() -> FastAPI:
+    _init_sentry()
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
@@ -48,6 +68,11 @@ def create_app() -> FastAPI:
                 start_scheduler()
             except Exception as e:
                 logger.error(f"Failed to start scheduler: {e}")
+        try:
+            from job_assistant.backup import start_backup_scheduler
+            start_backup_scheduler()
+        except Exception as e:
+            logger.error(f"Failed to start backup scheduler: {e}")
 
     @app.on_event("shutdown")
     async def shutdown_event():
@@ -58,6 +83,11 @@ def create_app() -> FastAPI:
                 stop_scheduler()
             except Exception as e:
                 logger.error(f"Failed to stop scheduler: {e}")
+        try:
+            from job_assistant.backup import stop_backup_scheduler
+            stop_backup_scheduler()
+        except Exception as e:
+            logger.error(f"Failed to stop backup scheduler: {e}")
 
     @app.exception_handler(Exception)
     async def general_exception_handler(request, exc):

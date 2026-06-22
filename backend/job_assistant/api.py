@@ -31,6 +31,7 @@ from job_assistant.db import (
     create_feedback,
     create_reminder,
     cleanup_non_opportunity_records,
+    count_ai_generations_today,
     db_health,
     delete_job,
     delete_user_data,
@@ -1261,6 +1262,18 @@ async def save_ai_prompt(payload: PromptVersionIn, user: dict = Depends(current_
 async def ask_ai_json(payload: AIAskIn, user: dict = Depends(current_user)):
     data = ai_orchestrator.ask_json(payload.system, payload.prompt, payload.fallback, user_id=user["id"], task_type=payload.task_type, prompt_version=payload.prompt_version, workspace_id=payload.workspace_id)
     return {"status": "success", "result": data}
+
+
+@router.get("/ai/usage")
+async def ai_usage(user: dict = Depends(current_user)):
+    limit = settings.ai_daily_generation_limit
+    used = count_ai_generations_today(user["id"])
+    return {
+        "used": used,
+        "limit": limit,
+        "remaining": max(0, limit - used) if limit > 0 else None,
+        "unlimited": limit <= 0,
+    }
 
 
 @router.get("/automation/rules")
