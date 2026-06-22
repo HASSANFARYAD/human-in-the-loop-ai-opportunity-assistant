@@ -71,3 +71,55 @@ def test_agent_chat_requires_auth(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     resp = client.post("/api/v1/agent/chat", json={"message": "hello"})
     assert resp.status_code in (401, 403)
+
+
+def _parse_sse(text: str) -> list[tuple[str, dict]]:
+    import json
+
+    events = []
+    for block in text.strip().split("\n\n"):
+        event, data = None, None
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                event = line[len("event: "):]
+            elif line.startswith("data: "):
+                data = json.loads(line[len("data: "):])
+        if event:
+            events.append((event, data))
+    return events
+
+
+def test_agent_chat_stream_emits_intents_section_done(tmp_path, monkeypatch):
+    client, headers = _client(tmp_path, monkeypatch)
+    import job_assistant.api as api
+
+    monkeypatch.setattr(api, "classify_intent", lambda *a, **k: {"intents": ["job_search"], "search_query": "go", "job_reference": "", "reply": ""})
+    monkeypatch.setattr(api, "run_job_search", lambda *a, **k: [{"title": "Go Dev", "company": "Acme", "match_score": 77}])
+
+    resp = client.post("/api/v1/agent/chat/stream", json={"message": "find jobs"}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+
+    events = _parse_sse(resp.text)
+    names = [e[0] for e in events]
+    assert names == ["intents", "section", "done"]
+    assert events[0][1]["intents"] == ["job_search"]
+    assert events[1][1]["type"] == "listings"
+    assert events[1][1]["data"][0]["title"] == "Go Dev"
+
+
+def test_agent_chat_stream_section_error_is_isolated(tmp_path, monkeypatch):
+    client, headers = _client(tmp_path, monkeypatch)
+    import job_assistant.api as api
+
+    monkeypatch.setattr(api, "classify_intent", lambda *a, **k: {"intents": ["job_search"], "search_query": "x", "job_reference": "", "reply": ""})
+
+    def _boom(*a, **k):
+        raise RuntimeError("discovery down")
+
+    monkeypatch.setattr(api, "run_job_search", _boom)
+    resp = client.post("/api/v1/agent/chat/stream", json={"message": "find jobs"}, headers=headers)
+    events = _parse_sse(resp.text)
+    section = next(e[1] for e in events if e[0] == "section")
+    assert section["type"] == "error"
+    assert [e[0] for e in events][-1] == "done"  # stream still completes cleanly

@@ -1,6 +1,5 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Bot, ExternalLink, FileText, MessageSquare, Search, Send, Sparkles, User } from "lucide-react";
@@ -10,11 +9,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { DataFields } from "@/components/ui/data-display";
 import { agentService, type AgentChatTurn } from "@/services/agent.service";
 import { useAuthStore } from "@/stores/auth-store";
-import type { AgentChatResponse, AgentJobListing, AgentSection } from "@/types/api";
+import type { AgentJobListing, AgentSection } from "@/types/api";
 
 type ChatMessage =
   | { role: "user"; content: string }
-  | { role: "assistant"; response: AgentChatResponse };
+  | { role: "assistant"; sections: AgentSection[] };
 
 const SUGGESTIONS = [
   "Find me remote backend jobs",
@@ -26,28 +25,43 @@ export function AgentChatView() {
   const activeWorkspace = useAuthStore((s) => s.activeWorkspace);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  const send = useMutation({
-    mutationFn: (text: string) => {
-      const history: AgentChatTurn[] = messages.map((m) =>
-        m.role === "user" ? { role: "user", content: m.content } : { role: "assistant", content: summarize(m.response) },
-      );
-      return agentService.chat(text, history, activeWorkspace?.id);
-    },
-    onSuccess: (response) => setMessages((prev) => [...prev, { role: "assistant", response }]),
-  });
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, send.isPending]);
+  }, [messages, busy]);
 
-  function submit(text: string) {
+  async function submit(text: string) {
     const trimmed = text.trim();
-    if (!trimmed || send.isPending) return;
-    setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
+    if (!trimmed || busy) return;
+
+    const history: AgentChatTurn[] = messages.map((m) =>
+      m.role === "user" ? { role: "user", content: m.content } : { role: "assistant", content: summarize(m.sections) },
+    );
+
+    // Append the user turn and an empty assistant turn we stream sections into.
+    setMessages((prev) => [...prev, { role: "user", content: trimmed }, { role: "assistant", sections: [] }]);
     setInput("");
-    send.mutate(trimmed);
+    setError("");
+    setBusy(true);
+
+    const appendSection = (section: AgentSection) =>
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role === "assistant") next[next.length - 1] = { role: "assistant", sections: [...last.sections, section] };
+        return next;
+      });
+
+    try {
+      await agentService.chatStream(trimmed, history, { onSection: appendSection, onError: setError }, activeWorkspace?.id);
+    } catch {
+      setError("The assistant could not complete your request.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -69,10 +83,9 @@ export function AgentChatView() {
             </div>
           </div>
         ) : (
-          messages.map((m, i) => <MessageBubble key={i} message={m} />)
+          messages.map((m, i) => <MessageBubble key={i} message={m} busy={busy && i === messages.length - 1} />)
         )}
-        {send.isPending ? <Thinking /> : null}
-        {send.isError ? <div className="text-sm text-destructive">{(send.error as Error)?.message || "Something went wrong."}</div> : null}
+        {error ? <div className="text-sm text-destructive">{error}</div> : null}
       </div>
 
       <form
@@ -95,7 +108,7 @@ export function AgentChatView() {
           rows={1}
           className="max-h-32 min-h-[44px] flex-1 resize-none"
         />
-        <Button type="submit" disabled={!input.trim() || send.isPending} size="icon" className="h-11 w-11 shrink-0">
+        <Button type="submit" disabled={!input.trim() || busy} size="icon" className="h-11 w-11 shrink-0">
           <Send className="h-4 w-4" />
         </Button>
       </form>
@@ -103,8 +116,8 @@ export function AgentChatView() {
   );
 }
 
-function summarize(response: AgentChatResponse): string {
-  return response.sections.map((s) => s.message || `[${s.type}]`).join(" ");
+function summarize(sections: AgentSection[]): string {
+  return sections.map((s) => s.message || `[${s.type}]`).join(" ");
 }
 
 function Thinking() {
@@ -115,7 +128,7 @@ function Thinking() {
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({ message, busy }: { message: ChatMessage; busy: boolean }) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end gap-2">
@@ -128,9 +141,10 @@ function MessageBubble({ message }: { message: ChatMessage }) {
     <div className="flex gap-2">
       <span className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary/10 text-primary"><Bot className="h-4 w-4" /></span>
       <div className="min-w-0 flex-1 space-y-3">
-        {message.response.sections.map((section, i) => (
+        {message.sections.map((section, i) => (
           <SectionView key={i} section={section} />
         ))}
+        {busy ? <Thinking /> : null}
       </div>
     </div>
   );

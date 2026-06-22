@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Cookie, Depends, File, Form, HTTPException, Request, UploadFile, Response, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, validator
 from starlette.responses import FileResponse, RedirectResponse
 
@@ -1315,54 +1316,80 @@ def _resolve_job_for_reference(user_id: int, reference: str, workspace_id: Optio
     return jobs[0]  # list_jobs returns newest first
 
 
+def _run_agent_intent(intent: str, routing: dict[str, Any], profile: dict[str, Any], user_id: int, workspace_id: Optional[int]) -> dict[str, Any]:
+    """Execute a single agent intent and return its result section."""
+    if intent == "job_search":
+        listings = run_job_search(profile, routing["search_query"], user_id=user_id)
+        return {"agent": "job_search", "type": "listings", "data": listings,
+                "message": f"Found {len(listings)} matching opportunity/opportunities." if listings
+                else "No matching listings found right now. Try refining your roles or skills."}
+
+    if intent in ("tailor_resume", "interview_prep"):
+        job = _resolve_job_for_reference(user_id, routing["job_reference"], workspace_id)
+        if not job:
+            return {"agent": intent, "type": "error",
+                    "message": "I couldn't find a saved opportunity to work from. Import or open a job first."}
+
+        if intent == "tailor_resume":
+            if not _profile_has_resume_context(profile):
+                return {"agent": intent, "type": "error",
+                        "message": "Add your resume or profile details before I can tailor a resume."}
+            tailored = _llm_tailored_resume(profile, job, user_id)
+            saved = save_resume_review(user_id, tailored, int(job["id"]))
+            return {"agent": intent, "type": "tailored_resume", "job": {"id": job["id"], "title": job.get("title"), "company": job.get("company")}, "data": saved}
+
+        evaluation = get_evaluation(int(job["id"]), user_id) or {}
+        if not evaluation:
+            try:
+                evaluation = score_job(profile, job, user_id=user_id)
+            except Exception:
+                evaluation = {}
+        prep = _llm_interview_prep(profile, job, evaluation, user_id)
+        saved = save_interview_prep(user_id, int(job["id"]), prep)
+        return {"agent": intent, "type": "interview_prep", "job": {"id": job["id"], "title": job.get("title"), "company": job.get("company")}, "data": saved}
+
+    # chat / fallback
+    return {"agent": "chat", "type": "message",
+            "message": routing["reply"] or "I can help you find jobs, tailor your resume, or prep for interviews. What would you like to do?"}
+
+
 @router.post("/agent/chat")
 async def agent_chat(payload: AgentChatIn, user: dict = Depends(current_user)):
     user_id = user["id"]
-    workspace_id = payload.workspace_id
     routing = classify_intent(payload.message, history=payload.history, user_id=user_id)
     profile = get_profile(user_id) or {}
-
-    sections: list[dict[str, Any]] = []
-    for intent in routing["intents"]:
-        if intent == "job_search":
-            listings = run_job_search(profile, routing["search_query"], user_id=user_id)
-            sections.append({"agent": "job_search", "type": "listings", "data": listings,
-                             "message": f"Found {len(listings)} matching opportunity/opportunities." if listings
-                             else "No matching listings found right now. Try refining your roles or skills."})
-            continue
-
-        if intent in ("tailor_resume", "interview_prep"):
-            job = _resolve_job_for_reference(user_id, routing["job_reference"], workspace_id)
-            if not job:
-                sections.append({"agent": intent, "type": "error",
-                                 "message": "I couldn't find a saved opportunity to work from. Import or open a job first."})
-                continue
-
-            if intent == "tailor_resume":
-                if not _profile_has_resume_context(profile):
-                    sections.append({"agent": intent, "type": "error",
-                                     "message": "Add your resume or profile details before I can tailor a resume."})
-                    continue
-                tailored = _llm_tailored_resume(profile, job, user_id)
-                saved = save_resume_review(user_id, tailored, int(job["id"]))
-                sections.append({"agent": intent, "type": "tailored_resume", "job": {"id": job["id"], "title": job.get("title"), "company": job.get("company")}, "data": saved})
-            else:
-                evaluation = get_evaluation(int(job["id"]), user_id) or {}
-                if not evaluation:
-                    try:
-                        evaluation = score_job(profile, job, user_id=user_id)
-                    except Exception:
-                        evaluation = {}
-                prep = _llm_interview_prep(profile, job, evaluation, user_id)
-                saved = save_interview_prep(user_id, int(job["id"]), prep)
-                sections.append({"agent": intent, "type": "interview_prep", "job": {"id": job["id"], "title": job.get("title"), "company": job.get("company")}, "data": saved})
-            continue
-
-        # chat / fallback
-        sections.append({"agent": "chat", "type": "message",
-                         "message": routing["reply"] or "I can help you find jobs, tailor your resume, or prep for interviews. What would you like to do?"})
-
+    sections = [_run_agent_intent(intent, routing, profile, user_id, payload.workspace_id) for intent in routing["intents"]]
     return {"intents": routing["intents"], "sections": sections}
+
+
+@router.post("/agent/chat/stream")
+async def agent_chat_stream(payload: AgentChatIn, user: dict = Depends(current_user)):
+    user_id = user["id"]
+    workspace_id = payload.workspace_id
+    history = payload.history
+    message = payload.message
+
+    def _sse(event: str, data: dict[str, Any]) -> str:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    def event_stream():
+        try:
+            routing = classify_intent(message, history=history, user_id=user_id)
+            profile = get_profile(user_id) or {}
+            yield _sse("intents", {"intents": routing["intents"]})
+            for intent in routing["intents"]:
+                try:
+                    section = _run_agent_intent(intent, routing, profile, user_id, workspace_id)
+                except HTTPException as exc:
+                    section = {"agent": intent, "type": "error", "message": str(exc.detail)}
+                except Exception:
+                    section = {"agent": intent, "type": "error", "message": "Something went wrong while running this step."}
+                yield _sse("section", section)
+            yield _sse("done", {})
+        except Exception:
+            yield _sse("error", {"message": "The assistant could not complete your request."})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.get("/automation/rules")
