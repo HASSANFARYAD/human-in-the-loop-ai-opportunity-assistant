@@ -20,11 +20,10 @@ def validate_startup_configuration(strict: bool = False) -> list[str]:
 
 
 def runtime_status() -> dict:
-    db_file = Path(settings.db_path)
     return {
         **settings.public_runtime_info(),
         "data_dir_exists": Path(settings.app_data_dir).exists(),
         "log_dir_exists": Path(settings.log_dir).exists(),
-        "sqlite_db_exists": db_file.exists() if not settings.database_url else None,
+        "mongo_configured": bool(settings.mongo_url),
         "warnings": settings.startup_warnings(),
     }

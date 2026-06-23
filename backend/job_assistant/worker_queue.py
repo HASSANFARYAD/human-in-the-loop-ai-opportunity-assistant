@@ -7,93 +7,110 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from job_assistant.config import settings
-from job_assistant.db import connect, utc_now
+from job_assistant.db import _next_id, get_collection, utc_now
 
 logger = logging.getLogger(__name__)
 
 
 def enqueue_job(job_type: str, payload: dict[str, Any] | None = None, *, queue_name: str = "default", run_after: str = "") -> int:
     now = utc_now()
-    with connect() as con:
-        cur = con.execute(
-            """
-            INSERT INTO worker_jobs(queue_name, job_type, payload_json, status, attempts, max_attempts, run_after, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?)
-            """,
-            (queue_name, job_type, json.dumps(payload or {}), "queued", 0, settings.worker_max_attempts, run_after or now, now, now),
-        )
-        return int(cur.lastrowid)
+    job_id = _next_id("worker_job_id")
+    get_collection("worker_jobs").insert_one({
+        "_id": job_id,
+        "queue_name": queue_name,
+        "job_type": job_type,
+        "payload_json": json.dumps(payload or {}),
+        "status": "queued",
+        "attempts": 0,
+        "max_attempts": settings.worker_max_attempts,
+        "run_after": run_after or now,
+        "created_at": now,
+        "updated_at": now,
+    })
+    return job_id
 
 
 def list_worker_jobs(limit: int = 100, status: str = "") -> list[dict[str, Any]]:
-    with connect() as con:
-        if status:
-            rows = con.execute("SELECT * FROM worker_jobs WHERE status=? ORDER BY created_at DESC LIMIT ?", (status, max(1, min(limit, 500)))).fetchall()
-        else:
-            rows = con.execute("SELECT * FROM worker_jobs ORDER BY created_at DESC LIMIT ?", (max(1, min(limit, 500)),)).fetchall()
+    query = {}
+    if status:
+        query["status"] = status
+    docs = get_collection("worker_jobs").find(query).sort("created_at", -1).limit(max(1, min(limit, 500)))
     out = []
-    for row in rows:
-        item = dict(row)
-        item["payload"] = json.loads(item.pop("payload_json") or "{}")
-        out.append(item)
+    for doc in docs:
+        doc.pop("_id", None)
+        doc["payload"] = json.loads(doc.pop("payload_json") or "{}")
+        out.append(doc)
     return out
 
 
 def claim_next_job(queue_name: str = "default", worker_id: str = "") -> dict[str, Any] | None:
     worker = worker_id or socket.gethostname()
     now = utc_now()
-    with connect() as con:
-        row = con.execute(
-            """
-            SELECT * FROM worker_jobs
-            WHERE queue_name=? AND status='queued' AND COALESCE(run_after, created_at) <= ?
-            ORDER BY created_at ASC
-            LIMIT 1
-            """,
-            (queue_name, now),
-        ).fetchone()
-        if not row:
-            return None
-        con.execute(
-            "UPDATE worker_jobs SET status='running', locked_at=?, locked_by=?, attempts=attempts+1, updated_at=? WHERE id=? AND status='queued'",
-            (now, worker, now, row["id"]),
-        )
-        claimed = con.execute("SELECT * FROM worker_jobs WHERE id=?", (row["id"],)).fetchone()
-    if not claimed:
+    now_dt = datetime.now(timezone.utc)
+    job = get_collection("worker_jobs").find_one_and_update(
+        {
+            "queue_name": queue_name,
+            "status": "queued",
+            "$expr": {
+                "$lte": [
+                    {"$ifNull": ["$run_after", "$created_at"]},
+                    now,
+                ]
+            },
+        },
+        {
+            "$set": {
+                "status": "running",
+                "locked_at": now,
+                "locked_by": worker,
+                "updated_at": now,
+            },
+            "$inc": {"attempts": 1},
+        },
+        sort=[("created_at", 1)],
+        return_document=True,
+    )
+    if not job:
         return None
-    item = dict(claimed)
-    item["payload"] = json.loads(item.pop("payload_json") or "{}")
-    return item
+    job.pop("_id", None)
+    job["payload"] = json.loads(job.pop("payload_json") or "{}")
+    return job
 
 
 def complete_job(job_id: int, result: dict[str, Any] | None = None) -> None:
     now = utc_now()
-    with connect() as con:
-        con.execute(
-            "UPDATE worker_jobs SET status='completed', completed_at=?, updated_at=?, last_error=? WHERE id=?",
-            (now, now, json.dumps(result or {}), job_id),
-        )
+    get_collection("worker_jobs").update_one(
+        {"_id": job_id},
+        {"$set": {"status": "completed", "completed_at": now, "updated_at": now, "last_error": json.dumps(result or {})}},
+    )
 
 
 def fail_job(job_id: int, error: str) -> None:
     now_dt = datetime.now(timezone.utc)
     now = now_dt.isoformat(timespec="seconds")
-    with connect() as con:
-        row = con.execute("SELECT attempts, max_attempts FROM worker_jobs WHERE id=?", (job_id,)).fetchone()
-        if not row:
-            return
-        if int(row["attempts"] or 0) >= int(row["max_attempts"] or settings.worker_max_attempts):
-            con.execute("UPDATE worker_jobs SET status='failed', last_error=?, updated_at=? WHERE id=?", (error[:1000], now, job_id))
-        else:
-            delay = min(60, 2 ** max(1, int(row["attempts"] or 1)))
-            run_after = (now_dt + timedelta(seconds=delay)).isoformat(timespec="seconds")
-            con.execute(
-                "UPDATE worker_jobs SET status='queued', run_after=?, locked_at=NULL, locked_by=NULL, last_error=?, updated_at=? WHERE id=?",
-                (run_after, error[:1000], now, job_id),
-            )
+    job = get_collection("worker_jobs").find_one({"_id": job_id})
+    if not job:
+        return
+    attempts = job.get("attempts", 0)
+    max_attempts = job.get("max_attempts", settings.worker_max_attempts)
+    if attempts >= max_attempts:
+        get_collection("worker_jobs").update_one(
+            {"_id": job_id},
+            {"$set": {"status": "failed", "last_error": error[:1000], "updated_at": now}},
+        )
+    else:
+        delay = min(60, 2 ** max(1, attempts))
+        run_after = (now_dt + timedelta(seconds=delay)).isoformat(timespec="seconds")
+        get_collection("worker_jobs").update_one(
+            {"_id": job_id},
+            {"$set": {"status": "queued", "run_after": run_after, "locked_at": None, "locked_by": None, "last_error": error[:1000], "updated_at": now}},
+        )
 
 
 def worker_health() -> dict[str, Any]:
-    with connect() as con:
-        rows = con.execute("SELECT status, COUNT(*) AS count FROM worker_jobs GROUP BY status").fetchall()
-    return {"status": "ok", "backend": settings.worker_backend, "queues": [dict(r) for r in rows]}
+    pipeline = [
+        {"$group": {"_id": "$status", "count": {"$sum": 1}}},
+    ]
+    rows = list(get_collection("worker_jobs").aggregate(pipeline))
+    queues = [{"status": r["_id"], "count": r["count"]} for r in rows]
+    return {"status": "ok", "backend": settings.worker_backend, "queues": queues}

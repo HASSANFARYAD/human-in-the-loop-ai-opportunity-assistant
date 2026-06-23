@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from job_assistant.config import settings
-from job_assistant.db import add_audit_log, connect, delete_user_data, utc_now
+from job_assistant.db import _next_id, add_audit_log, delete_user_data, get_collection, utc_now
 
 
 def _export_dir() -> Path:
@@ -15,62 +15,76 @@ def _export_dir() -> Path:
     return path
 
 
+_USER_TABLES_MONGO = [
+    ("users", False),
+    ("profiles", True),
+    ("jobs", True),
+    ("feedback", True),
+    ("audit_logs", True),
+    ("integration_settings", True),
+    ("provider_configs", True),
+    ("ai_generations", True),
+    ("automation_rules", True),
+    ("automation_runs", True),
+    ("posts", True),
+]
+
+
 def export_user_data(user_id: int, workspace_id: int | None = None) -> dict[str, Any]:
     data: dict[str, Any] = {}
-    with connect() as con:
-        tables = [
-            "users",
-            "profile",
-            "jobs",
-            "feedback",
-            "audit_logs",
-            "integration_settings",
-            "provider_configs",
-            "ai_generations",
-            "automation_rules",
-            "automation_runs",
-            "posts",
-        ]
-        for table in tables:
-            cols = {row[1] for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
-            if "user_id" in cols:
-                if workspace_id and "workspace_id" in cols:
-                    rows = con.execute(f"SELECT * FROM {table} WHERE user_id=? AND workspace_id=?", (user_id, workspace_id)).fetchall()
-                else:
-                    rows = con.execute(f"SELECT * FROM {table} WHERE user_id=?", (user_id,)).fetchall()
-            elif table == "users":
-                rows = con.execute("SELECT id, email, full_name, is_active, created_at, updated_at FROM users WHERE id=?", (user_id,)).fetchall()
-            else:
-                rows = []
-            data[table] = [dict(row) for row in rows]
-        expires_at = (datetime.now(timezone.utc) + timedelta(days=settings.export_retention_days)).isoformat(timespec="seconds")
-        file_path = _export_dir() / f"user_{user_id}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.json"
-        file_path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
-        cur = con.execute(
-            "INSERT INTO compliance_exports(user_id, workspace_id, export_type, status, file_path, expires_at, created_at) VALUES (?,?,?,?,?,?,?)",
-            (user_id, workspace_id, "user_data", "completed", str(file_path), expires_at, utc_now()),
-        )
-        export_id = int(cur.lastrowid)
-        add_audit_log(user_id, "compliance.export", "compliance_export", str(export_id), {"file_path": str(file_path)}, con=con, workspace_id=workspace_id)
+    for table_name, has_user_id in _USER_TABLES_MONGO:
+        coll = get_collection(table_name)
+        if has_user_id:
+            q: dict[str, Any] = {"user_id": user_id}
+            if workspace_id:
+                q["workspace_id"] = workspace_id
+            docs = list(coll.find(q))
+        elif table_name == "users":
+            docs = list(coll.find({"user_id": user_id}, {"_id": 0, "password_hash": 0}))
+        else:
+            docs = []
+        for d in docs:
+            d.pop("_id", None)
+            d.pop("password_hash", None)
+        data[table_name] = docs
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=settings.export_retention_days)).isoformat(timespec="seconds")
+    file_path = _export_dir() / f"user_{user_id}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.json"
+    file_path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    export_id = _next_id("compliance_export_id")
+    get_collection("compliance_exports").insert_one({
+        "_id": export_id,
+        "user_id": user_id,
+        "workspace_id": workspace_id,
+        "export_type": "user_data",
+        "status": "completed",
+        "file_path": str(file_path),
+        "expires_at": expires_at,
+        "created_at": utc_now(),
+    })
+    add_audit_log(user_id, "compliance.export", "compliance_export", str(export_id), {"file_path": str(file_path)}, workspace_id=workspace_id)
     return {"id": export_id, "file_path": str(file_path), "expires_at": expires_at}
 
 
 def request_user_deletion(user_id: int, reason: str = "") -> int:
-    with connect() as con:
-        cur = con.execute(
-            "INSERT INTO alert_events(severity, title, message, source, metadata_json, status, created_at) VALUES (?,?,?,?,?,?,?)",
-            ("critical", "User deletion review requested", reason or "User requested data deletion.", "compliance", json.dumps({"user_id": user_id}), "open", utc_now()),
-        )
-        alert_id = int(cur.lastrowid)
-        add_audit_log(user_id, "compliance.deletion_requested", "user", str(user_id), {"alert_id": alert_id}, con=con)
-        return alert_id
+    alert_id = _next_id("alert_event_id")
+    get_collection("alert_events").insert_one({
+        "_id": alert_id,
+        "severity": "critical",
+        "title": "User deletion review requested",
+        "message": reason or "User requested data deletion.",
+        "source": "compliance",
+        "metadata_json": json.dumps({"user_id": user_id}),
+        "status": "open",
+        "created_at": utc_now(),
+    })
+    add_audit_log(user_id, "compliance.deletion_requested", "user", str(user_id), {"alert_id": alert_id})
+    return alert_id
 
 
 def approve_user_deletion(admin_user_id: int, target_user_id: int) -> None:
     export_user_data(target_user_id)
     delete_user_data(target_user_id)
-    with connect() as con:
-        add_audit_log(admin_user_id, "compliance.deletion_approved", "user", str(target_user_id), {}, con=con)
+    add_audit_log(admin_user_id, "compliance.deletion_approved", "user", str(target_user_id), {})
 
 
 def apply_retention_policies() -> dict[str, int]:
@@ -79,27 +93,36 @@ def apply_retention_policies() -> dict[str, int]:
     metrics_cutoff = (now - timedelta(days=settings.metrics_retention_days)).isoformat(timespec="seconds")
     export_cutoff = now.isoformat(timespec="seconds")
     counts = {"audit_logs": 0, "system_metrics": 0, "exports": 0}
-    with connect() as con:
-        counts["audit_logs"] = con.execute("DELETE FROM audit_logs WHERE created_at < ?", (audit_cutoff,)).rowcount
-        counts["system_metrics"] = con.execute("DELETE FROM system_metrics WHERE created_at < ?", (metrics_cutoff,)).rowcount
-        expired = con.execute("SELECT id, file_path FROM compliance_exports WHERE expires_at < ?", (export_cutoff,)).fetchall()
-        for row in expired:
-            try:
-                Path(row["file_path"]).unlink(missing_ok=True)
-            except Exception:
-                pass
-        counts["exports"] = con.execute("DELETE FROM compliance_exports WHERE expires_at < ?", (export_cutoff,)).rowcount
+
+    result = get_collection("audit_logs").delete_many({"created_at": {"$lt": audit_cutoff}})
+    counts["audit_logs"] = result.deleted_count
+
+    result = get_collection("system_metrics").delete_many({"created_at": {"$lt": metrics_cutoff}})
+    counts["system_metrics"] = result.deleted_count
+
+    expired = list(get_collection("compliance_exports").find({"expires_at": {"$lt": export_cutoff}}))
+    for row in expired:
+        try:
+            Path(row["file_path"]).unlink(missing_ok=True)
+        except Exception:
+            pass
+    result = get_collection("compliance_exports").delete_many({"expires_at": {"$lt": export_cutoff}})
+    counts["exports"] = result.deleted_count
     return counts
 
 
 def list_compliance_exports(user_id: int, limit: int = 100) -> list[dict[str, Any]]:
-    with connect() as con:
-        rows = con.execute("SELECT * FROM compliance_exports WHERE user_id=? ORDER BY created_at DESC LIMIT ?", (user_id, max(1, min(limit, 500)))).fetchall()
-    return [dict(row) for row in rows]
+    docs = list(get_collection("compliance_exports").find({"user_id": user_id}).sort("created_at", -1).limit(max(1, min(limit, 500))))
+    for d in docs:
+        d.pop("_id", None)
+    return docs
 
 
 def admin_review(limit: int = 100) -> dict[str, Any]:
-    with connect() as con:
-        alerts = con.execute("SELECT * FROM alert_events ORDER BY created_at DESC LIMIT ?", (max(1, min(limit, 500)),)).fetchall()
-        audits = con.execute("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ?", (max(1, min(limit, 500)),)).fetchall()
-    return {"alerts": [dict(row) for row in alerts], "audit_logs": [dict(row) for row in audits]}
+    alerts = list(get_collection("alert_events").find().sort("created_at", -1).limit(max(1, min(limit, 500))))
+    audits = list(get_collection("audit_logs").find().sort("created_at", -1).limit(max(1, min(limit, 500))))
+    for d in alerts:
+        d.pop("_id", None)
+    for d in audits:
+        d.pop("_id", None)
+    return {"alerts": alerts, "audit_logs": audits}

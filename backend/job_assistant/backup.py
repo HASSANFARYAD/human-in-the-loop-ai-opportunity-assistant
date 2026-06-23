@@ -1,15 +1,17 @@
-"""Automated SQLite database backups.
+"""Automated MongoDB database backups.
 
 Runs on a dedicated APScheduler instance, independent of the automation
-scheduler (``SCHEDULER_ENABLED``). Each run snapshots the live database with
-SQLite's online backup API, prunes old local copies beyond the retention
-window, and optionally uploads the snapshot to an S3-compatible bucket
-(e.g. Cloudflare R2).
+scheduler (``SCHEDULER_ENABLED``). Each run dumps all collections to a
+timestamped JSON file using pymongo, prunes old local copies beyond the
+retention window, and optionally uploads the snapshot to an S3-compatible
+bucket (e.g. Cloudflare R2).
 """
 from __future__ import annotations
 
+import json
 import logging
-import sqlite3
+import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -18,26 +20,33 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from job_assistant.config import settings
+from job_assistant.db import MONGO_URL, MONGO_DB_NAME, get_db
 
 logger = logging.getLogger(__name__)
 
-_BACKUP_GLOB = "job_assistant_*.sqlite3"
+_BACKUP_GLOB = "job_assistant_*.json"
 
 
 def create_backup() -> Path:
-    """Snapshot the live database to a timestamped file. Returns the path."""
-    src = Path(settings.db_path)
-    if not src.exists():
-        raise FileNotFoundError(f"Database not found: {src}")
-
+    """Export all MongoDB collections to a timestamped JSON file. Returns the path."""
     out_dir = Path(settings.backup_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    dest = out_dir / f"job_assistant_{stamp}.sqlite3"
+    dest = out_dir / f"job_assistant_{stamp}.json"
 
-    with sqlite3.connect(src) as source, sqlite3.connect(dest) as target:
-        source.backup(target)
-    logger.info("Database backup created: %s", dest)
+    db = get_db()
+    backup_data = {}
+    for name in db.list_collection_names():
+        if name == "counters":
+            continue
+        docs = list(db[name].find({}, {"_id": False}))
+        if docs:
+            backup_data[name] = docs
+
+    with open(dest, "w", encoding="utf-8") as f:
+        json.dump(backup_data, f, default=str, indent=2)
+
+    logger.info("MongoDB backup created: %s (%d collections)", dest, len(backup_data))
     return dest
 
 
@@ -120,7 +129,7 @@ def start_backup_scheduler() -> None:
         name="Automated database backup",
         replace_existing=True,
         max_instances=1,
-        next_run_time=datetime.now(timezone.utc),  # take a baseline backup on boot
+        next_run_time=datetime.now(timezone.utc),
     )
     _scheduler.start()
     logger.info("Backup scheduler started (every %dh, retention=%d)", interval, settings.backup_retention)
