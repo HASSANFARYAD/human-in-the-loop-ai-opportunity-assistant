@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { DataFields } from "@/components/ui/data-display";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { opportunityService } from "@/services/opportunity.service";
 import { formatDate, scoreTone } from "@/lib/utils";
 import type { Opportunity, TailoredResume } from "@/types/api";
@@ -35,9 +36,28 @@ function asList(value: string[] | undefined) {
   return Array.isArray(value) ? value.filter(Boolean) : [];
 }
 
+function asText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(asText).filter(Boolean).join("\n");
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, val]) => {
+        const text = asText(val);
+        if (!text.trim()) return "";
+        const label = key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+        return text.includes("\n") ? `${label}:\n${text}` : `${label}: ${text}`;
+      })
+      .filter(Boolean)
+      .join("\n\n");
+  }
+  return String(value);
+}
+
 function TailoredResumeCard({ resume }: { resume: TailoredResume | null }) {
+  const resumeDraft = asText(resume?.resume_draft);
   const copyText = [
-    resume?.resume_draft,
+    resumeDraft,
     resume?.tailored_summary ? `\nTailored Summary\n${resume.tailored_summary}` : "",
     asList(resume?.tailored_experience_bullets).length ? `\nTailored Experience Bullets\n${asList(resume?.tailored_experience_bullets).map((item) => `- ${item}`).join("\n")}` : "",
   ].filter(Boolean).join("\n").trim();
@@ -65,7 +85,7 @@ function TailoredResumeCard({ resume }: { resume: TailoredResume | null }) {
         {asList(resume?.keywords_to_include).length ? <Section title="Keywords to include"><p>{asList(resume?.keywords_to_include).join(", ")}</p></Section> : null}
         {resume?.optional_cover_note ? <Section title="Optional cover note"><p className="whitespace-pre-wrap leading-6">{resume.optional_cover_note}</p></Section> : null}
         {asList(resume?.application_guidance).length ? <Section title="Application guidance"><ul className="list-disc space-y-1 pl-5">{asList(resume?.application_guidance).map((item) => <li key={item}>{item}</li>)}</ul></Section> : null}
-        {resume?.resume_draft ? <Section title="Copy-ready resume draft"><pre className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-sans leading-6">{resume.resume_draft}</pre></Section> : null}
+        {resumeDraft ? <Section title="Copy-ready resume draft"><pre className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-sans leading-6">{resumeDraft}</pre></Section> : null}
       </CardContent>
     </Card>
   );
@@ -180,20 +200,43 @@ export function OpportunityDetailView() {
           </div>
           <p className="text-muted-foreground">{item.company || "Unknown company"} - {item.location || "Location unspecified"}</p>{!importable ? <p className="mt-2 text-sm text-destructive">{item.blocked_reason || item.classification_reason || "This item is not a valid job."}</p> : null}
         </div>
-        <Card><CardHeader><CardTitle>{importable ? "Description" : "Source Snippet"}</CardTitle></CardHeader><CardContent><p className="whitespace-pre-wrap text-sm leading-6">{importable ? (item.description || "No description available.") : (item.raw_source_snippet || item.description || "No source snippet available.")}</p></CardContent></Card>
-        <Card><CardHeader><CardTitle>AI Evaluation</CardTitle></CardHeader><CardContent><DataFields data={item.evaluation ?? {}} /></CardContent></Card>
-        <TailoredResumeCard resume={tailoredResume} />
-        <Card className="print-break-inside-avoid"><CardHeader><CardTitle>Interview Preparation</CardTitle></CardHeader><CardContent><DataFields data={(prepSessions.data?.[0] ?? {}) as Record<string, unknown>} /></CardContent></Card>
-        <Card>
-          <CardHeader><CardTitle>Notes</CardTitle></CardHeader>
-          <CardContent className="space-y-3">
-            <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Add private tracking notes..." />
-            <div className="flex flex-wrap items-center gap-3">
-              <Button disabled={saveNotes.isPending || notes === (item.notes ?? "")} onClick={() => saveNotes.mutate()}>{saveNotes.isPending ? "Saving..." : "Save notes"}</Button>
-              {notes !== (item.notes ?? "") ? <span className="text-sm text-muted-foreground">Unsaved changes</span> : <span className="text-sm text-muted-foreground">Notes are saved</span>}
-            </div>
-          </CardContent>
-        </Card>
+        <Tabs defaultValue="description" className="space-y-4">
+          <TabsList>
+            <TabsTrigger value="description">{importable ? "Description" : "Source Snippet"}</TabsTrigger>
+            <TabsTrigger value="evaluation">AI Evaluation</TabsTrigger>
+            <TabsTrigger value="resume">Tailored Resume</TabsTrigger>
+            <TabsTrigger value="materials">Application Materials</TabsTrigger>
+            <TabsTrigger value="prep">Interview Prep</TabsTrigger>
+            <TabsTrigger value="notes">Notes</TabsTrigger>
+          </TabsList>
+          <TabsContent value="description">
+            <Card><CardHeader><CardTitle>{importable ? "Description" : "Source Snippet"}</CardTitle></CardHeader><CardContent><p className="whitespace-pre-wrap text-sm leading-6">{importable ? (item.description || "No description available.") : (item.raw_source_snippet || item.description || "No source snippet available.")}</p></CardContent></Card>
+          </TabsContent>
+          <TabsContent value="evaluation">
+            <Card><CardHeader><CardTitle>AI Evaluation</CardTitle></CardHeader><CardContent><DataFields data={item.evaluation ?? {}} /></CardContent></Card>
+          </TabsContent>
+          <TabsContent value="resume">
+            <TailoredResumeCard resume={tailoredResume} />
+          </TabsContent>
+          <TabsContent value="materials">
+            <Card><CardHeader><CardTitle>Application Materials</CardTitle></CardHeader><CardContent><DataFields data={materials.data ?? {}} /></CardContent></Card>
+          </TabsContent>
+          <TabsContent value="prep">
+            <Card className="print-break-inside-avoid"><CardHeader><CardTitle>Interview Preparation</CardTitle></CardHeader><CardContent><DataFields data={(prepSessions.data?.[0] ?? {}) as Record<string, unknown>} /></CardContent></Card>
+          </TabsContent>
+          <TabsContent value="notes">
+            <Card>
+              <CardHeader><CardTitle>Notes</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Add private tracking notes..." />
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button disabled={saveNotes.isPending || notes === (item.notes ?? "")} onClick={() => saveNotes.mutate()}>{saveNotes.isPending ? "Saving..." : "Save notes"}</Button>
+                  {notes !== (item.notes ?? "") ? <span className="text-sm text-muted-foreground">Unsaved changes</span> : <span className="text-sm text-muted-foreground">Notes are saved</span>}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
       </section>
       <aside className="space-y-5">
         <Card>
@@ -242,7 +285,6 @@ export function OpportunityDetailView() {
             <Button className="w-full" variant="destructive" disabled={remove.isPending} onClick={confirmDelete}><Trash2 className="h-4 w-4" /> {remove.isPending ? "Deleting..." : "Delete job"}</Button>
           </CardContent>
         </Card>
-        <Card><CardHeader><CardTitle>Application Materials</CardTitle></CardHeader><CardContent><DataFields data={materials.data ?? {}} /></CardContent></Card>
         <Card><CardHeader><CardTitle>Recordings</CardTitle></CardHeader><CardContent className="space-y-3">{(recordings.data ?? []).length ? (recordings.data ?? []).map((recording) => <audio key={String(recording.id)} controls className="w-full" src={String(recording.playback_url || recording.data_url)} />) : <div className="text-sm text-muted-foreground">No recordings saved yet.</div>}</CardContent></Card>
         <Card><CardHeader><CardTitle>History</CardTitle></CardHeader><CardContent className="text-sm text-muted-foreground">Created {formatDate(item.created_at)} · Updated {formatDate(item.updated_at)}</CardContent></Card>
       </aside>

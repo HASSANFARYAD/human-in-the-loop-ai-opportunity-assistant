@@ -1963,6 +1963,16 @@ def record_provider_health(
         )
 
 
+def _as_text(value: Any) -> str:
+    """Coerce an evaluation field to text. The AI sometimes returns lists for
+    free-text fields like good_fit/weak_areas/red_flags; SQLite can't bind those."""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return "; ".join(str(item).strip() for item in value if str(item).strip())
+    return str(value)
+
+
 def save_evaluation(job_id: int, evaluation: Dict[str, Any], user_id: int = 1) -> None:
     now = utc_now()
     cols = [
@@ -1998,9 +2008,9 @@ def save_evaluation(job_id: int, evaluation: Dict[str, Any], user_id: int = 1) -
         "industry_match": int(evaluation.get("industry_match", 0)),
         "authorization_match": int(evaluation.get("authorization_match", 0)),
         "deal_breaker_penalty": int(evaluation.get("deal_breaker_penalty", 0)),
-        "good_fit": evaluation.get("good_fit", ""),
-        "weak_areas": evaluation.get("weak_areas", ""),
-        "red_flags": evaluation.get("red_flags", ""),
+        "good_fit": _as_text(evaluation.get("good_fit", "")),
+        "weak_areas": _as_text(evaluation.get("weak_areas", "")),
+        "red_flags": _as_text(evaluation.get("red_flags", "")),
         "opportunity_type": evaluation.get("opportunity_type", "job"),
         "prize_value_score": evaluation.get("prize_value_score"),
         "tech_alignment_score": evaluation.get("tech_alignment_score"),
@@ -2098,12 +2108,12 @@ def save_materials(job_id: int, materials: Dict[str, Any], user_id: int = 1) -> 
     cols = ["job_id", "professional_summary", "cover_letter", "resume_bullets", "screening_answers", "linkedin_message", "why_fit", "updated_at"]
     values = {
         "job_id": job_id,
-        "professional_summary": materials.get("professional_summary", ""),
-        "cover_letter": materials.get("cover_letter", ""),
-        "resume_bullets": materials.get("resume_bullets", ""),
-        "screening_answers": materials.get("screening_answers", ""),
-        "linkedin_message": materials.get("linkedin_message", ""),
-        "why_fit": materials.get("why_fit", ""),
+        "professional_summary": _as_text(materials.get("professional_summary", "")),
+        "cover_letter": _as_text(materials.get("cover_letter", "")),
+        "resume_bullets": _as_text(materials.get("resume_bullets", "")),
+        "screening_answers": _as_text(materials.get("screening_answers", "")),
+        "linkedin_message": _as_text(materials.get("linkedin_message", "")),
+        "why_fit": _as_text(materials.get("why_fit", "")),
         "updated_at": now,
     }
     with connect() as con:

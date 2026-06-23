@@ -2232,6 +2232,31 @@ def _generate_tailored_resume(profile: dict[str, Any], job: dict[str, Any]) -> d
     }
 
 
+def _resume_draft_to_text(draft: Any) -> str:
+    """Flatten a resume_draft into copy-ready text. The model occasionally
+    returns a structured object (name/summary/experience/...) instead of a
+    string, which the UI cannot render directly."""
+    if draft is None:
+        return ""
+    if isinstance(draft, str):
+        return draft
+    if isinstance(draft, (list, tuple)):
+        return "\n".join(_resume_draft_to_text(item) for item in draft if item is not None)
+    if isinstance(draft, dict):
+        lines: list[str] = []
+        for key, value in draft.items():
+            label = str(key).replace("_", " ").title()
+            text = _resume_draft_to_text(value)
+            if not text.strip():
+                continue
+            if "\n" in text:
+                lines.append(f"{label}:\n{text}")
+            else:
+                lines.append(f"{label}: {text}")
+        return "\n\n".join(lines)
+    return str(draft)
+
+
 def _llm_tailored_resume(profile: dict[str, Any], job: dict[str, Any], user_id: int) -> dict[str, Any]:
     fallback = _generate_tailored_resume(profile, job)
     route = ai_orchestrator.resolve_route(user_id, task_type="resume_tailoring")
@@ -2273,6 +2298,9 @@ def _llm_tailored_resume(profile: dict[str, Any], job: dict[str, Any], user_id: 
     )
     for key, value in fallback.items():
         tailored.setdefault(key, value)
+    # The model sometimes returns resume_draft as a structured object instead of
+    # a copy-ready string; flatten it so the UI can render it as text.
+    tailored["resume_draft"] = _resume_draft_to_text(tailored.get("resume_draft"))
     tailored["type"] = "tailored_resume"
     tailored["target_role"] = tailored.get("target_role") or job.get("title") or "target role"
     tailored["company"] = tailored.get("company") or job.get("company") or ""

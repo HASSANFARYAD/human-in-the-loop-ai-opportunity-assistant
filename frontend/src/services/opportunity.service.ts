@@ -77,7 +77,7 @@ export const opportunityService = {
     form.append("title", payload.title);
     form.append("duration_ms", String(payload.duration_ms ?? 0));
     form.append("file", payload.blob, "recording.webm");
-    return (await apiClient.post<Record<string, unknown>>("/recordings/upload", form)).data;
+    return (await apiClient.post<Record<string, unknown>>("/recordings/upload", form, { headers: { "Content-Type": "multipart/form-data" } })).data;
   },
   profile: () => getJson<Profile>("/profile"),
   updateProfile: async (payload: Profile) => (await apiClient.post("/profile", payload)).data,
@@ -96,6 +96,7 @@ export const opportunityService = {
       await apiClient.post<{ status: string; filename: string; applied_to_profile: boolean; characters: number; extracted: Record<string, string> }>(
         "/profile/upload-resume",
         form,
+        { headers: { "Content-Type": "multipart/form-data" } },
       )
     ).data;
   },
