@@ -3,12 +3,13 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from job_assistant import api
 from job_assistant.config import settings
+from job_assistant.db import init_db
 from job_assistant.logging_config import setup_logging
 from job_assistant.observability import observability_middleware
 from job_assistant.rate_limits import sqlite_rate_limit_middleware
@@ -62,6 +63,11 @@ def create_app() -> FastAPI:
     async def startup_event():
         logger.info(f"Starting {settings.app_name} in {settings.environment} mode with {settings.deployment_profile} deployment profile")
         validate_startup_configuration(strict=settings.is_production)
+        try:
+            init_db()
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}")
+            raise
         if settings.scheduler_enabled:
             try:
                 from job_assistant.scheduler import start_scheduler
@@ -98,6 +104,14 @@ def create_app() -> FastAPI:
             stop_followup_scheduler()
         except Exception as e:
             logger.error(f"Failed to stop follow-up scheduler: {e}")
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request, exc):
+        error_id = uuid.uuid4().hex[:8]
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail, "error_id": error_id},
+        )
 
     @app.exception_handler(Exception)
     async def general_exception_handler(request, exc):

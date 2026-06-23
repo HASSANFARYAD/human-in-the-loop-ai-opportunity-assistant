@@ -13,10 +13,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
+function validatePassword(password: string) {
+  const classes = [/[a-z]/.test(password), /[A-Z]/.test(password), /\d/.test(password), /[^a-zA-Z0-9]/.test(password)].filter(Boolean).length;
+  return password.length >= 12 && classes >= 3;
+}
+
 const schema = z.object({
   full_name: z.string().optional(),
   email: z.string().email(),
-  password: z.string().min(8),
+  password: z.string().refine(validatePassword, "Password must be at least 12 characters with at least three of: lowercase, uppercase, number, symbol"),
 });
 
 type AuthFormValues = z.infer<typeof schema>;
@@ -34,7 +39,16 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
     onSuccess: (data) => {
       setUser(data.user);
       const next = searchParams.get("next");
-      router.replace(next && next.startsWith("/") ? next : "/dashboard");
+      const safeNext = (() => {
+        if (!next) return "/dashboard";
+        try {
+          const url = new URL(next, window.location.origin);
+          return url.origin === window.location.origin ? url.pathname + url.search + url.hash : "/dashboard";
+        } catch {
+          return next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+        }
+      })();
+      router.replace(safeNext);
     },
     onError: (error) => toast.error(error.message),
   });
@@ -47,9 +61,9 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
       </CardHeader>
       <CardContent>
         <form className="space-y-4" onSubmit={form.handleSubmit((values) => mutation.mutate(values))}>
-          {mode === "register" ? <Input placeholder="Full name" autoComplete="name" {...form.register("full_name")} /> : null}
-          <Input placeholder="Email" type="email" autoComplete="email" {...form.register("email")} />
-          <Input placeholder="Password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} {...form.register("password")} />
+          {mode === "register" ? <label><span className="sr-only">Full name</span><Input id="auth-full-name" placeholder="Full name" autoComplete="name" {...form.register("full_name")} /></label> : null}
+          <label><span className="sr-only">Email</span><Input id="auth-email" placeholder="Email" type="email" autoComplete="email" {...form.register("email")} /></label>
+          <label><span className="sr-only">Password</span><Input id="auth-password" placeholder="Password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} {...form.register("password")} /></label>
           <Button className="w-full" disabled={mutation.isPending}>
             {mutation.isPending ? "Working..." : mode === "login" ? "Sign in" : "Register"}
           </Button>

@@ -1,0 +1,5 @@
+# Optional: Hugging Face local inference. Requires ~3-5GB additional image size.
+# Only needed if you use the "huggingface_local" AI provider.
+transformers>=4.45.0
+torch>=2.3.0
+sentencepiece>=0.2.0

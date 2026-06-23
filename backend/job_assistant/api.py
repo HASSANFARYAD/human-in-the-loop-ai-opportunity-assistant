@@ -103,7 +103,7 @@ from job_assistant.db import (
 from job_assistant.runtime import runtime_status, validate_startup_configuration
 from job_assistant.provider_registry import provider_registry
 from job_assistant.ai_orchestrator import ai_orchestrator
-from job_assistant.agent_chat import classify_intent, run_job_search
+from job_assistant.agent_chat import chat_reply, classify_intent, run_job_search
 from job_assistant.automation_engine import automation_engine
 from job_assistant.observability import acknowledge_alert, metrics_summary, prometheus_text
 from job_assistant.publishing_engine import approve_post, publish_post, validate_target
@@ -924,16 +924,41 @@ async def health_check_providers(user: dict = Depends(current_user)):
 
 
 @router.get("/health/ai")
-async def health_check_ai(user: dict = Depends(current_user)):
+async def health_check_ai(probe: bool = False, user: dict = Depends(current_user)):
     route = ai_orchestrator.resolve_route(user["id"])
-    return {
+    configured = bool((route.settings.get("api_key") or "").strip())
+    result: dict[str, Any] = {
         "status": "ok",
         "provider": route.provider,
         "model": route.model,
         "source": route.source,
-        "configured": bool((route.settings.get("api_key") or "").strip()),
+        "configured": configured,
         "timestamp": datetime.utcnow().isoformat(),
     }
+    if probe and configured and route.provider in ("openai", "grok", "claude", "gemini", "azure_openai", "langchain_openai"):
+        try:
+            import requests
+            headers = {"Authorization": f"Bearer {route.settings.get('api_key', '')}"}
+            base = (route.settings.get("config") or {}).get("base_url", "")
+            if route.provider == "gemini":
+                probe_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={route.settings.get('api_key', '')}"
+            elif base:
+                probe_url = f"{base.rstrip('/')}/models"
+            else:
+                probe_url = "https://api.openai.com/v1/models"
+            resp = requests.get(probe_url, headers=headers, timeout=10)
+            result["probe_status"] = "reachable" if resp.ok else "unreachable"
+            result["probe_http_status"] = resp.status_code
+        except Exception as exc:
+            result["probe_status"] = "error"
+            result["probe_error"] = str(exc)[:200]
+    elif probe and not configured:
+        result["probe_status"] = "skipped"
+        result["probe_reason"] = "No API key configured"
+    elif probe:
+        result["probe_status"] = "skipped"
+        result["probe_reason"] = f"Provider '{route.provider}' does not support automatic probing"
+    return result
 
 
 @router.get("/usage")
@@ -1324,7 +1349,7 @@ def _resolve_job_for_reference(user_id: int, reference: str, workspace_id: Optio
     return jobs[0]  # list_jobs returns newest first
 
 
-def _run_agent_intent(intent: str, routing: dict[str, Any], profile: dict[str, Any], user_id: int, workspace_id: Optional[int]) -> dict[str, Any]:
+def _run_agent_intent(intent: str, routing: dict[str, Any], profile: dict[str, Any], user_id: int, workspace_id: Optional[int], *, message: str = "", history: Optional[list[dict[str, str]]] = None) -> dict[str, Any]:
     """Execute a single agent intent and return its result section."""
     if intent == "job_search":
         listings = run_job_search(profile, routing["search_query"], user_id=user_id)
@@ -1356,9 +1381,10 @@ def _run_agent_intent(intent: str, routing: dict[str, Any], profile: dict[str, A
         saved = save_interview_prep(user_id, int(job["id"]), prep)
         return {"agent": intent, "type": "interview_prep", "job": {"id": job["id"], "title": job.get("title"), "company": job.get("company")}, "data": saved}
 
-    # chat / fallback
-    return {"agent": "chat", "type": "message",
-            "message": routing["reply"] or "I can help you find jobs, tailor your resume, or prep for interviews. What would you like to do?"}
+    # chat / fallback — a genuine, grounded conversational reply
+    opportunities = list_jobs(user_id, workspace_id=workspace_id)
+    reply = chat_reply(message, history=history, profile=profile, opportunities=opportunities, user_id=user_id)
+    return {"agent": "chat", "type": "message", "message": reply}
 
 
 @router.post("/agent/chat")
@@ -1366,7 +1392,7 @@ async def agent_chat(payload: AgentChatIn, user: dict = Depends(current_user)):
     user_id = user["id"]
     routing = classify_intent(payload.message, history=payload.history, user_id=user_id)
     profile = get_profile(user_id) or {}
-    sections = [_run_agent_intent(intent, routing, profile, user_id, payload.workspace_id) for intent in routing["intents"]]
+    sections = [_run_agent_intent(intent, routing, profile, user_id, payload.workspace_id, message=payload.message, history=payload.history) for intent in routing["intents"]]
     return {"intents": routing["intents"], "sections": sections}
 
 
@@ -1387,11 +1413,26 @@ async def agent_chat_stream(payload: AgentChatIn, user: dict = Depends(current_u
             yield _sse("intents", {"intents": routing["intents"]})
             for intent in routing["intents"]:
                 try:
-                    section = _run_agent_intent(intent, routing, profile, user_id, workspace_id)
+                    if intent == "chat":
+                        # Stream the conversational reply word-by-word for a
+                        # live, human-like typing experience.
+                        opportunities = list_jobs(user_id, workspace_id=workspace_id)
+                        reply = chat_reply(message, history=history, profile=profile, opportunities=opportunities, user_id=user_id)
+                        yield _sse("section", {"agent": "chat", "type": "message", "message": ""})
+                        words = reply.split(" ")
+                        for i, word in enumerate(words):
+                            chunk = word if i == 0 else " " + word
+                            yield _sse("delta", {"text": chunk})
+                        continue
+                    section = _run_agent_intent(intent, routing, profile, user_id, workspace_id, message=message, history=history)
                 except HTTPException as exc:
                     section = {"agent": intent, "type": "error", "message": str(exc.detail)}
+                    yield _sse("section", section)
+                    continue
                 except Exception:
                     section = {"agent": intent, "type": "error", "message": "Something went wrong while running this step."}
+                    yield _sse("section", section)
+                    continue
                 yield _sse("section", section)
             yield _sse("done", {})
         except Exception:

@@ -24,7 +24,7 @@ export function TeamView() {
         <Card><CardContent className="p-5"><ShieldCheck className="mb-3 h-5 w-5 text-warning" /><div className="text-2xl font-semibold">{Object.keys(permissions.data ?? {}).length}</div><div className="text-sm text-muted-foreground">Permission groups</div></CardContent></Card>
       </div>
       {tab === "members" ? (
-        <Card><CardHeader><CardTitle>Members</CardTitle></CardHeader><CardContent><DataTable rows={(members.data ?? []) as Record<string, unknown>[]} columns={["email", "full_name", "role", "created_at"]} /></CardContent></Card>
+        <Card><CardHeader><CardTitle>Members</CardTitle></CardHeader><CardContent><DataTable rows={(members.data ?? []) as unknown as Record<string, unknown>[]} columns={["email", "full_name", "role", "created_at"]} /></CardContent></Card>
       ) : tab === "organizations" ? (
         <Card><CardHeader><CardTitle>Organizations and Permissions</CardTitle></CardHeader><CardContent><DataFields data={permissions.data ?? {}} /></CardContent></Card>
       ) : (

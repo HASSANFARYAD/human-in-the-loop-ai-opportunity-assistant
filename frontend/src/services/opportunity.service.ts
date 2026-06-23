@@ -1,5 +1,5 @@
 import { apiClient, getJson } from "@/services/client";
-import type { BatchScoreResult, Opportunity, OpportunityContentType, Profile, ProfileJobDiscoveryResult, TailoredResume } from "@/types/api";
+import type { BatchScoreResult, Opportunity, OpportunityContentType, Profile, ProfileJobDiscoveryResult, Recording, Reminder, TailoredResume } from "@/types/api";
 
 export interface OpportunityCreate {
   workspace_id?: number;
@@ -68,7 +68,7 @@ export const opportunityService = {
   resumeReviews: (id: number) => getJson<TailoredResume[]>("/profile/resume-reviews", { job_id: id }),
   interviewPrep: async (id: number) => (await apiClient.post<Record<string, unknown>>(`/jobs/${id}/interview-prep`)).data,
   interviewPrepSessions: (id: number) => getJson<Record<string, unknown>[]>(`/jobs/${id}/interview-prep`),
-  recordings: (id?: number) => getJson<Record<string, unknown>[]>("/recordings", id ? { job_id: id } : undefined),
+  recordings: (id?: number) => getJson<Recording[]>("/recordings", id ? { job_id: id } : undefined),
   saveRecording: async (payload: { job_id?: number; title: string; mime_type: string; data_url: string; duration_ms?: number }) =>
     (await apiClient.post<Record<string, unknown>>("/recordings", payload)).data,
   uploadRecording: async (payload: { job_id?: number; title: string; blob: Blob; duration_ms?: number }) => {
@@ -103,10 +103,10 @@ export const opportunityService = {
   gmailStatus: () => getJson<{ connected: boolean; configured?: boolean; status: string; connected_email?: string }>("/gmail/status"),
   gmailAuthUrl: async () => (await apiClient.get<{ url: string }>("/gmail/auth-url")).data,
   gmailDisconnect: async () => (await apiClient.post("/gmail/disconnect")).data,
-  gmailMessages: () => getJson<Record<string, unknown>[]>("/gmail/messages"),
+  gmailMessages: () => getJson<{ id: string; from?: string; subject?: string; snippet?: string; received_at?: string }[]>("/gmail/messages"),
   updateStatus: async (id: number, status: string, notes = "") =>
     (await apiClient.patch(`/jobs/${id}/status`, undefined, { params: { status, notes } })).data,
-  reminders: () => getJson<unknown[]>("/reminders"),
+  reminders: () => getJson<Reminder[]>("/reminders"),
   extract: async (payload: { raw: string; source: string; opportunity_type: string; work_location_filter?: string; workspace_id?: number }) =>
     (await apiClient.post<{ status: string; opportunity?: Opportunity; opportunities?: Opportunity[]; raw_count?: number; work_location_filter?: string; jobs_found?: number; jobs_skipped_location_filter?: number; warnings?: string[]; message?: string }>("/discovery/extract", payload)).data,
   discoverPublic: async (payload: {

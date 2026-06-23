@@ -55,8 +55,23 @@ export function AgentChatView() {
         return next;
       });
 
+    // Token-style streaming: append delta text to the trailing message section.
+    const appendDelta = (text: string) =>
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role !== "assistant" || last.sections.length === 0) return next;
+        const sections = [...last.sections];
+        const tail = sections[sections.length - 1];
+        if (tail.type === "message") {
+          sections[sections.length - 1] = { ...tail, message: (tail.message ?? "") + text };
+          next[next.length - 1] = { role: "assistant", sections };
+        }
+        return next;
+      });
+
     try {
-      await agentService.chatStream(trimmed, history, { onSection: appendSection, onError: setError }, activeWorkspace?.id);
+      await agentService.chatStream(trimmed, history, { onSection: appendSection, onDelta: appendDelta, onError: setError }, activeWorkspace?.id);
     } catch {
       setError("The assistant could not complete your request.");
     } finally {
@@ -158,7 +173,7 @@ function SectionView({ section }: { section: AgentSection }) {
         <div className="flex items-center gap-2 text-sm font-medium"><Search className="h-4 w-4 text-primary" />{section.message}</div>
         <div className="space-y-2">
           {listings.map((job, i) => (
-            <Card key={i}>
+            <Card key={job.url ?? job.title ?? i}>
               <CardContent className="flex items-start justify-between gap-3 p-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium">{job.title}</div>
@@ -167,7 +182,7 @@ function SectionView({ section }: { section: AgentSection }) {
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">{job.match_score}%</span>
-                  {job.url ? <a href={job.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"><ExternalLink className="h-3 w-3" />Open</a> : null}
+                  {job.url ? <a href={job.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"><ExternalLink className="h-3 w-3" />Open</a> : null}
                 </div>
               </CardContent>
             </Card>

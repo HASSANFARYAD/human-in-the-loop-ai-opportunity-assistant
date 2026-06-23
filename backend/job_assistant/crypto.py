@@ -8,27 +8,23 @@ be supplied through APP_ENCRYPTION_KEY in production. Generate one with:
     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 """
 
-import base64
-import hashlib
 import os
 from functools import lru_cache
 
 from cryptography.fernet import Fernet, InvalidToken
 
 _PREFIX = "enc:v1:"
-_DEV_KEY_SEED = "dev-only-job-assistant-encryption-key-change-me"
 
 
 @lru_cache(maxsize=1)
 def _fernet() -> Fernet:
     raw_key = os.getenv("APP_ENCRYPTION_KEY", "").strip()
-    if raw_key:
-        key = raw_key.encode("utf-8")
-    else:
-        # Development fallback keeps local demos usable. Production must provide
-        # APP_ENCRYPTION_KEY so encrypted data can survive deployments securely.
-        digest = hashlib.sha256(_DEV_KEY_SEED.encode("utf-8")).digest()
-        key = base64.urlsafe_b64encode(digest)
+    if not raw_key:
+        raise RuntimeError(
+            "APP_ENCRYPTION_KEY is not set. "
+            "Run: python scripts/generate_secrets.py and add the result to your .env file."
+        )
+    key = raw_key.encode("utf-8")
     return Fernet(key)
 
 

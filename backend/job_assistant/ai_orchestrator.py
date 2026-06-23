@@ -15,6 +15,7 @@ from job_assistant.db import (
     log_ai_generation,
 )
 from job_assistant.services.ai_providers import ask_json as ask_json_direct
+from job_assistant.services.ai_providers import ask_text as ask_text_direct
 
 
 @dataclass
@@ -80,6 +81,32 @@ class AIOrchestrator:
             status = "failed"
             error = str(exc)[:1000]
             return dict(fallback)
+        finally:
+            if user_id:
+                log_ai_generation(user_id, provider=route.provider, model=route.model, task_type=task_type, prompt_version=prompt_version, prompt_hash=prompt_hash, input_tokens=input_tokens, output_tokens=output_tokens, latency_ms=int((time.perf_counter() - started) * 1000), status=status, error_message=error, workspace_id=workspace_id)
+
+    def ask(self, system: str, user: str, *, user_id: Optional[int] = None, task_type: str = "general", prompt_version: str = "", workspace_id: Optional[int] = None) -> str:
+        """Free-form conversational completion. Returns plain assistant text
+        (empty string when no provider is configured or the call fails)."""
+        route = self.resolve_route(user_id, task_type, workspace_id=workspace_id)
+        self._enforce_daily_budget(user_id, route)
+        started = time.perf_counter()
+        status = "success"
+        error = ""
+        prompt_hash = hashlib.sha256((system + "\n" + user).encode("utf-8")).hexdigest()
+        input_tokens = len((system + "\n" + user).split())
+        output_tokens = 0
+        text = ""
+        try:
+            text = ask_text_direct(system, user, user_id=user_id, provider_settings=route.settings)
+            if not text:
+                status = "fallback"
+            output_tokens = len(text.split())
+            return text
+        except Exception as exc:
+            status = "failed"
+            error = str(exc)[:1000]
+            return ""
         finally:
             if user_id:
                 log_ai_generation(user_id, provider=route.provider, model=route.model, task_type=task_type, prompt_version=prompt_version, prompt_hash=prompt_hash, input_tokens=input_tokens, output_tokens=output_tokens, latency_ms=int((time.perf_counter() - started) * 1000), status=status, error_message=error, workspace_id=workspace_id)

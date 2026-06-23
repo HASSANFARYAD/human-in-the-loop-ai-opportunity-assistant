@@ -256,3 +256,64 @@ export interface Feedback {
   status?: string;
   created_at?: string;
 }
+
+export interface WorkspaceMember {
+  id: number;
+  user_id: number;
+  workspace_id: number;
+  role: string;
+  email?: string;
+  full_name?: string;
+  joined_at?: string;
+}
+
+export interface Role {
+  id: number;
+  name: string;
+  description?: string;
+  permissions?: string[];
+}
+
+export interface AIGeneration {
+  id: number;
+  provider?: string;
+  model?: string;
+  task_type?: string;
+  status?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  estimated_cost?: number;
+  latency_ms?: number;
+  error_message?: string;
+  created_at?: string;
+}
+
+export interface AIPrompt {
+  id: number;
+  name: string;
+  version: string;
+  description?: string;
+  is_active?: boolean;
+  created_at?: string;
+}
+
+export interface Reminder {
+  id: number;
+  job_id?: number;
+  title?: string;
+  note?: string;
+  due_at?: string;
+  status?: string;
+  created_at?: string;
+}
+
+export interface Recording {
+  id: number;
+  job_id?: number;
+  title?: string;
+  mime_type?: string;
+  data_url?: string;
+  playback_url?: string;
+  duration_ms?: number;
+  created_at?: string;
+}

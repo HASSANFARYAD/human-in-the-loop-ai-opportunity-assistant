@@ -44,6 +44,8 @@ def _client_ip(request: Request) -> str:
 def _limit_for_path(path: str) -> tuple[str, int, int]:
     if path.startswith("/api/v1/ai/"):
         return "ai_generation", settings.rate_limit_ai_per_hour, 60
+    if path.startswith("/api/v1/agent/chat/stream"):
+        return "sse_chat", settings.rate_limit_sse_per_minute, 1
     if path.startswith("/api/v1/feedback"):
         return "feedback", settings.rate_limit_feedback_per_hour, 60
     if path.startswith("/api/v1/posts"):

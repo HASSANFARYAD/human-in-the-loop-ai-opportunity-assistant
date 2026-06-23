@@ -1,5 +1,5 @@
 import { apiClient, getJson } from "@/services/client";
-import type { AdminConfig, AdminConfigStatus, AIUsage, Integration, ProviderConfig } from "@/types/api";
+import type { AdminConfig, AdminConfigStatus, AIGeneration, AIPrompt, AIUsage, Integration, ProviderConfig } from "@/types/api";
 
 export const providerService = {
   integrations: (workspace_id?: number) => getJson<Integration[]>("/integrations", { workspace_id }),
@@ -11,9 +11,9 @@ export const providerService = {
     (await apiClient.delete(`/providers/${platform}/${providerName}`, { params: { workspace_id } })).data,
   health: (platform?: string, workspace_id?: number) => getJson<Record<string, unknown>>("/providers/health", { platform, workspace_id }),
   aiHealth: () => getJson<Record<string, unknown>>("/health/ai"),
-  generations: (workspace_id?: number, limit = 100) => getJson<unknown[]>("/ai/generations", { workspace_id, limit }),
+  generations: (workspace_id?: number, limit = 100) => getJson<AIGeneration[]>("/ai/generations", { workspace_id, limit }),
   usage: () => getJson<AIUsage>("/ai/usage"),
-  prompts: () => getJson<unknown[]>("/ai/prompts"),
+  prompts: () => getJson<AIPrompt[]>("/ai/prompts"),
   adminConfigs: () => getJson<{ configs: AdminConfig[]; statuses: Record<string, AdminConfigStatus> }>("/admin/configs"),
   saveAdminConfig: async (payload: Record<string, unknown>) => (await apiClient.post<AdminConfig>("/admin/configs", payload)).data,
   updateAdminConfig: async (type: string, id: string | number, payload: Record<string, unknown>) =>

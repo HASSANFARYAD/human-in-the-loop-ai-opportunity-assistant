@@ -30,7 +30,8 @@ def test_agent_chat_routes_to_chat(tmp_path, monkeypatch):
     client, headers = _client(tmp_path, monkeypatch)
     import job_assistant.api as api
 
-    monkeypatch.setattr(api, "classify_intent", lambda *a, **k: {"intents": ["chat"], "search_query": "", "job_reference": "", "reply": "Hi! How can I help?"})
+    monkeypatch.setattr(api, "classify_intent", lambda *a, **k: {"intents": ["chat"], "search_query": "", "job_reference": "", "reply": ""})
+    monkeypatch.setattr(api, "chat_reply", lambda *a, **k: "Hi! How can I help?")
 
     resp = client.post("/api/v1/agent/chat", json={"message": "hello"}, headers=headers)
     assert resp.status_code == 200

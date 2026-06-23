@@ -68,8 +68,8 @@ function ResetPasswordForm() {
       </CardHeader>
       <CardContent>
         <form className="space-y-4" onSubmit={submit}>
-          <Input type="password" placeholder="New password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} />
-          <Input type="password" placeholder="Confirm password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
+          <label><span className="sr-only">New password</span><Input id="new-password" type="password" placeholder="New password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+          <label><span className="sr-only">Confirm password</span><Input id="confirm-password" type="password" placeholder="Confirm password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></label>
           {password && policyMessages.length ? <div className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{policyMessages.map((item) => <p key={item}>{item}</p>)}</div> : null}
           {message ? <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">{message} <Link href="/login" className="font-medium underline">Sign in</Link></p> : null}
           {error ? <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-200">{error}</p> : null}
