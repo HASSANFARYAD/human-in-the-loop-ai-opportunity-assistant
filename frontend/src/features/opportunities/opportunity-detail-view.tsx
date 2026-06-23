@@ -79,13 +79,28 @@ function TailoredResumeCard({ resume }: { resume: TailoredResume | null }) {
       <CardContent className="space-y-4 text-sm">
         {!resume ? <div className="rounded-md border border-dashed p-4 text-muted-foreground">No tailored resume yet. Use Tailor resume to generate a job-specific draft from your saved profile.</div> : null}
         {resume?.using_fallback ? <div className="rounded-md border p-3 text-muted-foreground">AI provider settings were unavailable or failed, so a local tailored draft was generated.</div> : null}
-        {resume?.tailored_summary ? <Section title="Tailored summary"><p className="whitespace-pre-wrap leading-6">{resume.tailored_summary}</p></Section> : null}
-        {asList(resume?.tailored_experience_bullets).length ? <Section title="Tailored experience bullets"><ul className="list-disc space-y-1 pl-5">{asList(resume?.tailored_experience_bullets).map((item) => <li key={item}>{item}</li>)}</ul></Section> : null}
-        {asList(resume?.skills_to_emphasize).length ? <Section title="Skills to emphasize"><p>{asList(resume?.skills_to_emphasize).join(", ")}</p></Section> : null}
-        {asList(resume?.keywords_to_include).length ? <Section title="Keywords to include"><p>{asList(resume?.keywords_to_include).join(", ")}</p></Section> : null}
-        {resume?.optional_cover_note ? <Section title="Optional cover note"><p className="whitespace-pre-wrap leading-6">{resume.optional_cover_note}</p></Section> : null}
-        {asList(resume?.application_guidance).length ? <Section title="Application guidance"><ul className="list-disc space-y-1 pl-5">{asList(resume?.application_guidance).map((item) => <li key={item}>{item}</li>)}</ul></Section> : null}
-        {resumeDraft ? <Section title="Copy-ready resume draft"><pre className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-sans leading-6">{resumeDraft}</pre></Section> : null}
+        {resume ? (
+          <Tabs defaultValue="overview" className="space-y-4">
+            <TabsList>
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="cover">Cover Note</TabsTrigger>
+              <TabsTrigger value="draft">Resume Draft</TabsTrigger>
+            </TabsList>
+            <TabsContent value="overview" className="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
+              {resume?.tailored_summary ? <Section title="Tailored summary"><p className="whitespace-pre-wrap leading-6">{resume.tailored_summary}</p></Section> : null}
+              {asList(resume?.tailored_experience_bullets).length ? <Section title="Tailored experience bullets"><ul className="list-disc space-y-1 pl-5">{asList(resume?.tailored_experience_bullets).map((item) => <li key={item}>{item}</li>)}</ul></Section> : null}
+              {asList(resume?.skills_to_emphasize).length ? <Section title="Skills to emphasize"><p>{asList(resume?.skills_to_emphasize).join(", ")}</p></Section> : null}
+              {asList(resume?.keywords_to_include).length ? <Section title="Keywords to include"><p>{asList(resume?.keywords_to_include).join(", ")}</p></Section> : null}
+              {asList(resume?.application_guidance).length ? <Section title="Application guidance"><ul className="list-disc space-y-1 pl-5">{asList(resume?.application_guidance).map((item) => <li key={item}>{item}</li>)}</ul></Section> : null}
+            </TabsContent>
+            <TabsContent value="cover" className="max-h-[60vh] overflow-y-auto pr-1">
+              {resume?.optional_cover_note ? <Section title="Optional cover note"><p className="whitespace-pre-wrap leading-6">{resume.optional_cover_note}</p></Section> : <div className="rounded-md border border-dashed p-4 text-muted-foreground">No cover note was generated for this draft.</div>}
+            </TabsContent>
+            <TabsContent value="draft" className="max-h-[60vh] overflow-y-auto pr-1">
+              {resumeDraft ? <Section title="Copy-ready resume draft"><pre className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-sans leading-6">{resumeDraft}</pre></Section> : <div className="rounded-md border border-dashed p-4 text-muted-foreground">No resume draft available yet.</div>}
+            </TabsContent>
+          </Tabs>
+        ) : null}
       </CardContent>
     </Card>
   );
