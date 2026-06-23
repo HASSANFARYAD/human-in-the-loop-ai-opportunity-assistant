@@ -17,12 +17,15 @@ docker-up:
 docker-down:
 	docker compose down
 
+seed:
+	python backend/scripts/seed_data.py
+
 backup:
-	python backend/scripts/backup_sqlite.py --db $${APP_DB_PATH:-backend/data/job_assistant.sqlite3} --out-dir backend/backups
+	python -c "from job_assistant.backup import run_backup; run_backup()"
 
 restore:
-	@test -n "$(BACKUP)" || (echo "Usage: make restore BACKUP=backend/backups/file.sqlite3" && exit 1)
-	python backend/scripts/restore_sqlite.py "$(BACKUP)" --db $${APP_DB_PATH:-backend/data/job_assistant.sqlite3}
+	@echo "Restore from MongoDB backup: mongoimport"
+	@echo "See: https://www.mongodb.com/docs/database-tools/mongoimport/"
 
 clean:
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +

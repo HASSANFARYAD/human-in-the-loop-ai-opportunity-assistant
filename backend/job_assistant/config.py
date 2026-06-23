@@ -42,11 +42,10 @@ class Settings(BaseSettings):
 
     app_data_dir: str = os.getenv("APP_DATA_DIR", "data")
     log_dir: str = os.getenv("LOG_DIR", "logs")
-    db_path: str = os.getenv("APP_DB_PATH", str(Path(os.getenv("APP_DATA_DIR", "data")) / "job_assistant.sqlite3"))
-    database_url: Optional[str] = os.getenv("DATABASE_URL")
+    mongo_url: Optional[str] = os.getenv("MONGO_URL")
+    mongo_db_name: str = os.getenv("MONGO_DB_NAME", "career_assistant")
 
     # User-owned provider API keys are stored encrypted in the database from the Integrations UI.
-    # Env provider keys are intentionally not part of normal user workflows.
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     default_ai_provider: str = os.getenv("DEFAULT_AI_PROVIDER", "huggingface_local")
 
@@ -61,7 +60,6 @@ class Settings(BaseSettings):
     backup_dir: str = os.getenv("BACKUP_DIR", str(Path(os.getenv("APP_DATA_DIR", "data")) / "backups"))
     backup_interval_hours: int = int(os.getenv("BACKUP_INTERVAL_HOURS", "24"))
     backup_retention: int = int(os.getenv("BACKUP_RETENTION", "30"))
-    # Optional offsite upload (Cloudflare R2 / S3-compatible). Leave bucket blank to keep backups local only.
     backup_s3_bucket: str = os.getenv("BACKUP_S3_BUCKET", "")
     backup_s3_endpoint: str = os.getenv("BACKUP_S3_ENDPOINT", "")
     backup_s3_access_key: str = os.getenv("BACKUP_S3_ACCESS_KEY", "")
@@ -81,8 +79,7 @@ class Settings(BaseSettings):
     rate_limit_feedback_per_hour: int = int(os.getenv("RATE_LIMIT_FEEDBACK_PER_HOUR", "20"))
     rate_limit_publish_per_hour: int = int(os.getenv("RATE_LIMIT_PUBLISH_PER_HOUR", "20"))
     rate_limit_sse_per_minute: int = int(os.getenv("RATE_LIMIT_SSE_PER_MINUTE", "10"))
-    rate_limit_backend: str = os.getenv("RATE_LIMIT_BACKEND", "sqlite")
-    # Per-user daily cap on billable AI generations (provider calls). 0 disables the cap.
+    rate_limit_backend: str = os.getenv("RATE_LIMIT_BACKEND", "mongodb")
     ai_daily_generation_limit: int = int(os.getenv("AI_DAILY_GENERATION_LIMIT", "50"))
     redis_url: Optional[str] = os.getenv("REDIS_URL")
 
@@ -92,7 +89,7 @@ class Settings(BaseSettings):
     error_alert_threshold_per_hour: int = int(os.getenv("ERROR_ALERT_THRESHOLD_PER_HOUR", "10"))
     latency_alert_threshold_ms: int = int(os.getenv("LATENCY_ALERT_THRESHOLD_MS", "3000"))
 
-    worker_backend: str = os.getenv("WORKER_BACKEND", "sqlite")
+    worker_backend: str = os.getenv("WORKER_BACKEND", "mongodb")
     worker_poll_interval_seconds: int = int(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "5"))
     worker_max_attempts: int = int(os.getenv("WORKER_MAX_ATTEMPTS", "3"))
 
@@ -148,7 +145,7 @@ class Settings(BaseSettings):
 
     @property
     def effective_database_url(self) -> str:
-        return self.database_url or f"sqlite:///{self.db_path}"
+        return self.mongo_url or "mongodb://localhost:27017"
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -160,7 +157,6 @@ class Settings(BaseSettings):
 
     def ensure_runtime_dirs(self) -> None:
         Path(self.app_data_dir).mkdir(parents=True, exist_ok=True)
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         Path(self.log_dir).mkdir(parents=True, exist_ok=True)
         if self.log_file:
             Path(self.log_file).parent.mkdir(parents=True, exist_ok=True)
@@ -207,11 +203,7 @@ class Settings(BaseSettings):
                 warnings.append("PASSWORD_RESET_TOKEN_EXPIRE_MINUTES should be between 1 and 120 in production.")
             if not self.smtp_host or not self.smtp_from_email:
                 warnings.append("SMTP_HOST and SMTP_FROM_EMAIL are required in production for password recovery email.")
-            if self.database_url and not self.database_url.startswith("postgres"):
-                warnings.append("DATABASE_URL should point to PostgreSQL when set. Leave it unset for SQLite deployments.")
-            if not self.database_url and not Path(self.db_path).is_absolute():
-                warnings.append("APP_DB_PATH should be an absolute path on persistent storage for production SQLite deployments.")
-            if self.rate_limits_enabled and self.rate_limit_backend.lower() == "sqlite":
+            if self.rate_limits_enabled and self.rate_limit_backend.lower() not in {"redis", "gateway", "mongodb"}:
                 warnings.append("RATE_LIMIT_BACKEND should use Redis or a gateway in production.")
         return warnings
 
@@ -221,7 +213,7 @@ class Settings(BaseSettings):
             "app_version": self.app_version,
             "environment": self.environment.value,
             "deployment_profile": self.deployment_profile.value,
-            "database_engine": "postgresql" if (self.database_url or "").startswith("postgres") else "sqlite",
+            "database_engine": "mongodb",
             "scheduler_enabled": self.scheduler_enabled,
             "rate_limits_enabled": self.rate_limits_enabled,
             "rate_limit_backend": self.rate_limit_backend,

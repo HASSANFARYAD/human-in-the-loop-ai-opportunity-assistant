@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Provider abstraction layer for user-owned integrations.
 
-This module is intentionally lightweight for the SQLite MVP. It gives the app a
+This module is intentionally lightweight for the MVP. It gives the app a
 single registry interface for configured providers, health checks, priority
 ordering, and fallback execution without forcing every integration to be
 rewritten at once.

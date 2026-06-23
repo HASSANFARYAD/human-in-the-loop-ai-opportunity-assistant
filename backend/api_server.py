@@ -9,10 +9,10 @@ from fastapi.responses import JSONResponse
 
 from job_assistant import api
 from job_assistant.config import settings
-from job_assistant.db import init_db
+from job_assistant.db import init_db, needs_seed, seed_demo_data
 from job_assistant.logging_config import setup_logging
 from job_assistant.observability import observability_middleware
-from job_assistant.rate_limits import sqlite_rate_limit_middleware
+from job_assistant.rate_limits import rate_limit_middleware
 from job_assistant.runtime import validate_startup_configuration
 
 setup_logging()
@@ -54,7 +54,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.middleware("http")(sqlite_rate_limit_middleware)
+    app.middleware("http")(rate_limit_middleware)
     app.middleware("http")(observability_middleware)
 
     app.include_router(api.router)
@@ -68,6 +68,11 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
             raise
+        if needs_seed():
+            try:
+                seed_demo_data()
+            except Exception as e:
+                logger.warning(f"Failed to seed demo data: {e}")
         if settings.scheduler_enabled:
             try:
                 from job_assistant.scheduler import start_scheduler

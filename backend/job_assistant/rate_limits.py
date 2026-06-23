@@ -70,7 +70,7 @@ def _redis_increment(resource_type: str, window_start: str, window_end: str, ip_
         return None
 
 
-async def sqlite_rate_limit_middleware(request: Request, call_next):
+async def rate_limit_middleware(request: Request, call_next):
     if not settings.rate_limits_enabled or not request.url.path.startswith("/api/"):
         return await call_next(request)
     if request.method.upper() == "OPTIONS":
@@ -87,7 +87,7 @@ async def sqlite_rate_limit_middleware(request: Request, call_next):
 
     ip_address = _client_ip(request)
     count = _redis_increment(resource_type, window_start, window_end, ip_address, window_minutes)
-    backend = "redis" if count is not None and settings.rate_limit_backend.lower() in {"redis", "gateway"} else "sqlite"
+    backend = "redis" if count is not None and settings.rate_limit_backend.lower() in {"redis", "gateway"} else "mongodb"
     if count is None:
         count = increment_usage_counter(
             resource_type=resource_type,
