@@ -68,6 +68,88 @@ def classify_intent(message: str, history: Optional[List[Dict[str, str]]] = None
     }
 
 
+def _profile_context(profile: Dict[str, Any]) -> str:
+    """Compact, human-readable snapshot of the user's profile for grounding."""
+    if not profile:
+        return "No profile on file yet."
+    lines: List[str] = []
+    for label, key in (("Name", "name"), ("Target roles", "target_roles"),
+                       ("Skills", "skills"), ("Industries", "industries"),
+                       ("Location", "location"), ("Summary", "summary")):
+        value = str(profile.get(key) or "").strip()
+        if value:
+            lines.append(f"{label}: {value[:400]}")
+    cv = str(profile.get("cv_text") or "").strip()
+    if cv:
+        lines.append(f"Resume excerpt: {cv[:800]}")
+    return "\n".join(lines) or "No profile details on file yet."
+
+
+def _opportunities_context(opportunities: Optional[List[Dict[str, Any]]]) -> str:
+    """Compact list of the user's saved opportunities for grounding."""
+    if not opportunities:
+        return "No saved opportunities yet."
+    lines: List[str] = []
+    for opp in opportunities[:10]:
+        title = str(opp.get("title") or "Untitled").strip()
+        company = str(opp.get("company") or "").strip()
+        score = opp.get("match_score") or (opp.get("evaluation") or {}).get("match_score")
+        bits = [f"#{opp.get('id')}", title]
+        if company:
+            bits.append(f"@ {company}")
+        if score:
+            bits.append(f"({score}% match)")
+        lines.append(" ".join(str(b) for b in bits))
+    return "\n".join(lines)
+
+
+def chat_reply(
+    message: str,
+    history: Optional[List[Dict[str, str]]] = None,
+    profile: Optional[Dict[str, Any]] = None,
+    opportunities: Optional[List[Dict[str, Any]]] = None,
+    user_id: Optional[int] = None,
+) -> str:
+    """Generate a genuine, grounded, multi-turn conversational reply.
+
+    Unlike the intent router, this produces a natural-language answer that is
+    aware of the user's profile, saved opportunities, and the running
+    conversation — so the chat behaves like a real assistant rather than a
+    one-shot classifier.
+    """
+    transcript = ""
+    for turn in (history or [])[-10:]:
+        role = "User" if turn.get("role") == "user" else "Assistant"
+        content = str(turn.get("content", "")).strip()
+        if content:
+            transcript += f"{role}: {content[:800]}\n"
+
+    system = (
+        "You are a warm, sharp career assistant inside a job-application app. "
+        "Hold a natural, multi-turn conversation: answer follow-ups, remember "
+        "what was said, ask a clarifying question when it helps. Be concise and "
+        "practical, use the user's own data when relevant, and never invent jobs "
+        "or facts that aren't in the context. You can also act on the user's "
+        "behalf — if they want it, tell them you can search for jobs, tailor "
+        "their resume to a saved opportunity, or run interview prep, and that "
+        "they just need to ask.\n\n"
+        f"User profile:\n{_profile_context(profile or {})}\n\n"
+        f"Saved opportunities:\n{_opportunities_context(opportunities)}"
+    )
+    user = (
+        (f"Conversation so far:\n{transcript}\n" if transcript else "")
+        + f"User: {message}\n\nReply as the assistant."
+    )
+
+    reply = ai_orchestrator.ask(system, user, user_id=user_id, task_type="agent_chat")
+    if reply:
+        return reply
+    return (
+        "I can help you find jobs, tailor your resume to a specific opportunity, "
+        "or prep you for interviews — what would you like to start with?"
+    )
+
+
 def _profile_search_query(profile: Dict[str, Any]) -> str:
     return " ".join(
         str(profile.get(key, "")) for key in ("target_roles", "skills", "industries") if profile.get(key)

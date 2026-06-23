@@ -9,6 +9,7 @@ export interface AgentChatTurn {
 export interface AgentStreamHandlers {
   onIntents?: (intents: string[]) => void;
   onSection?: (section: AgentSection) => void;
+  onDelta?: (text: string) => void;
   onError?: (message: string) => void;
 }
 
@@ -51,6 +52,7 @@ export const agentService = {
       const parsed = data ? JSON.parse(data) : {};
       if (event === "intents") handlers.onIntents?.(parsed.intents ?? []);
       else if (event === "section") handlers.onSection?.(parsed as AgentSection);
+      else if (event === "delta") handlers.onDelta?.(parsed.text ?? "");
       else if (event === "error") handlers.onError?.(parsed.message ?? "Stream error");
     };
 

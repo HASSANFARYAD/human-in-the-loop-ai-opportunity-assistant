@@ -211,6 +211,39 @@ def get_user_ai_settings(user_id: Optional[int]) -> dict[str, Any]:
     }
 
 
+def _generate_text(system: str, user: str, settings: dict[str, Any]) -> str:
+    """Dispatch a single (system, user) turn to the configured provider and
+    return its raw text. Raises on provider/transport errors and on a missing
+    API key for providers that require one."""
+    config = settings.get("config", {}) or {}
+    provider = (config.get("provider") or DEFAULT_PROVIDER).strip().lower()
+    api_key = (settings.get("api_key") or "").strip()
+    model = (config.get("model") or "gpt-4o-mini").strip()
+    base_url = config.get("base_url") or ""
+    if provider in {"huggingface_local"}:
+        api_key = ""
+    elif provider != "langchain_openai" and not api_key:
+        raise ValueError(f"Missing API key for provider '{provider}'")
+    if provider == "langchain_openai" and not api_key and not _is_local_ollama_base_url(base_url):
+        raise ValueError("Missing API key for LangChain OpenAI-compatible provider")
+
+    if provider == "huggingface_local":
+        return _huggingface_local(model or DEFAULT_LOCAL_MODEL, system, user)
+    if provider == "langchain_openai":
+        return _langchain_openai(api_key, model or "llama3.1", system, user, config)
+    if provider == "azure_openai":
+        return _azure_openai(api_key, model, system, user, config)
+    if provider == "grok":
+        return _openai_compatible(api_key, model or "grok-3-mini", system, user, config.get("base_url") or "https://api.x.ai/v1")
+    if provider == "claude":
+        return _claude(api_key, model or "claude-3-5-sonnet-latest", system, user)
+    if provider == "gemini":
+        return _gemini(api_key, model or "gemini-1.5-pro", system, user)
+    if provider == "huggingface":
+        return _huggingface(api_key, model, system, user, config)
+    return _openai_compatible(api_key, model, system, user, config.get("base_url"))
+
+
 def ask_json(
     system: str,
     user: str,
@@ -223,35 +256,43 @@ def ask_json(
     config = settings.get("config", {}) or {}
     provider = (config.get("provider") or DEFAULT_PROVIDER).strip().lower()
     api_key = (settings.get("api_key") or "").strip()
-    model = (config.get("model") or "gpt-4o-mini").strip()
     base_url = config.get("base_url") or ""
-    if provider in {"huggingface_local"}:
-        api_key = ""
-    elif provider != "langchain_openai" and not api_key:
+    if provider not in {"huggingface_local"} and provider != "langchain_openai" and not api_key:
         return dict(fallback)
     if provider == "langchain_openai" and not api_key and not _is_local_ollama_base_url(base_url):
         return dict(fallback)
 
     try:
-        if provider == "huggingface_local":
-            text = _huggingface_local(model or DEFAULT_LOCAL_MODEL, system, user)
-        elif provider == "langchain_openai":
-            text = _langchain_openai(api_key, model or "llama3.1", system, user, config)
-        elif provider == "azure_openai":
-            text = _azure_openai(api_key, model, system, user, config)
-        elif provider == "grok":
-            text = _openai_compatible(api_key, model or "grok-3-mini", system, user, config.get("base_url") or "https://api.x.ai/v1")
-        elif provider == "claude":
-            text = _claude(api_key, model or "claude-3-5-sonnet-latest", system, user)
-        elif provider == "gemini":
-            text = _gemini(api_key, model or "gemini-1.5-pro", system, user)
-        elif provider == "huggingface":
-            text = _huggingface(api_key, model, system, user, config)
-        else:
-            text = _openai_compatible(api_key, model, system, user, config.get("base_url"))
+        text = _generate_text(system, user, settings)
         data = _json_from_text(text, fallback)
         return data or dict(fallback)
     except Exception as exc:
         out = dict(fallback)
         out["_ai_error"] = f"{provider}: {exc}"
         return out
+
+
+def ask_text(
+    system: str,
+    user: str,
+    *,
+    user_id: Optional[int] = None,
+    provider_settings: Optional[dict[str, Any]] = None,
+) -> str:
+    """Free-form conversational completion. Returns plain assistant text, or an
+    empty string when no provider is configured or the call fails (callers
+    supply their own user-facing fallback copy)."""
+    settings = provider_settings or get_user_ai_settings(user_id)
+    config = settings.get("config", {}) or {}
+    provider = (config.get("provider") or DEFAULT_PROVIDER).strip().lower()
+    api_key = (settings.get("api_key") or "").strip()
+    base_url = config.get("base_url") or ""
+    if provider not in {"huggingface_local"} and provider != "langchain_openai" and not api_key:
+        return ""
+    if provider == "langchain_openai" and not api_key and not _is_local_ollama_base_url(base_url):
+        return ""
+
+    try:
+        return (_generate_text(system, user, settings) or "").strip()
+    except Exception:
+        return ""

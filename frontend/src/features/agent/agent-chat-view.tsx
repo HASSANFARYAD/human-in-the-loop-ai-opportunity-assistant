@@ -55,8 +55,23 @@ export function AgentChatView() {
         return next;
       });
 
+    // Token-style streaming: append delta text to the trailing message section.
+    const appendDelta = (text: string) =>
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role !== "assistant" || last.sections.length === 0) return next;
+        const sections = [...last.sections];
+        const tail = sections[sections.length - 1];
+        if (tail.type === "message") {
+          sections[sections.length - 1] = { ...tail, message: (tail.message ?? "") + text };
+          next[next.length - 1] = { role: "assistant", sections };
+        }
+        return next;
+      });
+
     try {
-      await agentService.chatStream(trimmed, history, { onSection: appendSection, onError: setError }, activeWorkspace?.id);
+      await agentService.chatStream(trimmed, history, { onSection: appendSection, onDelta: appendDelta, onError: setError }, activeWorkspace?.id);
     } catch {
       setError("The assistant could not complete your request.");
     } finally {
