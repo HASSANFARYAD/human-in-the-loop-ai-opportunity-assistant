@@ -41,7 +41,7 @@ export default function ForgotPasswordPage() {
       </CardHeader>
       <CardContent>
         <form className="space-y-4" onSubmit={submit}>
-          <Input type="email" placeholder="Email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+          <label><span className="sr-only">Email</span><Input id="reset-email" type="email" placeholder="Email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
           {message ? <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">{message}</p> : null}
           {error ? <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-200">{error}</p> : null}
           <Button className="w-full" type="submit" disabled={loading}>{loading ? "Sending..." : "Send reset link"}</Button>

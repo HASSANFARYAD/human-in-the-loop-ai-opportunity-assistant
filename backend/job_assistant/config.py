@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     rate_limit_ai_per_hour: int = int(os.getenv("RATE_LIMIT_AI_PER_HOUR", "60"))
     rate_limit_feedback_per_hour: int = int(os.getenv("RATE_LIMIT_FEEDBACK_PER_HOUR", "20"))
     rate_limit_publish_per_hour: int = int(os.getenv("RATE_LIMIT_PUBLISH_PER_HOUR", "20"))
+    rate_limit_sse_per_minute: int = int(os.getenv("RATE_LIMIT_SSE_PER_MINUTE", "10"))
     rate_limit_backend: str = os.getenv("RATE_LIMIT_BACKEND", "sqlite")
     # Per-user daily cap on billable AI generations (provider calls). 0 disables the cap.
     ai_daily_generation_limit: int = int(os.getenv("AI_DAILY_GENERATION_LIMIT", "50"))
@@ -106,7 +107,7 @@ class Settings(BaseSettings):
     log_max_bytes: int = int(os.getenv("LOG_MAX_BYTES", str(10 * 1024 * 1024)))
     log_backup_count: int = int(os.getenv("LOG_BACKUP_COUNT", "5"))
 
-    jwt_secret_key: str = os.getenv("JWT_SECRET_KEY", "dev-secret-key-change-in-prod")
+    jwt_secret_key: str = os.getenv("JWT_SECRET_KEY", "")
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15" if os.getenv("ENVIRONMENT") == "prod" else "60"))
     refresh_token_expire_days: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "30"))
@@ -164,13 +165,26 @@ class Settings(BaseSettings):
         if self.log_file:
             Path(self.log_file).parent.mkdir(parents=True, exist_ok=True)
 
+    def validate_secrets(self) -> None:
+        if self.is_production:
+            if not self.app_encryption_key:
+                raise RuntimeError(
+                    "APP_ENCRYPTION_KEY is required in production. "
+                    "Run: python scripts/generate_secrets.py"
+                )
+            if not self.jwt_secret_key or len(self.jwt_secret_key) < 32:
+                raise RuntimeError(
+                    "JWT_SECRET_KEY is required in production (min 32 characters). "
+                    "Run: python scripts/generate_secrets.py"
+                )
+
     def startup_warnings(self) -> list[str]:
         warnings: list[str] = []
         if self.is_production:
             if not self.app_encryption_key:
                 warnings.append("APP_ENCRYPTION_KEY is required in production for encrypted user provider keys.")
-            if self.jwt_secret_key in {"dev-secret-key-change-in-prod", "change-me-before-production", ""} or self.jwt_secret_key.startswith("change-me-"):
-                warnings.append("JWT_SECRET_KEY must be changed before production use.")
+            if not self.jwt_secret_key or self.jwt_secret_key in {"dev-secret-key-change-in-prod", "change-me-before-production"} or len(self.jwt_secret_key) < 32:
+                warnings.append("JWT_SECRET_KEY must be changed before production use (min 32 characters).")
             if len(self.jwt_secret_key) < 32:
                 warnings.append("JWT_SECRET_KEY should be at least 32 characters in production.")
             if "*" in self.cors_origin_list:

@@ -49,15 +49,26 @@ export const agentService = {
         else if (line.startsWith("data: ")) data += line.slice(6);
       }
       if (!event) return;
-      const parsed = data ? JSON.parse(data) : {};
-      if (event === "intents") handlers.onIntents?.(parsed.intents ?? []);
-      else if (event === "section") handlers.onSection?.(parsed as AgentSection);
-      else if (event === "delta") handlers.onDelta?.(parsed.text ?? "");
-      else if (event === "error") handlers.onError?.(parsed.message ?? "Stream error");
+      try {
+        const parsed = data ? JSON.parse(data) : {};
+        if (event === "intents") handlers.onIntents?.(parsed.intents ?? []);
+        else if (event === "section") handlers.onSection?.(parsed as AgentSection);
+        else if (event === "delta") handlers.onDelta?.(parsed.text ?? "");
+        else if (event === "error") handlers.onError?.(parsed.message ?? "Stream error");
+      } catch {
+        handlers.onError?.("Failed to parse stream data");
+      }
     };
 
     for (;;) {
-      const { done, value } = await reader.read();
+      if (signal?.aborted) break;
+      let result;
+      try {
+        result = await reader.read();
+      } catch {
+        break;
+      }
+      const { done, value } = result;
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       let idx;

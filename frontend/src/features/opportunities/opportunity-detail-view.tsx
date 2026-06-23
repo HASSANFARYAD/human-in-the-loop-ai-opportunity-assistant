@@ -18,6 +18,17 @@ import { formatDate, scoreTone } from "@/lib/utils";
 import type { Opportunity, TailoredResume } from "@/types/api";
 
 const VALID_OPPORTUNITY_TYPES = new Set(["job", "internship", "contract", "freelance"]);
+const SAFE_AUDIO_SCHEMES = new Set(["http:", "https:", "blob:", "data:"]);
+
+function safeAudioUrl(value: unknown): string {
+  const raw = String(value ?? "");
+  try {
+    const url = new URL(raw);
+    return SAFE_AUDIO_SCHEMES.has(url.protocol) ? raw : "";
+  } catch {
+    return "";
+  }
+}
 
 function isImportableOpportunity(item: Opportunity) {
   const classification = String(item.classification || item.opportunity_type || "").toLowerCase();
@@ -143,8 +154,20 @@ export function OpportunityDetailView() {
   const [recording, setRecording] = useState(false);
   const [notes, setNotes] = useState("");
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const startedAtRef = useRef<number>(0);
   const chunksRef = useRef<Blob[]>([]);
+
+  useEffect(() => {
+    return () => {
+      if (recorderRef.current && recorderRef.current.state === "recording") {
+        recorderRef.current.stop();
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, []);
   const item = job.data;
   const saveNotes = useMutation({
     mutationFn: () => opportunityService.updateStatus(id, item?.status ?? "new", notes),
@@ -170,6 +193,7 @@ export function OpportunityDetailView() {
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
       chunksRef.current = [];
       startedAtRef.current = Date.now();
       const recorder = new MediaRecorder(stream);
@@ -261,8 +285,8 @@ export function OpportunityDetailView() {
             <div className="flex justify-between"><span className="text-muted-foreground">Deadline</span><span>{formatDate(item.deadline)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Match score</span><span className={`font-semibold ${scoreTone(scoreValue)}`}>{scoreValue == null ? "Skipped" : Number(scoreValue)}</span></div>
             <div className="flex items-center justify-between"><span className="text-muted-foreground">Is this relevant?</span><span className="flex gap-2"><Button size="icon" variant="outline" className="h-8 w-8" disabled={scoreFeedback.isPending} onClick={() => scoreFeedback.mutate("relevant")} aria-label="Mark relevant"><ThumbsUp className="h-4 w-4" /></Button><Button size="icon" variant="outline" className="h-8 w-8" disabled={scoreFeedback.isPending} onClick={() => scoreFeedback.mutate("irrelevant")} aria-label="Mark irrelevant"><ThumbsDown className="h-4 w-4" /></Button></span></div>
-            {item.url && importable ? <Button asChild variant="outline" className="w-full"><a href={item.url} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4" /> Apply</a></Button> : <Button variant="outline" className="w-full" disabled>Apply unavailable</Button>}
-            {item.source_email_open_url || item.source_url ? <Button asChild variant="outline" className="w-full"><a href={item.source_email_open_url || item.source_url || ""} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4" /> Open original source</a></Button> : null}<Button variant="outline" className="w-full" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button>
+            {item.url && importable ? <Button asChild variant="outline" className="w-full"><a href={item.url} target="_blank" rel="noopener noreferrer"><ExternalLink className="h-4 w-4" /> Apply</a></Button> : <Button variant="outline" className="w-full" disabled>Apply unavailable</Button>}
+            {item.source_email_open_url || item.source_url ? <Button asChild variant="outline" className="w-full"><a href={item.source_email_open_url || item.source_url || ""} target="_blank" rel="noopener noreferrer"><ExternalLink className="h-4 w-4" /> Open original source</a></Button> : null}<Button variant="outline" className="w-full" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button>
             <Button variant="outline" className="w-full" onClick={() => statusUpdate.mutate("Applied")}><ExternalLink className="h-4 w-4" /> Mark applied</Button>
             {(profiles.data?.length ?? 0) > 1 ? (
               <label className="block text-xs text-muted-foreground">
@@ -300,7 +324,7 @@ export function OpportunityDetailView() {
             <Button className="w-full" variant="destructive" disabled={remove.isPending} onClick={confirmDelete}><Trash2 className="h-4 w-4" /> {remove.isPending ? "Deleting..." : "Delete job"}</Button>
           </CardContent>
         </Card>
-        <Card><CardHeader><CardTitle>Recordings</CardTitle></CardHeader><CardContent className="space-y-3">{(recordings.data ?? []).length ? (recordings.data ?? []).map((recording) => <audio key={String(recording.id)} controls className="w-full" src={String(recording.playback_url || recording.data_url)} />) : <div className="text-sm text-muted-foreground">No recordings saved yet.</div>}</CardContent></Card>
+        <Card><CardHeader><CardTitle>Recordings</CardTitle></CardHeader><CardContent className="space-y-3">{(recordings.data ?? []).length ? (recordings.data ?? []).map((recording) => <audio key={String(recording.id)} controls className="w-full" src={safeAudioUrl(recording.playback_url || recording.data_url)} />) : <div className="text-sm text-muted-foreground">No recordings saved yet.</div>}</CardContent></Card>
         <Card><CardHeader><CardTitle>History</CardTitle></CardHeader><CardContent className="text-sm text-muted-foreground">Created {formatDate(item.created_at)} · Updated {formatDate(item.updated_at)}</CardContent></Card>
       </aside>
     </div>

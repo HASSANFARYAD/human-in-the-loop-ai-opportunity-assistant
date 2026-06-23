@@ -924,16 +924,41 @@ async def health_check_providers(user: dict = Depends(current_user)):
 
 
 @router.get("/health/ai")
-async def health_check_ai(user: dict = Depends(current_user)):
+async def health_check_ai(probe: bool = False, user: dict = Depends(current_user)):
     route = ai_orchestrator.resolve_route(user["id"])
-    return {
+    configured = bool((route.settings.get("api_key") or "").strip())
+    result: dict[str, Any] = {
         "status": "ok",
         "provider": route.provider,
         "model": route.model,
         "source": route.source,
-        "configured": bool((route.settings.get("api_key") or "").strip()),
+        "configured": configured,
         "timestamp": datetime.utcnow().isoformat(),
     }
+    if probe and configured and route.provider in ("openai", "grok", "claude", "gemini", "azure_openai", "langchain_openai"):
+        try:
+            import requests
+            headers = {"Authorization": f"Bearer {route.settings.get('api_key', '')}"}
+            base = (route.settings.get("config") or {}).get("base_url", "")
+            if route.provider == "gemini":
+                probe_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={route.settings.get('api_key', '')}"
+            elif base:
+                probe_url = f"{base.rstrip('/')}/models"
+            else:
+                probe_url = "https://api.openai.com/v1/models"
+            resp = requests.get(probe_url, headers=headers, timeout=10)
+            result["probe_status"] = "reachable" if resp.ok else "unreachable"
+            result["probe_http_status"] = resp.status_code
+        except Exception as exc:
+            result["probe_status"] = "error"
+            result["probe_error"] = str(exc)[:200]
+    elif probe and not configured:
+        result["probe_status"] = "skipped"
+        result["probe_reason"] = "No API key configured"
+    elif probe:
+        result["probe_status"] = "skipped"
+        result["probe_reason"] = f"Provider '{route.provider}' does not support automatic probing"
+    return result
 
 
 @router.get("/usage")
