@@ -5,13 +5,14 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, FileText, Mic, Printer, Sparkles, Square, Trash2 } from "lucide-react";
+import { ExternalLink, FileText, Mic, Printer, Sparkles, Square, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { DataFields } from "@/components/ui/data-display";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { opportunityService } from "@/services/opportunity.service";
 import { formatDate, scoreTone } from "@/lib/utils";
 import type { Opportunity, TailoredResume } from "@/types/api";
@@ -35,9 +36,28 @@ function asList(value: string[] | undefined) {
   return Array.isArray(value) ? value.filter(Boolean) : [];
 }
 
+function asText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(asText).filter(Boolean).join("\n");
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, val]) => {
+        const text = asText(val);
+        if (!text.trim()) return "";
+        const label = key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+        return text.includes("\n") ? `${label}:\n${text}` : `${label}: ${text}`;
+      })
+      .filter(Boolean)
+      .join("\n\n");
+  }
+  return String(value);
+}
+
 function TailoredResumeCard({ resume }: { resume: TailoredResume | null }) {
+  const resumeDraft = asText(resume?.resume_draft);
   const copyText = [
-    resume?.resume_draft,
+    resumeDraft,
     resume?.tailored_summary ? `\nTailored Summary\n${resume.tailored_summary}` : "",
     asList(resume?.tailored_experience_bullets).length ? `\nTailored Experience Bullets\n${asList(resume?.tailored_experience_bullets).map((item) => `- ${item}`).join("\n")}` : "",
   ].filter(Boolean).join("\n").trim();
@@ -59,13 +79,28 @@ function TailoredResumeCard({ resume }: { resume: TailoredResume | null }) {
       <CardContent className="space-y-4 text-sm">
         {!resume ? <div className="rounded-md border border-dashed p-4 text-muted-foreground">No tailored resume yet. Use Tailor resume to generate a job-specific draft from your saved profile.</div> : null}
         {resume?.using_fallback ? <div className="rounded-md border p-3 text-muted-foreground">AI provider settings were unavailable or failed, so a local tailored draft was generated.</div> : null}
-        {resume?.tailored_summary ? <Section title="Tailored summary"><p className="whitespace-pre-wrap leading-6">{resume.tailored_summary}</p></Section> : null}
-        {asList(resume?.tailored_experience_bullets).length ? <Section title="Tailored experience bullets"><ul className="list-disc space-y-1 pl-5">{asList(resume?.tailored_experience_bullets).map((item) => <li key={item}>{item}</li>)}</ul></Section> : null}
-        {asList(resume?.skills_to_emphasize).length ? <Section title="Skills to emphasize"><p>{asList(resume?.skills_to_emphasize).join(", ")}</p></Section> : null}
-        {asList(resume?.keywords_to_include).length ? <Section title="Keywords to include"><p>{asList(resume?.keywords_to_include).join(", ")}</p></Section> : null}
-        {resume?.optional_cover_note ? <Section title="Optional cover note"><p className="whitespace-pre-wrap leading-6">{resume.optional_cover_note}</p></Section> : null}
-        {asList(resume?.application_guidance).length ? <Section title="Application guidance"><ul className="list-disc space-y-1 pl-5">{asList(resume?.application_guidance).map((item) => <li key={item}>{item}</li>)}</ul></Section> : null}
-        {resume?.resume_draft ? <Section title="Copy-ready resume draft"><pre className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-sans leading-6">{resume.resume_draft}</pre></Section> : null}
+        {resume ? (
+          <Tabs defaultValue="overview" className="space-y-4">
+            <TabsList>
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="cover">Cover Note</TabsTrigger>
+              <TabsTrigger value="draft">Resume Draft</TabsTrigger>
+            </TabsList>
+            <TabsContent value="overview" className="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
+              {resume?.tailored_summary ? <Section title="Tailored summary"><p className="whitespace-pre-wrap leading-6">{resume.tailored_summary}</p></Section> : null}
+              {asList(resume?.tailored_experience_bullets).length ? <Section title="Tailored experience bullets"><ul className="list-disc space-y-1 pl-5">{asList(resume?.tailored_experience_bullets).map((item) => <li key={item}>{item}</li>)}</ul></Section> : null}
+              {asList(resume?.skills_to_emphasize).length ? <Section title="Skills to emphasize"><p>{asList(resume?.skills_to_emphasize).join(", ")}</p></Section> : null}
+              {asList(resume?.keywords_to_include).length ? <Section title="Keywords to include"><p>{asList(resume?.keywords_to_include).join(", ")}</p></Section> : null}
+              {asList(resume?.application_guidance).length ? <Section title="Application guidance"><ul className="list-disc space-y-1 pl-5">{asList(resume?.application_guidance).map((item) => <li key={item}>{item}</li>)}</ul></Section> : null}
+            </TabsContent>
+            <TabsContent value="cover" className="max-h-[60vh] overflow-y-auto pr-1">
+              {resume?.optional_cover_note ? <Section title="Optional cover note"><p className="whitespace-pre-wrap leading-6">{resume.optional_cover_note}</p></Section> : <div className="rounded-md border border-dashed p-4 text-muted-foreground">No cover note was generated for this draft.</div>}
+            </TabsContent>
+            <TabsContent value="draft" className="max-h-[60vh] overflow-y-auto pr-1">
+              {resumeDraft ? <Section title="Copy-ready resume draft"><pre className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-sans leading-6">{resumeDraft}</pre></Section> : <div className="rounded-md border border-dashed p-4 text-muted-foreground">No resume draft available yet.</div>}
+            </TabsContent>
+          </Tabs>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -85,10 +120,16 @@ export function OpportunityDetailView() {
   const prepSessions = useQuery({ queryKey: ["interview-prep", id], queryFn: () => opportunityService.interviewPrepSessions(id), enabled: Number.isFinite(id) });
   const resumeReviews = useQuery({ queryKey: ["resume-reviews", id], queryFn: () => opportunityService.resumeReviews(id), enabled: Number.isFinite(id) });
   const recordings = useQuery({ queryKey: ["recordings", id], queryFn: () => opportunityService.recordings(id), enabled: Number.isFinite(id) });
-  const score = useMutation({ mutationFn: () => opportunityService.score(id), onSuccess: () => { toast.success("AI evaluation refreshed"); qc.invalidateQueries({ queryKey: ["opportunity", id] }); } });
-  const generate = useMutation({ mutationFn: () => opportunityService.generateMaterials(id), onSuccess: () => { toast.success("Materials generated"); qc.invalidateQueries({ queryKey: ["materials", id] }); } });
-  const tailorResume = useMutation({ mutationFn: () => opportunityService.tailorResume(id), onSuccess: () => { toast.success("Tailored resume generated"); qc.invalidateQueries({ queryKey: ["resume-reviews", id] }); }, onError: (error) => toast.error(tailorResumeErrorMessage(error)) });
-  const prep = useMutation({ mutationFn: () => opportunityService.interviewPrep(id), onSuccess: () => { toast.success("Interview preparation generated"); qc.invalidateQueries({ queryKey: ["interview-prep", id] }); }, onError: (error) => toast.error(error.message) });
+  const profiles = useQuery({ queryKey: ["profiles"], queryFn: opportunityService.profiles });
+  const resumeTemplates = useQuery({ queryKey: ["resume-templates"], queryFn: opportunityService.resumeTemplates });
+  const [selectedProfileId, setSelectedProfileId] = useState<number | undefined>(undefined);
+  const [resumeTemplate, setResumeTemplate] = useState<string>("international");
+  const score = useMutation({ mutationFn: () => opportunityService.score(id, selectedProfileId), onSuccess: () => { toast.success("AI evaluation refreshed"); qc.invalidateQueries({ queryKey: ["opportunity", id] }); qc.invalidateQueries({ queryKey: ["ai-usage"] }); } });
+  const scoreFeedback = useMutation({ mutationFn: (signal: "relevant" | "irrelevant") => opportunityService.scoreFeedback(id, signal), onSuccess: () => toast.success("Thanks — I'll use this to calibrate future scoring."), onError: (error) => toast.error(error.message) });
+  const generate = useMutation({ mutationFn: () => opportunityService.generateMaterials(id), onSuccess: () => { toast.success("Materials generated"); qc.invalidateQueries({ queryKey: ["materials", id] }); qc.invalidateQueries({ queryKey: ["ai-usage"] }); }, onError: (error) => toast.error(error.message) });
+  const tailorResume = useMutation({ mutationFn: () => opportunityService.tailorResume(id, selectedProfileId), onSuccess: () => { toast.success("Tailored resume generated"); qc.invalidateQueries({ queryKey: ["resume-reviews", id] }); qc.invalidateQueries({ queryKey: ["ai-usage"] }); }, onError: (error) => toast.error(tailorResumeErrorMessage(error)) });
+  const prep = useMutation({ mutationFn: () => opportunityService.interviewPrep(id), onSuccess: () => { toast.success("Interview preparation generated"); qc.invalidateQueries({ queryKey: ["interview-prep", id] }); qc.invalidateQueries({ queryKey: ["ai-usage"] }); }, onError: (error) => toast.error(error.message) });
+  const buildResume = useMutation({ mutationFn: () => opportunityService.buildResumeDocument(id, resumeTemplate, selectedProfileId), onSuccess: () => { toast.success("Resume document downloaded"); qc.invalidateQueries({ queryKey: ["ai-usage"] }); }, onError: (error) => toast.error(error.message) });
   const saveRecording = useMutation({ mutationFn: (payload: { title: string; blob: Blob; duration_ms: number }) => opportunityService.uploadRecording({ ...payload, job_id: id }), onSuccess: () => { toast.success("Recording saved"); qc.invalidateQueries({ queryKey: ["recordings", id] }); }, onError: (error) => toast.error(error.message) });
   const remove = useMutation({
     mutationFn: () => opportunityService.remove(id),
@@ -174,20 +215,43 @@ export function OpportunityDetailView() {
           </div>
           <p className="text-muted-foreground">{item.company || "Unknown company"} - {item.location || "Location unspecified"}</p>{!importable ? <p className="mt-2 text-sm text-destructive">{item.blocked_reason || item.classification_reason || "This item is not a valid job."}</p> : null}
         </div>
-        <Card><CardHeader><CardTitle>{importable ? "Description" : "Source Snippet"}</CardTitle></CardHeader><CardContent><p className="whitespace-pre-wrap text-sm leading-6">{importable ? (item.description || "No description available.") : (item.raw_source_snippet || item.description || "No source snippet available.")}</p></CardContent></Card>
-        <Card><CardHeader><CardTitle>AI Evaluation</CardTitle></CardHeader><CardContent><DataFields data={item.evaluation ?? {}} /></CardContent></Card>
-        <TailoredResumeCard resume={tailoredResume} />
-        <Card className="print-break-inside-avoid"><CardHeader><CardTitle>Interview Preparation</CardTitle></CardHeader><CardContent><DataFields data={(prepSessions.data?.[0] ?? {}) as Record<string, unknown>} /></CardContent></Card>
-        <Card>
-          <CardHeader><CardTitle>Notes</CardTitle></CardHeader>
-          <CardContent className="space-y-3">
-            <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Add private tracking notes..." />
-            <div className="flex flex-wrap items-center gap-3">
-              <Button disabled={saveNotes.isPending || notes === (item.notes ?? "")} onClick={() => saveNotes.mutate()}>{saveNotes.isPending ? "Saving..." : "Save notes"}</Button>
-              {notes !== (item.notes ?? "") ? <span className="text-sm text-muted-foreground">Unsaved changes</span> : <span className="text-sm text-muted-foreground">Notes are saved</span>}
-            </div>
-          </CardContent>
-        </Card>
+        <Tabs defaultValue="description" className="space-y-4">
+          <TabsList>
+            <TabsTrigger value="description">{importable ? "Description" : "Source Snippet"}</TabsTrigger>
+            <TabsTrigger value="evaluation">AI Evaluation</TabsTrigger>
+            <TabsTrigger value="resume">Tailored Resume</TabsTrigger>
+            <TabsTrigger value="materials">Application Materials</TabsTrigger>
+            <TabsTrigger value="prep">Interview Prep</TabsTrigger>
+            <TabsTrigger value="notes">Notes</TabsTrigger>
+          </TabsList>
+          <TabsContent value="description">
+            <Card><CardHeader><CardTitle>{importable ? "Description" : "Source Snippet"}</CardTitle></CardHeader><CardContent><p className="whitespace-pre-wrap text-sm leading-6">{importable ? (item.description || "No description available.") : (item.raw_source_snippet || item.description || "No source snippet available.")}</p></CardContent></Card>
+          </TabsContent>
+          <TabsContent value="evaluation">
+            <Card><CardHeader><CardTitle>AI Evaluation</CardTitle></CardHeader><CardContent><DataFields data={item.evaluation ?? {}} /></CardContent></Card>
+          </TabsContent>
+          <TabsContent value="resume">
+            <TailoredResumeCard resume={tailoredResume} />
+          </TabsContent>
+          <TabsContent value="materials">
+            <Card><CardHeader><CardTitle>Application Materials</CardTitle></CardHeader><CardContent><DataFields data={materials.data ?? {}} /></CardContent></Card>
+          </TabsContent>
+          <TabsContent value="prep">
+            <Card className="print-break-inside-avoid"><CardHeader><CardTitle>Interview Preparation</CardTitle></CardHeader><CardContent><DataFields data={(prepSessions.data?.[0] ?? {}) as Record<string, unknown>} /></CardContent></Card>
+          </TabsContent>
+          <TabsContent value="notes">
+            <Card>
+              <CardHeader><CardTitle>Notes</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Add private tracking notes..." />
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button disabled={saveNotes.isPending || notes === (item.notes ?? "")} onClick={() => saveNotes.mutate()}>{saveNotes.isPending ? "Saving..." : "Save notes"}</Button>
+                  {notes !== (item.notes ?? "") ? <span className="text-sm text-muted-foreground">Unsaved changes</span> : <span className="text-sm text-muted-foreground">Notes are saved</span>}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
       </section>
       <aside className="space-y-5">
         <Card>
@@ -196,18 +260,46 @@ export function OpportunityDetailView() {
             <div className="flex justify-between"><span className="text-muted-foreground">Source</span><span>{item.source}</span></div><div className="flex justify-between"><span className="text-muted-foreground">Classification</span><span>{item.classification || item.opportunity_type || "unknown"}</span></div><div className="flex justify-between"><span className="text-muted-foreground">Confidence</span><span>{Math.round(Number(item.opportunity_confidence ?? item.classification_confidence ?? 0) * 100)}%</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Deadline</span><span>{formatDate(item.deadline)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Match score</span><span className={`font-semibold ${scoreTone(scoreValue)}`}>{scoreValue == null ? "Skipped" : Number(scoreValue)}</span></div>
+            <div className="flex items-center justify-between"><span className="text-muted-foreground">Is this relevant?</span><span className="flex gap-2"><Button size="icon" variant="outline" className="h-8 w-8" disabled={scoreFeedback.isPending} onClick={() => scoreFeedback.mutate("relevant")} aria-label="Mark relevant"><ThumbsUp className="h-4 w-4" /></Button><Button size="icon" variant="outline" className="h-8 w-8" disabled={scoreFeedback.isPending} onClick={() => scoreFeedback.mutate("irrelevant")} aria-label="Mark irrelevant"><ThumbsDown className="h-4 w-4" /></Button></span></div>
             {item.url && importable ? <Button asChild variant="outline" className="w-full"><a href={item.url} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4" /> Apply</a></Button> : <Button variant="outline" className="w-full" disabled>Apply unavailable</Button>}
             {item.source_email_open_url || item.source_url ? <Button asChild variant="outline" className="w-full"><a href={item.source_email_open_url || item.source_url || ""} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4" /> Open original source</a></Button> : null}<Button variant="outline" className="w-full" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button>
             <Button variant="outline" className="w-full" onClick={() => statusUpdate.mutate("Applied")}><ExternalLink className="h-4 w-4" /> Mark applied</Button>
+            {(profiles.data?.length ?? 0) > 1 ? (
+              <label className="block text-xs text-muted-foreground">
+                Profile for scoring & tailoring
+                <select
+                  className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm"
+                  value={selectedProfileId ?? ""}
+                  onChange={(e) => setSelectedProfileId(e.target.value ? Number(e.target.value) : undefined)}
+                >
+                  <option value="">Default profile</option>
+                  {(profiles.data ?? []).map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}{p.is_default ? " (default)" : ""}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <Button className="w-full" disabled={!importable} onClick={() => score.mutate()}><Sparkles className="h-4 w-4" /> Refresh AI score</Button>
             <Button className="w-full" variant="secondary" disabled={!importable} onClick={() => generate.mutate()}><FileText className="h-4 w-4" /> Generate materials</Button>
             <Button className="w-full" variant="secondary" disabled={!importable || tailorResume.isPending} onClick={() => tailorResume.mutate()}><FileText className="h-4 w-4" /> {tailorResume.isPending ? "Tailoring..." : "Tailor resume"}</Button>
+            <label className="block text-xs text-muted-foreground">
+              Resume document format
+              <select
+                className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm"
+                value={resumeTemplate}
+                onChange={(e) => setResumeTemplate(e.target.value)}
+              >
+                {(resumeTemplates.data ?? [{ id: "international", label: "International (Generic)" }]).map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </select>
+            </label>
+            <Button className="w-full" variant="secondary" disabled={!importable || buildResume.isPending} onClick={() => buildResume.mutate()}><FileText className="h-4 w-4" /> {buildResume.isPending ? "Building..." : "Build resume (DOCX)"}</Button>
             <Button className="w-full" variant="secondary" disabled={prep.isPending} onClick={() => prep.mutate()}><Sparkles className="h-4 w-4" /> {prep.isPending ? "Generating..." : "Generate interview prep"}</Button>
             <Button className="w-full" variant={recording ? "destructive" : "outline"} onClick={recording ? stopRecording : startRecording}>{recording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />} {recording ? "Stop recording" : "Start practice recording"}</Button>
             <Button className="w-full" variant="destructive" disabled={remove.isPending} onClick={confirmDelete}><Trash2 className="h-4 w-4" /> {remove.isPending ? "Deleting..." : "Delete job"}</Button>
           </CardContent>
         </Card>
-        <Card><CardHeader><CardTitle>Application Materials</CardTitle></CardHeader><CardContent><DataFields data={materials.data ?? {}} /></CardContent></Card>
         <Card><CardHeader><CardTitle>Recordings</CardTitle></CardHeader><CardContent className="space-y-3">{(recordings.data ?? []).length ? (recordings.data ?? []).map((recording) => <audio key={String(recording.id)} controls className="w-full" src={String(recording.playback_url || recording.data_url)} />) : <div className="text-sm text-muted-foreground">No recordings saved yet.</div>}</CardContent></Card>
         <Card><CardHeader><CardTitle>History</CardTitle></CardHeader><CardContent className="text-sm text-muted-foreground">Created {formatDate(item.created_at)} · Updated {formatDate(item.updated_at)}</CardContent></Card>
       </aside>

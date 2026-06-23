@@ -35,12 +35,34 @@ export const opportunityService = {
   detail: (id: number, workspace_id?: number) => getJson<Opportunity>(`/jobs/${id}`, workspace_id ? { workspace_id } : undefined),
   create: async (payload: OpportunityCreate) => (await apiClient.post("/jobs", payload)).data,
   remove: async (id: number, workspace_id?: number) => (await apiClient.delete(`/jobs/${id}`, { params: { workspace_id } })).data,
-  score: async (id: number) => (await apiClient.post(`/jobs/${id}/score`)).data,
-  scoreBatch: async (payload: { job_ids: number[]; score_all_unscored?: boolean }) =>
+  score: async (id: number, profileId?: number) =>
+    (await apiClient.post(`/jobs/${id}/score`, null, { params: profileId ? { profile_id: profileId } : {} })).data,
+  scoreBatch: async (payload: { job_ids: number[]; score_all_unscored?: boolean; profile_id?: number }) =>
     (await apiClient.post<BatchScoreResult>("/jobs/score-batch", payload)).data,
+  scoreFeedback: async (id: number, signal: "relevant" | "irrelevant") =>
+    (await apiClient.post(`/jobs/${id}/score-feedback`, { signal })).data,
   materials: (id: number) => getJson<Record<string, unknown>>(`/jobs/${id}/materials`),
   generateMaterials: async (id: number) => (await apiClient.post(`/jobs/${id}/generate-materials`)).data,
-  tailorResume: async (id: number) => (await apiClient.post<TailoredResume>(`/jobs/${id}/tailor-resume`)).data,
+  tailorResume: async (id: number, profileId?: number) =>
+    (await apiClient.post<TailoredResume>(`/jobs/${id}/tailor-resume`, null, { params: profileId ? { profile_id: profileId } : {} })).data,
+  resumeTemplates: () => getJson<{ id: string; label: string; description: string }[]>("/resume-templates"),
+  buildResumeDocument: async (id: number, template: string, profileId?: number) => {
+    const response = await apiClient.post(`/jobs/${id}/resume-document`, null, {
+      params: { template, ...(profileId ? { profile_id: profileId } : {}) },
+      responseType: "blob",
+    });
+    const disposition = String(response.headers["content-disposition"] ?? "");
+    const match = disposition.match(/filename="?([^";]+)"?/);
+    const filename = match?.[1] ?? `resume-${template}.docx`;
+    const url = window.URL.createObjectURL(response.data as Blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  },
   resumeReview: async (id: number, payload: { resume_text?: string; target_role?: string } = {}) =>
     (await apiClient.post<Record<string, unknown>>(`/jobs/${id}/resume-review`, payload)).data,
   resumeReviews: (id: number) => getJson<TailoredResume[]>("/profile/resume-reviews", { job_id: id }),
@@ -55,10 +77,29 @@ export const opportunityService = {
     form.append("title", payload.title);
     form.append("duration_ms", String(payload.duration_ms ?? 0));
     form.append("file", payload.blob, "recording.webm");
-    return (await apiClient.post<Record<string, unknown>>("/recordings/upload", form)).data;
+    return (await apiClient.post<Record<string, unknown>>("/recordings/upload", form, { headers: { "Content-Type": "multipart/form-data" } })).data;
   },
   profile: () => getJson<Profile>("/profile"),
   updateProfile: async (payload: Profile) => (await apiClient.post("/profile", payload)).data,
+  profiles: () => getJson<Profile[]>("/profiles"),
+  createProfile: async (payload: Partial<Profile>, makeDefault = false) =>
+    (await apiClient.post<{ status: string; id: number }>("/profiles", payload, { params: { make_default: makeDefault } })).data,
+  updateProfileById: async (id: number, payload: Profile) => (await apiClient.put(`/profiles/${id}`, payload)).data,
+  setDefaultProfile: async (id: number) => (await apiClient.post(`/profiles/${id}/default`)).data,
+  deleteProfile: async (id: number) => (await apiClient.delete(`/profiles/${id}`)).data,
+  uploadResume: async (file: File, profileId?: number) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    form.append("apply_to_profile", "true");
+    if (profileId) form.append("profile_id", String(profileId));
+    return (
+      await apiClient.post<{ status: string; filename: string; applied_to_profile: boolean; characters: number; extracted: Record<string, string> }>(
+        "/profile/upload-resume",
+        form,
+        { headers: { "Content-Type": "multipart/form-data" } },
+      )
+    ).data;
+  },
   gmailStatus: () => getJson<{ connected: boolean; configured?: boolean; status: string; connected_email?: string }>("/gmail/status"),
   gmailAuthUrl: async () => (await apiClient.get<{ url: string }>("/gmail/auth-url")).data,
   gmailDisconnect: async () => (await apiClient.post("/gmail/disconnect")).data,

@@ -8,7 +8,16 @@ export function formatDisplayValue(value: unknown): ReactNode {
   if (value == null || value === "") return <span className="text-muted-foreground">None</span>;
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (typeof value === "number" || typeof value === "string") return String(value);
-  if (Array.isArray(value)) return value.length ? value.map((item) => String(item)).join(", ") : <span className="text-muted-foreground">None</span>;
+  if (Array.isArray(value)) {
+    if (!value.length) return <span className="text-muted-foreground">None</span>;
+    const allScalar = value.every((item) => item == null || typeof item !== "object");
+    if (allScalar) return value.map((item) => String(item)).join(", ");
+    return (
+      <ul className="grid gap-2">
+        {value.map((item, index) => <li key={index}>{formatDisplayValue(item)}</li>)}
+      </ul>
+    );
+  }
   if (typeof value === "object") return Object.entries(value as Record<string, unknown>).length ? <DataFields data={value as Record<string, unknown>} /> : <span className="text-muted-foreground">None</span>;
   return String(value);
 }

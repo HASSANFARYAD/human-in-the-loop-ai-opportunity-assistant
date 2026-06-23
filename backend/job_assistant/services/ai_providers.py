@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from typing import Any, Dict, Optional
 
 import requests
 
 from job_assistant.db import get_integration_settings
 
-DEFAULT_PROVIDER = "openai"
+DEFAULT_PROVIDER = "huggingface_local"
 SUPPORTED_PROVIDERS = {
     "openai": "OpenAI-compatible",
+    "huggingface_local": "Hugging Face Local (Transformers)",
+    "langchain_openai": "LangChain + OpenAI-compatible",
     "azure_openai": "Azure OpenAI / Foundry",
     "grok": "Grok / xAI",
     "claude": "Anthropic Claude",
     "gemini": "Google Gemini",
     "huggingface": "Hugging Face Inference",
 }
+
+DEFAULT_LOCAL_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 
 
 def _json_from_text(text: str, fallback: Dict[str, Any]) -> Dict[str, Any]:
@@ -34,6 +39,11 @@ def _messages(system: str, user: str) -> list[dict[str, str]]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def _is_local_ollama_base_url(base_url: str | None) -> bool:
+    normalized = (base_url or "").strip().rstrip("/")
+    return normalized.startswith("http://localhost:11434") or normalized.startswith("http://127.0.0.1:11434") or normalized.startswith("http://[::1]:11434")
+
+
 def _openai_compatible(api_key: str, model: str, system: str, user: str, base_url: str | None = None) -> str:
     from openai import OpenAI
 
@@ -42,13 +52,91 @@ def _openai_compatible(api_key: str, model: str, system: str, user: str, base_ur
     return response.choices[0].message.content or ""
 
 
+def _langchain_openai(api_key: str, model: str, system: str, user: str, config: dict[str, Any]) -> str:
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_openai import ChatOpenAI
+
+    base_url = (config.get("base_url") or "").strip() or None
+    resolved_api_key = api_key or ("ollama" if _is_local_ollama_base_url(base_url) else "")
+    if not resolved_api_key:
+        raise ValueError("Missing API key for LangChain OpenAI-compatible provider")
+
+    client = ChatOpenAI(api_key=resolved_api_key, base_url=base_url, model=model, temperature=0.2)
+    response = client.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+    content = getattr(response, "content", "")
+    if isinstance(content, list):
+        pieces: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                pieces.append(str(part.get("text") or part.get("content") or ""))
+            else:
+                pieces.append(str(part))
+        return "\n".join(piece for piece in pieces if piece)
+    return str(content or "")
+
+
+@lru_cache(maxsize=4)
+def _load_local_hf_model(model_id: str):
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except ImportError as exc:
+        raise RuntimeError("Install transformers and torch to use Hugging Face local mode.") from exc
+
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)
+    model_kwargs: dict[str, Any] = {"trust_remote_code": False}
+    if torch.cuda.is_available():
+        model_kwargs["torch_dtype"] = torch.float16
+    else:
+        model_kwargs["torch_dtype"] = torch.float32
+    model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+    return tokenizer, model
+
+
+def _huggingface_local(model: str, system: str, user: str) -> str:
+    import torch
+
+    model_id = model or DEFAULT_LOCAL_MODEL
+    tokenizer, loaded_model = _load_local_hf_model(model_id)
+    messages = _messages(system, user)
+    try:
+        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    except Exception:
+        prompt = f"System: {system}\n\nUser: {user}\n\nAssistant:"
+    inputs = tokenizer(prompt, return_tensors="pt")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    inputs = {key: value.to(device) for key, value in inputs.items()}
+    loaded_model = loaded_model.to(device)
+    with torch.no_grad():
+        output_ids = loaded_model.generate(
+            **inputs,
+            max_new_tokens=900,
+            do_sample=False,
+            temperature=0.2,
+            pad_token_id=tokenizer.eos_token_id or tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+    generated = output_ids[0][inputs["input_ids"].shape[-1] :]
+    return tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+
 def _azure_openai(api_key: str, model: str, system: str, user: str, config: dict[str, Any]) -> str:
     from openai import AzureOpenAI
 
     endpoint = config.get("endpoint") or ""
     api_version = config.get("api_version") or "2024-10-21"
     deployment = config.get("deployment") or model
+    # Reasoning/codex deployments (e.g. gpt-5.x, o-series, *-codex) only expose the
+    # Responses API; classic chat models use Chat Completions. "auto" picks based on
+    # the deployment name, or set api_style explicitly to "responses"/"chat".
+    api_style = (config.get("api_style") or "auto").strip().lower()
+    if api_style == "auto":
+        name = (deployment or model or "").lower()
+        api_style = "responses" if any(tag in name for tag in ("codex", "gpt-5", "o1", "o3", "o4")) else "chat"
     client = AzureOpenAI(api_key=api_key, azure_endpoint=endpoint, api_version=api_version)
+    if api_style == "responses":
+        response = client.responses.create(model=deployment, instructions=system, input=user)
+        return response.output_text or ""
     response = client.chat.completions.create(model=deployment, messages=_messages(system, user), temperature=0.2)
     return response.choices[0].message.content or ""
 
@@ -119,7 +207,7 @@ def get_user_ai_settings(user_id: Optional[int]) -> dict[str, Any]:
     return {
         "service": "ai_provider",
         "api_key": "",
-        "config": {"provider": DEFAULT_PROVIDER, "model": "gpt-4o-mini"},
+        "config": {"provider": "huggingface_local", "model": DEFAULT_LOCAL_MODEL},
     }
 
 
@@ -136,11 +224,20 @@ def ask_json(
     provider = (config.get("provider") or DEFAULT_PROVIDER).strip().lower()
     api_key = (settings.get("api_key") or "").strip()
     model = (config.get("model") or "gpt-4o-mini").strip()
-    if not api_key:
+    base_url = config.get("base_url") or ""
+    if provider in {"huggingface_local"}:
+        api_key = ""
+    elif provider != "langchain_openai" and not api_key:
+        return dict(fallback)
+    if provider == "langchain_openai" and not api_key and not _is_local_ollama_base_url(base_url):
         return dict(fallback)
 
     try:
-        if provider == "azure_openai":
+        if provider == "huggingface_local":
+            text = _huggingface_local(model or DEFAULT_LOCAL_MODEL, system, user)
+        elif provider == "langchain_openai":
+            text = _langchain_openai(api_key, model or "llama3.1", system, user, config)
+        elif provider == "azure_openai":
             text = _azure_openai(api_key, model, system, user, config)
         elif provider == "grok":
             text = _openai_compatible(api_key, model or "grok-3-mini", system, user, config.get("base_url") or "https://api.x.ai/v1")

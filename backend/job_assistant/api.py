@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Cookie, Depends, File, Form, HTTPException, Request, UploadFile, Response, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, validator
 from starlette.responses import FileResponse, RedirectResponse
 
@@ -31,6 +32,8 @@ from job_assistant.db import (
     create_feedback,
     create_reminder,
     cleanup_non_opportunity_records,
+    count_ai_generations_today,
+    record_score_feedback,
     db_health,
     delete_job,
     delete_user_data,
@@ -91,10 +94,16 @@ from job_assistant.db import (
     user_has_permission,
     update_status,
     upsert_profile,
+    create_profile,
+    list_profiles,
+    update_profile_fields,
+    set_default_profile,
+    delete_profile,
 )
 from job_assistant.runtime import runtime_status, validate_startup_configuration
 from job_assistant.provider_registry import provider_registry
 from job_assistant.ai_orchestrator import ai_orchestrator
+from job_assistant.agent_chat import classify_intent, run_job_search
 from job_assistant.automation_engine import automation_engine
 from job_assistant.observability import acknowledge_alert, metrics_summary, prometheus_text
 from job_assistant.publishing_engine import approve_post, publish_post, validate_target
@@ -102,6 +111,7 @@ from job_assistant.services.apify_integration import apify_items_to_opportunitie
 from job_assistant.services.generation import generate_materials
 from job_assistant.services.gmail_ingest import build_gmail_authorization_url, disconnect_gmail, exchange_gmail_code, get_gmail_connection
 from job_assistant.services.job_import import import_opportunities
+from job_assistant.services.job_context import build_job_context, choose_primary_focus_area, extract_profile_skills
 from job_assistant.services.opportunity_classifier import (
     VALID_OPPORTUNITY_CATEGORIES,
     annotate_opportunity,
@@ -110,7 +120,8 @@ from job_assistant.services.opportunity_classifier import (
     scoring_gate,
 )
 from job_assistant.services.job_source_scrapers import ScraperError, UnsupportedSourceUrl, indeed_url_with_work_location_intent, get_scraper_for_url, is_job_listing_url
-from job_assistant.services.parsing import extract_job_from_text, jobs_from_csv
+from job_assistant.services.parsing import extract_job_from_text, extract_profile_from_resume, extract_text_from_upload, jobs_from_csv
+from job_assistant.services.resume_builder import RESUME_TEMPLATES, RESUME_STRUCTURE_KEYS, is_valid_template, render_resume_docx
 from job_assistant.services.public_discovery import discover_public_opportunities
 from job_assistant.services.rapidapi_linkedin import search_linkedin_jobs, rapidapi_items_to_opportunities
 from job_assistant.services.scoring import score_job
@@ -132,6 +143,7 @@ def _frontend_redirect(path: str, params: dict[str, str]) -> str:
 
 
 class ProfileCreate(BaseModel):
+    name: str = ""
     cv_text: str = ""
     target_roles: str = ""
     industries: str = ""
@@ -408,6 +420,17 @@ class AIAskIn(BaseModel):
     prompt_version: str = ""
 
 
+class AgentChatIn(BaseModel):
+    message: str
+    history: list[Dict[str, str]] = Field(default_factory=list)
+    workspace_id: Optional[int] = None
+
+
+class ScoreFeedbackIn(BaseModel):
+    signal: str  # "relevant" | "irrelevant"
+    workspace_id: Optional[int] = None
+
+
 class PromptVersionIn(BaseModel):
     name: str
     version: str
@@ -514,6 +537,7 @@ class DeletionApproveIn(BaseModel):
 class BatchScoreIn(BaseModel):
     job_ids: list[int] = Field(default_factory=list)
     score_all_unscored: bool = False
+    profile_id: Optional[int] = None
 
 
 class ResumeReviewIn(BaseModel):
@@ -537,16 +561,12 @@ class GmailMessagesIn(BaseModel):
 def _recording_storage_config(user_id: int) -> dict[str, Any]:
     settings = get_integration_settings(user_id, "recording_storage")
     config = settings.get("config") or {}
-    if not settings:
-        raise HTTPException(status_code=400, detail="Recording storage configuration is missing in database settings.")
-    if config.get("is_active") is False:
+    if settings and config.get("is_active") is False:
         raise HTTPException(status_code=400, detail="Recording storage configuration is inactive.")
     storage_type = str(config.get("storage_type") or "local").strip().lower()
     if storage_type != "local":
         raise HTTPException(status_code=400, detail=f"Recording storage type '{storage_type}' is not supported by this deployment.")
-    storage_path = str(config.get("storage_path") or "").strip()
-    if not storage_path:
-        raise HTTPException(status_code=400, detail="Recording storage path is missing in database settings.")
+    storage_path = str(config.get("storage_path") or "data/recordings").strip()
     allowed = config.get("allowed_mime_types") or ["audio/webm", "audio/wav", "audio/mpeg", "audio/mp4", "audio/ogg"]
     if isinstance(allowed, str):
         allowed = [item.strip() for item in allowed.replace(",", " ").split() if item.strip()]
@@ -1266,6 +1286,120 @@ async def ask_ai_json(payload: AIAskIn, user: dict = Depends(current_user)):
     return {"status": "success", "result": data}
 
 
+@router.get("/ai/usage")
+async def ai_usage(user: dict = Depends(current_user)):
+    limit = settings.ai_daily_generation_limit
+    used = count_ai_generations_today(user["id"])
+    return {
+        "used": used,
+        "limit": limit,
+        "remaining": max(0, limit - used) if limit > 0 else None,
+        "unlimited": limit <= 0,
+    }
+
+
+@router.post("/jobs/{job_id}/score-feedback")
+async def post_score_feedback(job_id: int, payload: ScoreFeedbackIn, user: dict = Depends(current_user)):
+    job = get_job(job_id, user["id"], workspace_id=payload.workspace_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    try:
+        record_score_feedback(user["id"], job_id, payload.signal, workspace_id=payload.workspace_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "success", "signal": payload.signal.strip().lower()}
+
+
+def _resolve_job_for_reference(user_id: int, reference: str, workspace_id: Optional[int] = None) -> Optional[dict[str, Any]]:
+    """Find the job a chat message refers to: by name match, else most recent."""
+    jobs = list_jobs(user_id, workspace_id=workspace_id)
+    if not jobs:
+        return None
+    ref = (reference or "").strip().lower()
+    if ref:
+        for job in jobs:
+            haystack = f"{job.get('title', '')} {job.get('company', '')}".lower()
+            if ref in haystack:
+                return job
+    return jobs[0]  # list_jobs returns newest first
+
+
+def _run_agent_intent(intent: str, routing: dict[str, Any], profile: dict[str, Any], user_id: int, workspace_id: Optional[int]) -> dict[str, Any]:
+    """Execute a single agent intent and return its result section."""
+    if intent == "job_search":
+        listings = run_job_search(profile, routing["search_query"], user_id=user_id)
+        return {"agent": "job_search", "type": "listings", "data": listings,
+                "message": f"Found {len(listings)} matching opportunity/opportunities." if listings
+                else "No matching listings found right now. Try refining your roles or skills."}
+
+    if intent in ("tailor_resume", "interview_prep"):
+        job = _resolve_job_for_reference(user_id, routing["job_reference"], workspace_id)
+        if not job:
+            return {"agent": intent, "type": "error",
+                    "message": "I couldn't find a saved opportunity to work from. Import or open a job first."}
+
+        if intent == "tailor_resume":
+            if not _profile_has_resume_context(profile):
+                return {"agent": intent, "type": "error",
+                        "message": "Add your resume or profile details before I can tailor a resume."}
+            tailored = _llm_tailored_resume(profile, job, user_id)
+            saved = save_resume_review(user_id, tailored, int(job["id"]))
+            return {"agent": intent, "type": "tailored_resume", "job": {"id": job["id"], "title": job.get("title"), "company": job.get("company")}, "data": saved}
+
+        evaluation = get_evaluation(int(job["id"]), user_id) or {}
+        if not evaluation:
+            try:
+                evaluation = score_job(profile, job, user_id=user_id)
+            except Exception:
+                evaluation = {}
+        prep = _llm_interview_prep(profile, job, evaluation, user_id)
+        saved = save_interview_prep(user_id, int(job["id"]), prep)
+        return {"agent": intent, "type": "interview_prep", "job": {"id": job["id"], "title": job.get("title"), "company": job.get("company")}, "data": saved}
+
+    # chat / fallback
+    return {"agent": "chat", "type": "message",
+            "message": routing["reply"] or "I can help you find jobs, tailor your resume, or prep for interviews. What would you like to do?"}
+
+
+@router.post("/agent/chat")
+async def agent_chat(payload: AgentChatIn, user: dict = Depends(current_user)):
+    user_id = user["id"]
+    routing = classify_intent(payload.message, history=payload.history, user_id=user_id)
+    profile = get_profile(user_id) or {}
+    sections = [_run_agent_intent(intent, routing, profile, user_id, payload.workspace_id) for intent in routing["intents"]]
+    return {"intents": routing["intents"], "sections": sections}
+
+
+@router.post("/agent/chat/stream")
+async def agent_chat_stream(payload: AgentChatIn, user: dict = Depends(current_user)):
+    user_id = user["id"]
+    workspace_id = payload.workspace_id
+    history = payload.history
+    message = payload.message
+
+    def _sse(event: str, data: dict[str, Any]) -> str:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    def event_stream():
+        try:
+            routing = classify_intent(message, history=history, user_id=user_id)
+            profile = get_profile(user_id) or {}
+            yield _sse("intents", {"intents": routing["intents"]})
+            for intent in routing["intents"]:
+                try:
+                    section = _run_agent_intent(intent, routing, profile, user_id, workspace_id)
+                except HTTPException as exc:
+                    section = {"agent": intent, "type": "error", "message": str(exc.detail)}
+                except Exception:
+                    section = {"agent": intent, "type": "error", "message": "Something went wrong while running this step."}
+                yield _sse("section", section)
+            yield _sse("done", {})
+        except Exception:
+            yield _sse("error", {"message": "The assistant could not complete your request."})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @router.get("/automation/rules")
 async def automation_rules(include_inactive: bool = False, workspace_id: Optional[int] = None, user: dict = Depends(current_user)):
     return list_automation_rules(user["id"], include_inactive=include_inactive, workspace_id=workspace_id)
@@ -1361,6 +1495,115 @@ async def update_profile(profile_data: ProfileCreate, user: dict = Depends(curre
     except Exception as e:
         logger.error(f"Error updating profile: {e}")
         raise HTTPException(status_code=500, detail="Failed to update profile")
+
+
+@router.get("/profiles")
+async def list_user_profiles(user: dict = Depends(current_user)):
+    return list_profiles(user["id"])
+
+
+@router.post("/profiles")
+async def create_user_profile(profile_data: ProfileCreate, make_default: bool = False, user: dict = Depends(current_user)):
+    try:
+        data = profile_data.dict()
+        profile_id = create_profile(user["id"], data, name=data.get("name", ""), make_default=make_default)
+        return {"status": "success", "id": profile_id}
+    except Exception as e:
+        logger.error(f"Error creating profile: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create profile")
+
+
+@router.get("/profiles/{profile_id}")
+async def get_user_profile_by_id(profile_id: int, user: dict = Depends(current_user)):
+    profile = get_profile(user["id"], profile_id=profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return profile
+
+
+@router.put("/profiles/{profile_id}")
+async def update_user_profile(profile_id: int, profile_data: ProfileCreate, user: dict = Depends(current_user)):
+    if not update_profile_fields(user["id"], profile_id, profile_data.dict()):
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return {"status": "success"}
+
+
+@router.post("/profiles/{profile_id}/default")
+async def make_profile_default(profile_id: int, user: dict = Depends(current_user)):
+    if not set_default_profile(user["id"], profile_id):
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return {"status": "success"}
+
+
+@router.delete("/profiles/{profile_id}")
+async def remove_user_profile(profile_id: int, user: dict = Depends(current_user)):
+    try:
+        if not delete_profile(user["id"], profile_id):
+            raise HTTPException(status_code=404, detail="Profile not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "success"}
+
+
+# Resume fields that are derived from the uploaded document. We only overwrite
+# these with extracted values; user-curated preferences are preserved.
+_RESUME_DERIVED_FIELDS = (
+    "cv_text",
+    "target_roles",
+    "industries",
+    "locations",
+    "remote_preference",
+    "work_authorization",
+    "years_experience",
+    "skills",
+)
+
+_MAX_RESUME_BYTES = 5 * 1024 * 1024
+
+
+@router.post("/profile/upload-resume")
+async def upload_resume(file: UploadFile = File(...), apply_to_profile: bool = Form(True), profile_id: Optional[int] = Form(None), user: dict = Depends(current_user)):
+    """Upload a resume (.pdf/.docx/.txt), extract text + structured fields via AI,
+    and (optionally) merge the extracted fields into the user's profile."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(raw) > _MAX_RESUME_BYTES:
+        raise HTTPException(status_code=400, detail="Resume file is too large (max 5 MB).")
+
+    try:
+        cv_text = extract_text_from_upload(file.filename or "", raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Resume text extraction failed: {exc}")
+        raise HTTPException(status_code=400, detail="Could not read text from this file. Try a .pdf, .docx, or .txt resume.")
+
+    if not cv_text.strip():
+        raise HTTPException(status_code=400, detail="No readable text found in the resume.")
+
+    extracted = extract_profile_from_resume(cv_text, user["id"])
+    extracted.pop("_ai_error", None)
+
+    saved = False
+    if apply_to_profile:
+        existing = get_profile(user["id"], profile_id=profile_id) or {}
+        merged = {**existing}
+        for field in _RESUME_DERIVED_FIELDS:
+            value = extracted.get(field)
+            if value:
+                merged[field] = value
+        merged["resume_name"] = file.filename or merged.get("resume_name") or "resume"
+        upsert_profile(merged, user["id"], profile_id=profile_id or (existing.get("id") if existing else None))
+        saved = True
+
+    return {
+        "status": "success",
+        "filename": file.filename,
+        "applied_to_profile": saved,
+        "characters": len(cv_text),
+        "extracted": {field: extracted.get(field, "") for field in _RESUME_DERIVED_FIELDS},
+    }
 
 
 @router.get("/jobs")
@@ -1765,9 +2008,9 @@ async def delete_job_endpoint(job_id: int, workspace_id: Optional[int] = None, u
 
 
 @router.post("/jobs/{job_id}/score")
-async def score_single_job(job_id: int, user: dict = Depends(current_user)):
+async def score_single_job(job_id: int, profile_id: Optional[int] = None, user: dict = Depends(current_user)):
     try:
-        profile = get_profile(user["id"])
+        profile = get_profile(user["id"], profile_id=profile_id)
         if not profile:
             raise HTTPException(status_code=400, detail="Profile not configured")
 
@@ -1790,7 +2033,7 @@ async def score_single_job(job_id: int, user: dict = Depends(current_user)):
 
 @router.post("/jobs/score-batch")
 async def score_jobs_batch(payload: BatchScoreIn, user: dict = Depends(current_user)):
-    profile = get_profile(user["id"])
+    profile = get_profile(user["id"], profile_id=payload.profile_id)
     if not profile:
         raise HTTPException(status_code=400, detail="Add your resume profile before scoring jobs.")
 
@@ -1880,31 +2123,40 @@ async def score_jobs_batch(payload: BatchScoreIn, user: dict = Depends(current_u
 
 def _generate_resume_review(profile: dict[str, Any], job: dict[str, Any] | None, resume_text: str = "", target_role: str = "") -> dict[str, Any]:
     resume = resume_text.strip() or str(profile.get("cv_text") or "")
-    job_text = " ".join(str((job or {}).get(key, "")) for key in ["title", "company", "description"])
-    profile_terms = {term.lower() for term in str(profile.get("skills") or "").replace("\n", ",").split(",") if term.strip()}
-    job_terms = {term.lower() for term in job_text.replace("\n", " ").replace("/", " ").split() if len(term) > 3}
-    missing = sorted(list((job_terms - profile_terms) & {"python", "react", "next.js", "sql", "aws", "azure", "fastapi", "typescript", "leadership", "analytics"}))
+    job = job or {}
+    context = build_job_context(profile, job)
+    primary_focus = choose_primary_focus_area(context["focus_areas"])
+    profile_terms = {term.lower() for term in extract_profile_skills(profile, limit=20)}
+    missing = sorted(
+        list(
+            {keyword.lower() for keyword in context["keywords"]}
+            .difference(profile_terms)
+            & {"python", "react", "next.js", "sql", "aws", "azure", "fastapi", "typescript", "leadership", "analytics", "openai", "claude", "zapier", "n8n"}
+        )
+    )
     return {
-        "summary": f"Resume review for {target_role or (job or {}).get('title') or profile.get('preferred_role') or 'target role'}.",
+        "summary": f"Resume review for {target_role or job.get('title') or profile.get('preferred_role') or 'target role'}.",
         "strengths": [
             "Existing resume/profile text is available for tailoring." if resume else "Add resume text to unlock stronger feedback.",
-            "Profile skills can be mapped into opportunity-specific language.",
+            f"Profile skills can be mapped into {primary_focus.lower()} language.",
         ],
         "weaknesses": [
             "Quantify recent achievements with business or delivery impact.",
-            "Move the most relevant role keywords into the top third of the resume.",
+            f"Move the most relevant keywords for {context['title']} into the top third of the resume.",
         ],
         "missing_keywords": missing,
+        "job_focus_areas": context["focus_areas"],
+        "job_highlights": context["highlights"],
         "formatting_suggestions": [
             "Use concise bullets that start with action verbs.",
             "Keep sections scan-friendly for ATS and recruiter review.",
         ],
-        "role_alignment": "Good baseline alignment; improve by mirroring the job title, core stack, and responsibility language.",
+        "role_alignment": f"Good baseline alignment; improve by mirroring the {context['title']} title, core stack, and responsibility language.",
         "recommended_changes": [
-            "Add 2-3 bullets tied directly to the selected job responsibilities.",
+            f"Add 2-3 bullets tied directly to {primary_focus.lower()} job responsibilities.",
             "Replace generic summaries with target-role positioning.",
         ],
-        "improved_resume_response": "Draft improvement: emphasize measurable outcomes, relevant tools, and the exact target role in the summary and first experience section.",
+        "improved_resume_response": f"Draft improvement: emphasize measurable outcomes, relevant tools, and the exact {context['title']} target role in the summary and first experience section.",
     }
 
 
@@ -1927,19 +2179,25 @@ def _keywords_from_job(job: dict[str, Any]) -> list[str]:
 
 
 def _generate_tailored_resume(profile: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
-    role = job.get("title") or "target role"
-    company = job.get("company") or "the company"
-    skills = [part.strip() for part in re.split(r",|\n|;", str(profile.get("skills") or "")) if part.strip()]
-    keywords = _keywords_from_job(job)
+    context = build_job_context(profile, job)
+    role = context["title"]
+    company = context["company"]
+    skills = context["skills"]
+    keywords = context["keywords"]
+    focus_areas = context["focus_areas"]
+    highlights = context["highlights"]
     emphasized_skills = [skill for skill in skills if skill.lower() in " ".join(keywords).lower()] or skills[:8] or keywords[:8]
+    primary_focus = choose_primary_focus_area(focus_areas)
+    secondary_focus = next((area for area in focus_areas if area != primary_focus), primary_focus)
+    highlight = highlights[0] if highlights else ""
     summary = (
         f"{profile.get('years_experience') or 'Experienced'} professional targeting {role} at {company}, "
-        f"with hands-on experience in {', '.join(emphasized_skills[:5]) or 'the role requirements'}."
+        f"with hands-on experience in {', '.join(emphasized_skills[:5]) or 'the role requirements'} and a clear fit for {primary_focus.lower()}."
     )
     bullets = [
-        f"Delivered work aligned with {role} requirements using {', '.join(emphasized_skills[:4]) or 'relevant tools and practices'}.",
-        "Translated business and user needs into maintainable, measurable solutions.",
-        "Collaborated across stakeholders to ship reliable improvements and communicate tradeoffs clearly.",
+        f"Delivered work aligned with {primary_focus.lower()} using {', '.join(emphasized_skills[:4]) or 'relevant tools and practices'}.",
+        f"Translated {secondary_focus.lower()} requirements into maintainable, measurable solutions that can be referenced in the {role} resume.",
+        f"Collaborated across stakeholders to ship reliable improvements; job-specific cue: {highlight[:120] or 'highlight the most relevant project outcome from your history'}.",
     ]
     draft = "\n".join(
         [
@@ -1961,7 +2219,9 @@ def _generate_tailored_resume(profile: dict[str, Any], job: dict[str, Any]) -> d
         "tailored_experience_bullets": bullets,
         "skills_to_emphasize": emphasized_skills[:12],
         "keywords_to_include": keywords,
-        "optional_cover_note": f"I am interested in the {role} role at {company} because my background maps directly to the job's core responsibilities.",
+        "job_focus_areas": focus_areas,
+        "job_highlights": highlights,
+        "optional_cover_note": f"I am interested in the {role} role at {company} because the posting emphasizes {primary_focus.lower()} and {secondary_focus.lower()}, which maps directly to my background.",
         "application_guidance": [
             "Keep claims grounded in your real resume and project history.",
             "Add metrics to the bullets before submitting.",
@@ -1972,9 +2232,35 @@ def _generate_tailored_resume(profile: dict[str, Any], job: dict[str, Any]) -> d
     }
 
 
+def _resume_draft_to_text(draft: Any) -> str:
+    """Flatten a resume_draft into copy-ready text. The model occasionally
+    returns a structured object (name/summary/experience/...) instead of a
+    string, which the UI cannot render directly."""
+    if draft is None:
+        return ""
+    if isinstance(draft, str):
+        return draft
+    if isinstance(draft, (list, tuple)):
+        return "\n".join(_resume_draft_to_text(item) for item in draft if item is not None)
+    if isinstance(draft, dict):
+        lines: list[str] = []
+        for key, value in draft.items():
+            label = str(key).replace("_", " ").title()
+            text = _resume_draft_to_text(value)
+            if not text.strip():
+                continue
+            if "\n" in text:
+                lines.append(f"{label}:\n{text}")
+            else:
+                lines.append(f"{label}: {text}")
+        return "\n\n".join(lines)
+    return str(draft)
+
+
 def _llm_tailored_resume(profile: dict[str, Any], job: dict[str, Any], user_id: int) -> dict[str, Any]:
     fallback = _generate_tailored_resume(profile, job)
     route = ai_orchestrator.resolve_route(user_id, task_type="resume_tailoring")
+    job_context = build_job_context(profile, job)
     system = (
         "You are an expert resume writer. Return JSON only. Create a truthful tailored resume draft grounded only in "
         "the supplied resume/profile and job description. Do not invent employers, degrees, certifications, metrics, or credentials."
@@ -1987,6 +2273,10 @@ def _llm_tailored_resume(profile: dict[str, Any], job: dict[str, Any], user_id: 
             "company": job.get("company"),
             "description": job.get("description") or job.get("raw_text") or "",
             "location": job.get("location"),
+            "remote_type": job.get("remote_type"),
+            "keywords": job_context["keywords"],
+            "focus_areas": job_context["focus_areas"],
+            "highlights": job_context["highlights"],
         },
         "required_output_keys": [
             "tailored_summary",
@@ -1998,9 +2288,19 @@ def _llm_tailored_resume(profile: dict[str, Any], job: dict[str, Any], user_id: 
             "resume_draft",
         ],
     }
-    tailored = ai_orchestrator.ask_json(system, json.dumps(context), fallback, user_id=user_id, task_type="resume_tailoring")
+    tailored = ai_orchestrator.ask_json(
+        system,
+        json.dumps(context),
+        fallback,
+        user_id=user_id,
+        task_type="resume_tailoring",
+        workspace_id=job.get("workspace_id"),
+    )
     for key, value in fallback.items():
         tailored.setdefault(key, value)
+    # The model sometimes returns resume_draft as a structured object instead of
+    # a copy-ready string; flatten it so the UI can render it as text.
+    tailored["resume_draft"] = _resume_draft_to_text(tailored.get("resume_draft"))
     tailored["type"] = "tailored_resume"
     tailored["target_role"] = tailored.get("target_role") or job.get("title") or "target role"
     tailored["company"] = tailored.get("company") or job.get("company") or ""
@@ -2013,36 +2313,71 @@ def _llm_tailored_resume(profile: dict[str, Any], job: dict[str, Any], user_id: 
 
 
 def _generate_interview_prep(profile: dict[str, Any], job: dict[str, Any], evaluation: dict[str, Any]) -> dict[str, Any]:
-    role = job.get("title") or "this role"
-    company = job.get("company") or "the company"
+    context = build_job_context(profile, job)
+    role = context["title"]
+    company = context["company"]
+    focus_areas = context["focus_areas"]
+    highlights = context["highlights"]
+    skills = context["skills"]
+    primary_focus = choose_primary_focus_area(focus_areas)
+    other_focuses = [area for area in focus_areas if area != primary_focus]
+    secondary_focus = other_focuses[0] if other_focuses else primary_focus
+    third_focus = other_focuses[1] if len(other_focuses) > 1 else primary_focus
+    skill_line = ", ".join(skills[:4] or context["keywords"][:4] or ["your stack"])
+    highlight_line = highlights[0] if highlights else f"the requirements for {role}"
     return {
         "summary": f"Interview preparation for {role} at {company}.",
         "behavioral_questions": [
-            "Tell me about a time you handled ambiguity in a project.",
-            "Describe a conflict with a stakeholder and how you resolved it.",
-            "Give an example of improving a process or system.",
+            f"Tell me about a time you delivered {primary_focus.lower()} under a tight timeline.",
+            f"Describe a situation where you had to balance {secondary_focus.lower()} with quality or stakeholder expectations.",
+            f"Give an example of improving a process or system similar to the work described in this posting.",
         ],
         "technical_questions": [
-            f"Walk through how your skills in {profile.get('skills') or 'your stack'} apply to this role.",
-            "How would you approach debugging a production issue with limited information?",
-            "What tradeoffs would you consider when designing a scalable feature?",
+            f"Walk through how your skills in {skill_line} apply to {primary_focus.lower()} for this role.",
+            f"How would you approach a production issue that touches {secondary_focus.lower()} and needs careful validation?",
+            f"What tradeoffs would you consider when designing a solution for {third_focus.lower()} in a fast-moving environment?",
         ],
         "role_specific_questions": [
-            f"What attracts you to the {role} responsibilities?",
-            "Which requirement in the job description best matches your recent experience?",
+            f"What attracts you to the {role} responsibilities at {company}?",
+            f"Which requirement in the job description best matches your recent experience with {primary_focus.lower()}?",
         ],
-        "suggested_answers": [
-            "Use STAR: situation, task, action, result. Keep each answer under two minutes.",
-            f"Connect your answer back to {company}'s needs and the role requirements.",
+        "company_job_specific_questions": [
+            f"The posting highlights: {highlight_line[:140]}. How would you show direct experience with that?",
+            f"What part of the {role} role at {company} feels most aligned with your background?",
+        ],
+        "suggested_answer_outlines": [
+            f"Use STAR, then close by tying the answer back to {primary_focus.lower()} and the impact you delivered.",
+            f"Reference a concrete project that shows {secondary_focus.lower()} and keep the answer under two minutes.",
+        ],
+        "star_format_guidance": [
+            "Situation: give only the minimum context needed.",
+            "Task: state the goal or constraint clearly.",
+            "Action: focus on what you personally did.",
+            "Result: include a measurable or observable outcome.",
+        ],
+        "weakness_improvement_prompts": [
+            f"Prepare one example that proves you can handle {primary_focus.lower()} without inventing details.",
+            f"Prepare one example that proves you can communicate tradeoffs around {secondary_focus.lower()}.",
+        ],
+        "candidate_questions": [
+            f"What does success look like for {role} in the first 30, 60, and 90 days?",
+            f"Where does {company} need the most help relative to {highlight_line[:90]}?",
+        ],
+        "final_preparation_checklist": [
+            f"Have one example ready for {primary_focus.lower()}",
+            f"Have one example ready for {secondary_focus.lower()}",
+            "Prepare one metric-driven story and one learning story.",
+            "Review the company, the job description, and your resume side by side before the interview.",
         ],
         "talking_points": [
-            evaluation.get("good_fit") or "Highlight direct overlap between your experience and the job.",
-            "Prepare one metric-driven achievement and one learning story.",
+            evaluation.get("good_fit") or f"Highlight direct overlap between your experience and the {role} responsibilities.",
+            f"Prepare one metric-driven achievement and one story tied to {primary_focus.lower()}.",
         ],
         "questions_to_ask": [
             "What would success look like in the first 90 days?",
-            "Which team priorities are driving this opening?",
+            f"Which team priorities are driving this opening at {company}?",
         ],
+        "generation_source": "local_fallback",
     }
 
 
@@ -2076,7 +2411,14 @@ def _llm_resume_review(profile: dict[str, Any], job: dict[str, Any] | None, resu
             "platforms": profile.get("platforms"),
         },
     }
-    review = ai_orchestrator.ask_json(system, json.dumps(context), fallback, user_id=user_id, task_type="resume_review")
+    review = ai_orchestrator.ask_json(
+        system,
+        json.dumps(context),
+        fallback,
+        user_id=user_id,
+        task_type="resume_review",
+        workspace_id=job.get("workspace_id") if job else None,
+    )
     if review.get("_ai_error"):
         raise HTTPException(status_code=502, detail=f"LLM resume review failed: {review.get('_ai_error')}")
     review.setdefault("generation_source", "llm")
@@ -2087,6 +2429,7 @@ def _llm_interview_prep(profile: dict[str, Any], job: dict[str, Any], evaluation
     _require_ai_configuration(user_id, "interview_prep")
     fallback = _generate_interview_prep(profile, job, evaluation)
     latest_reviews = list_resume_reviews(user_id, job_id=int(job["id"]), limit=1)
+    job_context = build_job_context(profile, job)
     system = (
         "You are an expert interview coach. Return JSON only with keys: behavioral_questions, technical_questions, "
         "role_specific_questions, company_job_specific_questions, suggested_answer_outlines, star_format_guidance, "
@@ -2100,10 +2443,20 @@ def _llm_interview_prep(profile: dict[str, Any], job: dict[str, Any], evaluation
         "role_title": job.get("title"),
         "job_description": job.get("description"),
         "required_skills": job.get("raw_text") or job.get("description"),
+        "job_keywords": job_context["keywords"],
+        "job_focus_areas": job_context["focus_areas"],
+        "job_highlights": job_context["highlights"],
         "ai_score": evaluation,
         "resume_review_findings": latest_reviews[0] if latest_reviews else {},
     }
-    prep = ai_orchestrator.ask_json(system, json.dumps(context), fallback, user_id=user_id, task_type="interview_prep")
+    prep = ai_orchestrator.ask_json(
+        system,
+        json.dumps(context),
+        fallback,
+        user_id=user_id,
+        task_type="interview_prep",
+        workspace_id=job.get("workspace_id"),
+    )
     if prep.get("_ai_error"):
         raise HTTPException(status_code=502, detail=f"LLM interview preparation failed: {prep.get('_ai_error')}")
     prep.setdefault("generation_source", "llm")
@@ -2132,8 +2485,8 @@ async def post_job_resume_review(job_id: int, payload: ResumeReviewIn, user: dic
 
 
 @router.post("/jobs/{job_id}/tailor-resume")
-async def post_job_tailored_resume(job_id: int, user: dict = Depends(current_user)):
-    profile = get_profile(user["id"])
+async def post_job_tailored_resume(job_id: int, profile_id: Optional[int] = None, user: dict = Depends(current_user)):
+    profile = get_profile(user["id"], profile_id=profile_id)
     if not _profile_has_resume_context(profile):
         raise HTTPException(status_code=400, detail="Add resume or profile details before tailoring a resume.")
     job = get_job(job_id, user["id"])
@@ -2145,6 +2498,109 @@ async def post_job_tailored_resume(job_id: int, user: dict = Depends(current_use
     return save_resume_review(user["id"], tailored, job_id)
 
 
+def _fallback_resume_structure(profile: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
+    """Best-effort structured resume from profile fields when AI is unavailable."""
+    skills = [s.strip() for s in str(profile.get("skills") or "").split(",") if s.strip()]
+    return {
+        "full_name": profile.get("full_name") or "Your Name",
+        "headline": job.get("title") or profile.get("preferred_role") or profile.get("target_roles") or "",
+        "contact": {
+            "email": profile.get("email") or "",
+            "location": profile.get("locations") or profile.get("country") or "",
+            "phone": "",
+            "linkedin": "",
+            "website": "",
+        },
+        "summary": (str(profile.get("cv_text") or "").strip()[:600]) or "Experienced professional aligned to the target role.",
+        "skills": skills,
+        "experience": [],
+        "education": [],
+        "certifications": [],
+        "projects": [],
+    }
+
+
+def _llm_structured_resume(profile: dict[str, Any], job: dict[str, Any], user_id: int) -> dict[str, Any]:
+    fallback = _fallback_resume_structure(profile, job)
+    job_context = build_job_context(profile, job)
+    system = (
+        "You are an expert resume writer. Return JSON only describing a truthful, ATS-friendly resume tailored to the "
+        "target job, grounded strictly in the supplied resume text and profile. Do NOT invent employers, job titles, "
+        "dates, degrees, certifications, or metrics that are not present in the source. Leave fields empty if unknown."
+    )
+    context = {
+        "resume_text": profile.get("cv_text") or "",
+        "profile": profile,
+        "job": {
+            "title": job.get("title"),
+            "company": job.get("company"),
+            "description": job.get("description") or job.get("raw_text") or "",
+            "keywords": job_context["keywords"],
+            "focus_areas": job_context["focus_areas"],
+        },
+        "output_schema": {
+            "full_name": "string",
+            "headline": "string (target job title)",
+            "contact": {"email": "string", "phone": "string", "location": "string", "linkedin": "string", "website": "string"},
+            "summary": "string (3-4 sentence professional summary tailored to the job)",
+            "skills": ["string"],
+            "experience": [{"title": "string", "company": "string", "location": "string", "start": "string", "end": "string", "bullets": ["string"]}],
+            "education": [{"degree": "string", "institution": "string", "location": "string", "year": "string"}],
+            "certifications": ["string"],
+            "projects": [{"name": "string", "description": "string"}],
+        },
+        "required_output_keys": RESUME_STRUCTURE_KEYS,
+    }
+    structure = ai_orchestrator.ask_json(
+        system,
+        json.dumps(context),
+        fallback,
+        user_id=user_id,
+        task_type="resume_document",
+        workspace_id=job.get("workspace_id"),
+    )
+    if structure.get("_ai_error"):
+        structure = fallback
+    # Backfill any keys the model omitted so rendering never KeyErrors.
+    for key in RESUME_STRUCTURE_KEYS:
+        structure.setdefault(key, fallback.get(key))
+    return structure
+
+
+@router.get("/resume-templates")
+async def get_resume_templates(user: dict = Depends(current_user)):
+    return RESUME_TEMPLATES
+
+
+@router.post("/jobs/{job_id}/resume-document")
+async def build_resume_document(job_id: int, template: str = "international", profile_id: Optional[int] = None, user: dict = Depends(current_user)):
+    if not is_valid_template(template):
+        raise HTTPException(status_code=400, detail="Unknown resume template.")
+    profile = get_profile(user["id"], profile_id=profile_id)
+    if not _profile_has_resume_context(profile):
+        raise HTTPException(status_code=400, detail="Add resume or profile details before building a resume.")
+    job = get_job(job_id, user["id"])
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not str(job.get("description") or job.get("raw_text") or "").strip():
+        raise HTTPException(status_code=400, detail="This job does not have enough description detail to build a resume.")
+
+    structure = _llm_structured_resume(profile or {}, job, user["id"])
+    try:
+        docx_bytes = render_resume_docx(structure, template)
+    except Exception as exc:
+        logger.error(f"Resume document rendering failed: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to build the resume document.")
+
+    safe_company = re.sub(r"[^A-Za-z0-9]+", "-", str(job.get("company") or job.get("title") or "resume")).strip("-").lower() or "resume"
+    filename = f"resume-{safe_company}-{template}.docx"
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post("/jobs/{job_id}/interview-prep")
 async def post_job_interview_prep(job_id: int, user: dict = Depends(current_user)):
     profile = get_profile(user["id"])
@@ -2153,8 +2609,28 @@ async def post_job_interview_prep(job_id: int, user: dict = Depends(current_user
     job = get_job(job_id, user["id"])
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    evaluation = get_evaluation(job_id, user["id"]) or score_job(profile, job, user_id=user["id"])
-    prep = _llm_interview_prep(profile, job, evaluation, user["id"])
+    evaluation = get_evaluation(job_id, user["id"])
+    if not evaluation:
+        try:
+            evaluation = score_job(profile, job, user_id=user["id"])
+        except Exception:
+            evaluation = {
+                "match_score": 0,
+                "priority": "Low",
+                "good_fit": "Highlight direct overlap between your experience and the job.",
+                "weak_areas": "Review the job description and practice concrete examples.",
+                "red_flags": "No automated score was available.",
+            }
+    fallback = _generate_interview_prep(profile, job, evaluation)
+    generation_source = "local_fallback"
+    try:
+        prep = _llm_interview_prep(profile, job, evaluation, user["id"])
+        generation_source = "llm"
+    except HTTPException:
+        prep = fallback
+    except Exception:
+        prep = fallback
+    prep.setdefault("generation_source", generation_source)
     return save_interview_prep(user["id"], job_id, prep)
 
 
@@ -2299,7 +2775,7 @@ async def generate_job_materials(job_id: int, user: dict = Depends(current_user)
             evaluation = score_job(profile, job, user_id=user["id"])
             save_evaluation(job_id, evaluation, user["id"])
 
-        materials = generate_materials(profile, job, evaluation, user_id=user["id"])
+        materials = generate_materials(profile, job, evaluation, user_id=user["id"], workspace_id=job.get("workspace_id"))
         save_materials(job_id, materials, user["id"])
         return materials
     except HTTPException:

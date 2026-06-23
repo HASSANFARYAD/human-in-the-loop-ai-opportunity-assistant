@@ -20,7 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 
 const groups = [
-  { label: "Overview", items: [{ href: "/dashboard", label: "Dashboard", icon: Gauge }, { href: "/analytics", label: "Insights", icon: BarChart3 }] },
+  { label: "Overview", items: [{ href: "/dashboard", label: "Dashboard", icon: Gauge }, { href: "/agent", label: "Assistant", icon: Sparkles }, { href: "/analytics", label: "Insights", icon: BarChart3 }] },
   {
     label: "Jobs",
     items: [
@@ -73,7 +73,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="glass-strong sticky top-0 hidden h-dvh w-64 shrink-0 flex-col overflow-hidden border-r xl:w-72 lg:flex">
+    <aside className="glass-strong fixed left-0 top-0 z-30 hidden h-dvh w-64 shrink-0 flex-col overflow-hidden border-r xl:w-72 lg:flex">
       <Link href="/dashboard" className="glass-subtle flex h-16 shrink-0 items-center gap-3 border-b px-6">
         <span className="grid h-9 w-9 place-items-center rounded-md bg-primary text-primary-foreground"><Sparkles className="h-5 w-5" /></span>
         <span className="font-semibold">Job Assistant</span>

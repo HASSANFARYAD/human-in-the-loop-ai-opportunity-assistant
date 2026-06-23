@@ -440,6 +440,7 @@ def _run_migrations(con) -> None:
     _ensure_personal_workspace_for_all_users(con)
     _migrate_profile_table(con)
     _ensure_profile_columns(con)
+    _migrate_profile_multi(con)
     _migrate_jobs_table(con)
     _ensure_workspace_scope_columns(con)
     _rebuild_jobs_workspace_unique(con)
@@ -509,12 +510,16 @@ def _run_migrations(con) -> None:
     con.execute("CREATE INDEX IF NOT EXISTS idx_interview_prep_user_job ON interview_prep_sessions(user_id, job_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_gmail_messages_user_message ON gmail_messages(user_id, message_id)")
     _rebuild_legacy_job_child_tables(con)
-    con.execute("DELETE FROM applications WHERE job_id NOT IN (SELECT id FROM jobs)")
-    con.execute("DELETE FROM evaluations WHERE job_id NOT IN (SELECT id FROM jobs)")
-    con.execute("DELETE FROM application_materials WHERE job_id NOT IN (SELECT id FROM jobs)")
-    con.execute("DELETE FROM resume_reviews WHERE job_id IS NOT NULL AND job_id NOT IN (SELECT id FROM jobs)")
-    con.execute("DELETE FROM interview_prep_sessions WHERE job_id NOT IN (SELECT id FROM jobs)")
-    con.execute("DELETE FROM recordings WHERE job_id IS NOT NULL AND job_id NOT IN (SELECT id FROM jobs)")
+    try:
+        con.execute("PRAGMA foreign_keys=OFF")
+        con.execute("DELETE FROM applications WHERE job_id NOT IN (SELECT id FROM jobs)")
+        con.execute("DELETE FROM evaluations WHERE job_id NOT IN (SELECT id FROM jobs)")
+        con.execute("DELETE FROM application_materials WHERE job_id NOT IN (SELECT id FROM jobs)")
+        con.execute("DELETE FROM resume_reviews WHERE job_id IS NOT NULL AND job_id NOT IN (SELECT id FROM jobs)")
+        con.execute("DELETE FROM interview_prep_sessions WHERE job_id NOT IN (SELECT id FROM jobs)")
+        con.execute("DELETE FROM recordings WHERE job_id IS NOT NULL AND job_id NOT IN (SELECT id FROM jobs)")
+    finally:
+        con.execute("PRAGMA foreign_keys=ON")
 
 
 def _ensure_default_user(con) -> int:
@@ -626,7 +631,6 @@ def _rebuild_legacy_job_child_tables(con) -> None:
             f"INSERT OR IGNORE INTO {table} ({','.join(common)}) SELECT {','.join(common)} FROM {table}_legacy_fk WHERE job_id IN (SELECT id FROM jobs)"
         )
         con.execute(f"DROP TABLE {table}_legacy_fk")
-    con.execute("PRAGMA foreign_keys=ON")
 
 
 def _workspace_scope_for_user(con, user_id: int, workspace_id: int | None = None) -> tuple[int, int]:
@@ -721,6 +725,15 @@ def _rebuild_jobs_workspace_unique(con) -> None:
     markers = {row["version"] for row in con.execute("SELECT version FROM schema_migrations").fetchall()}
     if "20260525_workspace_unique_jobs" in markers:
         return
+    if "jobs" in {row["name"] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}:
+        current_columns = _table_columns(con, "jobs")
+        if {"workspace_id", "organization_id"}.issubset(current_columns):
+            now = utc_now()
+            con.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, description, applied_at) VALUES (?,?,?)",
+                ("20260525_workspace_unique_jobs", "Workspace scoped opportunity unique constraint", now),
+            )
+            return
     now = utc_now()
     con.execute("PRAGMA foreign_keys=OFF")
     con.execute("ALTER TABLE jobs RENAME TO jobs_legacy_ws")
@@ -898,6 +911,57 @@ def _migrate_profile_table(con) -> None:
             ),
         )
     con.execute("DROP TABLE profile_legacy")
+
+
+def _migrate_profile_multi(con) -> None:
+    """Allow multiple profiles per user by dropping the UNIQUE(user_id) constraint
+    and adding name/is_default. Existing single profiles become the named 'Default'."""
+    columns = _table_columns(con, "profile")
+    if not columns or "is_default" in columns:
+        return  # not yet created, or already migrated
+
+    con.execute("PRAGMA foreign_keys = OFF")
+    con.execute("ALTER TABLE profile RENAME TO profile_legacy")
+    con.execute(
+        """
+        CREATE TABLE profile (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL DEFAULT 'Default',
+            is_default INTEGER NOT NULL DEFAULT 0,
+            cv_text TEXT,
+            target_roles TEXT,
+            industries TEXT,
+            locations TEXT,
+            remote_preference TEXT,
+            salary_expectations TEXT,
+            work_authorization TEXT,
+            years_experience TEXT,
+            skills TEXT,
+            deal_breakers TEXT,
+            full_name TEXT,
+            email TEXT,
+            preferred_role TEXT,
+            country TEXT,
+            job_preferences TEXT,
+            platforms TEXT,
+            resume_name TEXT,
+            integration_status TEXT,
+            created_at TEXT,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, name)
+        )
+        """
+    )
+    legacy_cols = _table_columns(con, "profile_legacy")
+    new_cols = _table_columns(con, "profile")
+    copy_cols = [c for c in legacy_cols if c in new_cols and c not in ("name", "is_default")]
+    col_list = ", ".join(copy_cols)
+    con.execute(
+        f"INSERT INTO profile ({col_list}, name, is_default) SELECT {col_list}, 'Default', 1 FROM profile_legacy"
+    )
+    con.execute("DROP TABLE profile_legacy")
+    con.execute("PRAGMA foreign_keys = ON")
 
 
 def _ensure_profile_columns(con) -> None:
@@ -1169,6 +1233,15 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS score_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                workspace_id INTEGER,
+                job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
+                signal TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS audit_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -1207,42 +1280,145 @@ def get_user(user_id: int) -> dict[str, Any]:
         return dict(row) if row else {}
 
 
-def upsert_profile(profile: Dict[str, Any], user_id: int = 1) -> None:
-    fields = [
-        "cv_text",
-        "target_roles",
-        "industries",
-        "locations",
-        "remote_preference",
-        "salary_expectations",
-        "work_authorization",
-        "years_experience",
-        "skills",
-        "deal_breakers",
-        "full_name",
-        "email",
-        "preferred_role",
-        "country",
-        "job_preferences",
-        "platforms",
-        "resume_name",
-        "integration_status",
-    ]
-    values = {k: profile.get(k, "") for k in fields}
-    values["updated_at"] = utc_now()
+PROFILE_FIELDS = [
+    "cv_text",
+    "target_roles",
+    "industries",
+    "locations",
+    "remote_preference",
+    "salary_expectations",
+    "work_authorization",
+    "years_experience",
+    "skills",
+    "deal_breakers",
+    "full_name",
+    "email",
+    "preferred_role",
+    "country",
+    "job_preferences",
+    "platforms",
+    "resume_name",
+    "integration_status",
+]
+
+
+def _default_profile_id(con, user_id: int) -> int | None:
+    row = con.execute(
+        "SELECT id FROM profile WHERE user_id=? ORDER BY is_default DESC, id ASC LIMIT 1",
+        (user_id,),
+    ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def upsert_profile(profile: Dict[str, Any], user_id: int = 1, profile_id: int | None = None) -> int:
+    """Update an existing profile (the default, or the one identified by profile_id),
+    or create the user's first profile. Returns the profile id."""
+    now = utc_now()
+    values = {k: profile.get(k, "") for k in PROFILE_FIELDS}
     with connect() as con:
-        con.execute(
-            f"""
-            INSERT INTO profile (user_id, {', '.join(values.keys())}) VALUES (?, {', '.join(['?'] * len(values))})
-            ON CONFLICT(user_id) DO UPDATE SET {', '.join([f'{k}=excluded.{k}' for k in values.keys()])}
-            """,
-            [user_id, *list(values.values())],
+        target_id = profile_id or _default_profile_id(con, user_id)
+        if target_id is not None:
+            assignments = ", ".join(f"{k}=?" for k in values.keys())
+            con.execute(
+                f"UPDATE profile SET {assignments}, updated_at=? WHERE id=? AND user_id=?",
+                [*values.values(), now, target_id, user_id],
+            )
+            return int(target_id)
+        # First profile for this user -> create it as the default.
+        name = (profile.get("name") or "Default").strip() or "Default"
+        cur = con.execute(
+            f"INSERT INTO profile (user_id, name, is_default, {', '.join(values.keys())}, created_at, updated_at) "
+            f"VALUES (?, ?, 1, {', '.join(['?'] * len(values))}, ?, ?)",
+            [user_id, name, *values.values(), now, now],
         )
+        return int(cur.lastrowid)
 
 
-def get_profile(user_id: int = 1) -> Dict[str, Any]:
+def create_profile(user_id: int, profile: Dict[str, Any], name: str = "", make_default: bool = False) -> int:
+    now = utc_now()
+    values = {k: profile.get(k, "") for k in PROFILE_FIELDS}
+    clean_name = (name or profile.get("name") or "").strip() or "New profile"
     with connect() as con:
-        row = con.execute("SELECT * FROM profile WHERE user_id=?", (user_id,)).fetchone()
+        has_any = con.execute("SELECT 1 FROM profile WHERE user_id=? LIMIT 1", (user_id,)).fetchone()
+        is_default = 1 if (make_default or not has_any) else 0
+        # Ensure unique name per user.
+        base, suffix = clean_name, 2
+        while con.execute("SELECT 1 FROM profile WHERE user_id=? AND name=?", (user_id, clean_name)).fetchone():
+            clean_name = f"{base} ({suffix})"
+            suffix += 1
+        if is_default:
+            con.execute("UPDATE profile SET is_default=0 WHERE user_id=?", (user_id,))
+        cur = con.execute(
+            f"INSERT INTO profile (user_id, name, is_default, {', '.join(values.keys())}, created_at, updated_at) "
+            f"VALUES (?, ?, ?, {', '.join(['?'] * len(values))}, ?, ?)",
+            [user_id, clean_name, is_default, *values.values(), now, now],
+        )
+        return int(cur.lastrowid)
+
+
+def update_profile_fields(user_id: int, profile_id: int, profile: Dict[str, Any]) -> bool:
+    now = utc_now()
+    values = {k: profile.get(k, "") for k in PROFILE_FIELDS}
+    with connect() as con:
+        if not con.execute("SELECT 1 FROM profile WHERE id=? AND user_id=?", (profile_id, user_id)).fetchone():
+            return False
+        if profile.get("name"):
+            new_name = profile["name"].strip()
+            if new_name and not con.execute(
+                "SELECT 1 FROM profile WHERE user_id=? AND name=? AND id<>?", (user_id, new_name, profile_id)
+            ).fetchone():
+                con.execute("UPDATE profile SET name=? WHERE id=? AND user_id=?", (new_name, profile_id, user_id))
+        assignments = ", ".join(f"{k}=?" for k in values.keys())
+        con.execute(
+            f"UPDATE profile SET {assignments}, updated_at=? WHERE id=? AND user_id=?",
+            [*values.values(), now, profile_id, user_id],
+        )
+        return True
+
+
+def set_default_profile(user_id: int, profile_id: int) -> bool:
+    with connect() as con:
+        if not con.execute("SELECT 1 FROM profile WHERE id=? AND user_id=?", (profile_id, user_id)).fetchone():
+            return False
+        con.execute("UPDATE profile SET is_default=0 WHERE user_id=?", (user_id,))
+        con.execute("UPDATE profile SET is_default=1 WHERE id=? AND user_id=?", (profile_id, user_id))
+        return True
+
+
+def delete_profile(user_id: int, profile_id: int) -> bool:
+    with connect() as con:
+        count = con.execute("SELECT COUNT(*) AS c FROM profile WHERE user_id=?", (user_id,)).fetchone()["c"]
+        if count <= 1:
+            raise ValueError("Cannot delete your only profile.")
+        row = con.execute("SELECT is_default FROM profile WHERE id=? AND user_id=?", (profile_id, user_id)).fetchone()
+        if not row:
+            return False
+        con.execute("DELETE FROM profile WHERE id=? AND user_id=?", (profile_id, user_id))
+        if row["is_default"]:
+            # Promote the most recent remaining profile to default.
+            con.execute(
+                "UPDATE profile SET is_default=1 WHERE id=(SELECT id FROM profile WHERE user_id=? ORDER BY id DESC LIMIT 1)",
+                (user_id,),
+            )
+        return True
+
+
+def list_profiles(user_id: int) -> list[dict[str, Any]]:
+    with connect() as con:
+        rows = con.execute(
+            "SELECT * FROM profile WHERE user_id=? ORDER BY is_default DESC, name ASC", (user_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_profile(user_id: int = 1, profile_id: int | None = None) -> Dict[str, Any]:
+    with connect() as con:
+        if profile_id is not None:
+            row = con.execute("SELECT * FROM profile WHERE id=? AND user_id=?", (profile_id, user_id)).fetchone()
+            return dict(row) if row else {}
+        row = con.execute(
+            "SELECT * FROM profile WHERE user_id=? ORDER BY is_default DESC, id ASC LIMIT 1", (user_id,)
+        ).fetchone()
         return dict(row) if row else {}
 
 
@@ -1787,6 +1963,16 @@ def record_provider_health(
         )
 
 
+def _as_text(value: Any) -> str:
+    """Coerce an evaluation field to text. The AI sometimes returns lists for
+    free-text fields like good_fit/weak_areas/red_flags; SQLite can't bind those."""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return "; ".join(str(item).strip() for item in value if str(item).strip())
+    return str(value)
+
+
 def save_evaluation(job_id: int, evaluation: Dict[str, Any], user_id: int = 1) -> None:
     now = utc_now()
     cols = [
@@ -1822,9 +2008,9 @@ def save_evaluation(job_id: int, evaluation: Dict[str, Any], user_id: int = 1) -
         "industry_match": int(evaluation.get("industry_match", 0)),
         "authorization_match": int(evaluation.get("authorization_match", 0)),
         "deal_breaker_penalty": int(evaluation.get("deal_breaker_penalty", 0)),
-        "good_fit": evaluation.get("good_fit", ""),
-        "weak_areas": evaluation.get("weak_areas", ""),
-        "red_flags": evaluation.get("red_flags", ""),
+        "good_fit": _as_text(evaluation.get("good_fit", "")),
+        "weak_areas": _as_text(evaluation.get("weak_areas", "")),
+        "red_flags": _as_text(evaluation.get("red_flags", "")),
         "opportunity_type": evaluation.get("opportunity_type", "job"),
         "prize_value_score": evaluation.get("prize_value_score"),
         "tech_alignment_score": evaluation.get("tech_alignment_score"),
@@ -1922,12 +2108,12 @@ def save_materials(job_id: int, materials: Dict[str, Any], user_id: int = 1) -> 
     cols = ["job_id", "professional_summary", "cover_letter", "resume_bullets", "screening_answers", "linkedin_message", "why_fit", "updated_at"]
     values = {
         "job_id": job_id,
-        "professional_summary": materials.get("professional_summary", ""),
-        "cover_letter": materials.get("cover_letter", ""),
-        "resume_bullets": materials.get("resume_bullets", ""),
-        "screening_answers": materials.get("screening_answers", ""),
-        "linkedin_message": materials.get("linkedin_message", ""),
-        "why_fit": materials.get("why_fit", ""),
+        "professional_summary": _as_text(materials.get("professional_summary", "")),
+        "cover_letter": _as_text(materials.get("cover_letter", "")),
+        "resume_bullets": _as_text(materials.get("resume_bullets", "")),
+        "screening_answers": _as_text(materials.get("screening_answers", "")),
+        "linkedin_message": _as_text(materials.get("linkedin_message", "")),
+        "why_fit": _as_text(materials.get("why_fit", "")),
         "updated_at": now,
     }
     with connect() as con:
@@ -2153,6 +2339,41 @@ def create_reminder(job_id: int, kind: str, remind_at: str, note: str, user_id: 
             "INSERT INTO reminders(job_id, kind, remind_at, note, created_at) VALUES (?,?,?,?,?)",
             (job_id, kind, remind_at, note, utc_now()),
         )
+
+
+def create_followup_reminders(after_days: int = 7) -> int:
+    """Create follow-up reminders for applications stuck in 'Applied' with no
+    status change in ``after_days`` days. Idempotent: skips jobs that already
+    have an open auto follow-up reminder. Runs across all users (system job).
+    Returns the number of reminders created.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, after_days))).isoformat(timespec="seconds")
+    now = utc_now()
+    with connect() as con:
+        rows = con.execute(
+            """
+            SELECT a.job_id, j.company FROM applications a
+            JOIN jobs j ON j.id = a.job_id
+            WHERE a.status = 'Applied' AND a.last_updated <= ?
+              AND NOT EXISTS (
+                SELECT 1 FROM reminders r
+                WHERE r.job_id = a.job_id AND r.kind = 'followup' AND r.done = 0
+              )
+            """,
+            (cutoff,),
+        ).fetchall()
+        created = 0
+        for row in rows:
+            company = (row["company"] or "this company").strip() or "this company"
+            note = f"No response from {company} in {after_days} days — consider following up."
+            con.execute(
+                "INSERT INTO reminders(job_id, kind, remind_at, note, created_at) VALUES (?,?,?,?,?)",
+                (row["job_id"], "followup", now, note, now),
+            )
+            created += 1
+    return created
 
 
 def due_reminders(user_id: int = 1) -> list[dict[str, Any]]:
@@ -2583,6 +2804,56 @@ def log_ai_generation(user_id: int | None, *, provider: str = "", model: str = "
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (user_id, scoped_workspace_id, organization_id, provider, model, task_type, prompt_version, prompt_hash, int(input_tokens or 0), int(output_tokens or 0), float(estimated_cost or 0), latency_ms, status, error_message, utc_now()))
         return int(cur.lastrowid)
+
+
+def record_score_feedback(user_id: int, job_id: int, signal: str, workspace_id: int | None = None) -> int:
+    """Record a user's relevance signal ('relevant'/'irrelevant') for a scored job."""
+    signal = (signal or "").strip().lower()
+    if signal not in ("relevant", "irrelevant"):
+        raise ValueError("signal must be 'relevant' or 'irrelevant'")
+    with connect() as con:
+        scoped_workspace_id, _ = _workspace_scope_for_user(con, user_id, workspace_id)
+        cur = con.execute(
+            "INSERT INTO score_feedback(user_id, workspace_id, job_id, signal, created_at) VALUES (?,?,?,?,?)",
+            (user_id, scoped_workspace_id, job_id, signal, utc_now()),
+        )
+        return int(cur.lastrowid)
+
+
+def recent_score_feedback(user_id: int, limit: int = 10, workspace_id: int | None = None) -> list[dict[str, Any]]:
+    """Most recent relevance signals for a user, with the job's title/company for context."""
+    with connect() as con:
+        rows = con.execute(
+            """
+            SELECT sf.signal, sf.created_at, j.title, j.company
+            FROM score_feedback sf
+            LEFT JOIN jobs j ON j.id = sf.job_id
+            WHERE sf.user_id = ?
+            ORDER BY sf.id DESC
+            LIMIT ?
+            """,
+            (user_id, max(1, min(int(limit), 50))),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_ai_generations_today(user_id: int) -> int:
+    """Count today's (UTC) billable AI generations for a user.
+
+    Only rows that hit a real provider are counted (``provider != 'none'``),
+    so local/fallback responses do not consume the user's daily budget.
+    """
+    today = datetime.now(timezone.utc).date().isoformat()
+    with connect() as con:
+        row = con.execute(
+            """
+            SELECT COUNT(*) AS n FROM ai_generations
+            WHERE user_id=? AND substr(created_at, 1, 10)=?
+              AND provider IS NOT NULL AND provider != '' AND provider != 'none'
+            """,
+            (user_id, today),
+        ).fetchone()
+    return int(row["n"]) if row else 0
 
 
 def list_ai_generations(user_id: int, limit: int = 100, workspace_id: int | None = None) -> list[dict[str, Any]]:

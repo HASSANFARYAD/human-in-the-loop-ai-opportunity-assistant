@@ -48,18 +48,41 @@ class Settings(BaseSettings):
     # User-owned provider API keys are stored encrypted in the database from the Integrations UI.
     # Env provider keys are intentionally not part of normal user workflows.
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    default_ai_provider: str = os.getenv("DEFAULT_AI_PROVIDER", "openai")
+    default_ai_provider: str = os.getenv("DEFAULT_AI_PROVIDER", "huggingface_local")
 
     google_credentials_file: str = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
     google_token_file: str = os.getenv("GOOGLE_TOKEN_FILE", "token.json")
 
     scheduler_enabled: bool = _bool_env("SCHEDULER_ENABLED", True)
     rate_limits_enabled: bool = _bool_env("RATE_LIMITS_ENABLED", True)
+
+    # Automated database backups (runs on its own scheduler, independent of SCHEDULER_ENABLED).
+    backup_enabled: bool = _bool_env("BACKUP_ENABLED", False)
+    backup_dir: str = os.getenv("BACKUP_DIR", str(Path(os.getenv("APP_DATA_DIR", "data")) / "backups"))
+    backup_interval_hours: int = int(os.getenv("BACKUP_INTERVAL_HOURS", "24"))
+    backup_retention: int = int(os.getenv("BACKUP_RETENTION", "30"))
+    # Optional offsite upload (Cloudflare R2 / S3-compatible). Leave bucket blank to keep backups local only.
+    backup_s3_bucket: str = os.getenv("BACKUP_S3_BUCKET", "")
+    backup_s3_endpoint: str = os.getenv("BACKUP_S3_ENDPOINT", "")
+    backup_s3_access_key: str = os.getenv("BACKUP_S3_ACCESS_KEY", "")
+    backup_s3_secret_key: str = os.getenv("BACKUP_S3_SECRET_KEY", "")
+    backup_s3_prefix: str = os.getenv("BACKUP_S3_PREFIX", "db")
+
+    # Automated follow-up reminders for stale applications (own scheduler).
+    followup_reminders_enabled: bool = _bool_env("FOLLOWUP_REMINDERS_ENABLED", False)
+    followup_after_days: int = int(os.getenv("FOLLOWUP_AFTER_DAYS", "7"))
+    followup_interval_hours: int = int(os.getenv("FOLLOWUP_INTERVAL_HOURS", "24"))
+
+    # Error monitoring (Sentry). Leave blank to disable.
+    sentry_dsn: str = os.getenv("SENTRY_DSN", "")
+    sentry_traces_sample_rate: float = float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.0"))
     rate_limit_per_minute: int = int(os.getenv("RATE_LIMIT_PER_MINUTE", "120"))
     rate_limit_ai_per_hour: int = int(os.getenv("RATE_LIMIT_AI_PER_HOUR", "60"))
     rate_limit_feedback_per_hour: int = int(os.getenv("RATE_LIMIT_FEEDBACK_PER_HOUR", "20"))
     rate_limit_publish_per_hour: int = int(os.getenv("RATE_LIMIT_PUBLISH_PER_HOUR", "20"))
     rate_limit_backend: str = os.getenv("RATE_LIMIT_BACKEND", "sqlite")
+    # Per-user daily cap on billable AI generations (provider calls). 0 disables the cap.
+    ai_daily_generation_limit: int = int(os.getenv("AI_DAILY_GENERATION_LIMIT", "50"))
     redis_url: Optional[str] = os.getenv("REDIS_URL")
 
     observability_enabled: bool = _bool_env("OBSERVABILITY_ENABLED", True)

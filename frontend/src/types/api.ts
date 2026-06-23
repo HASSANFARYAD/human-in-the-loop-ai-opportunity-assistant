@@ -113,6 +113,9 @@ export interface ProfileJobDiscoveryResult {
 }
 
 export interface Profile {
+  id?: number;
+  name?: string;
+  is_default?: number;
   cv_text?: string;
   target_roles?: string;
   industries?: string;
@@ -172,6 +175,38 @@ export interface ProviderConfig {
   has_credentials?: boolean;
   config?: Record<string, unknown>;
   updated_at?: string;
+}
+
+export interface AgentJobListing {
+  title: string;
+  company: string;
+  location: string;
+  url: string;
+  source: string;
+  opportunity_type: string;
+  match_score: number;
+  priority: string;
+  good_fit: string;
+}
+
+export interface AgentSection {
+  agent: "job_search" | "tailor_resume" | "interview_prep" | "chat";
+  type: "listings" | "tailored_resume" | "interview_prep" | "message" | "error";
+  message?: string;
+  data?: unknown;
+  job?: { id: number; title?: string; company?: string };
+}
+
+export interface AgentChatResponse {
+  intents: string[];
+  sections: AgentSection[];
+}
+
+export interface AIUsage {
+  used: number;
+  limit: number;
+  remaining: number | null;
+  unlimited: boolean;
 }
 
 export interface Integration {

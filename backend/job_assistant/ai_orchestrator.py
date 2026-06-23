@@ -5,7 +5,15 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from job_assistant.db import get_integration_settings, list_provider_configs, log_ai_generation
+from fastapi import HTTPException
+
+from job_assistant.config import settings
+from job_assistant.db import (
+    count_ai_generations_today,
+    get_integration_settings,
+    list_provider_configs,
+    log_ai_generation,
+)
 from job_assistant.services.ai_providers import ask_json as ask_json_direct
 
 
@@ -39,8 +47,22 @@ class AIOrchestrator:
                 return AIRoute((config.get("provider") or "openai").lower(), config.get("model") or "gpt-4o-mini", legacy, "integration_settings")
         return AIRoute("none", "fallback", {"service": "ai_provider", "api_key": "", "config": {}}, "fallback")
 
+    def _enforce_daily_budget(self, user_id: Optional[int], route: AIRoute) -> None:
+        # Only billable provider calls count against the budget; local/fallback
+        # routes are free and exempt.
+        limit = settings.ai_daily_generation_limit
+        if not user_id or limit <= 0 or route.provider in ("", "none"):
+            return
+        used = count_ai_generations_today(user_id)
+        if used >= limit:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Daily AI generation limit ({limit}) reached. It resets at 00:00 UTC.",
+            )
+
     def ask_json(self, system: str, user: str, fallback: Dict[str, Any], *, user_id: Optional[int] = None, task_type: str = "general", prompt_version: str = "", workspace_id: Optional[int] = None) -> Dict[str, Any]:
         route = self.resolve_route(user_id, task_type, workspace_id=workspace_id)
+        self._enforce_daily_budget(user_id, route)
         started = time.perf_counter()
         status = "success"
         error = ""
