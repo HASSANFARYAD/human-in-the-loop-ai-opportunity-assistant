@@ -18,8 +18,8 @@ from pymongo.operations import UpdateOne
 from job_assistant.config import settings
 from job_assistant.crypto import decrypt_text, encrypt_text
 
-MONGO_URL = os.getenv("MONGO_URL") or "mongodb://localhost:27017"
-MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "career_assistant")
+MONGO_URL = settings.mongo_url or "mongodb://localhost:27017"
+MONGO_DB_NAME = settings.mongo_db_name or "career_assistant"
 
 _client: MongoClient | None = None
 _db = None
