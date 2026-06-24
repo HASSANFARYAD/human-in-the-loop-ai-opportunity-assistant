@@ -15,7 +15,9 @@ def validate_startup_configuration(strict: bool = False) -> list[str]:
     for warning in warnings:
         logger.warning("Startup configuration warning: %s", warning)
     if strict and warnings:
-        raise RuntimeError("Invalid production configuration: " + "; ".join(warnings))
+        fatal = [w for w in warnings if "SMTP" not in w]
+        if fatal:
+            raise RuntimeError("Invalid production configuration: " + "; ".join(fatal))
     return warnings
 
 
