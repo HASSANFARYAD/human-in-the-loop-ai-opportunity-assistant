@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScoreBadge } from "@/components/ui/score-badge";
+import { Skeleton, SkeletonChart } from "@/components/ui/skeleton";
 import { ScoreDistribution, SourceChart } from "@/components/charts/analytics-charts";
 import { opportunityService } from "@/services/opportunity.service";
 import { staggerItem } from "@/lib/animation";
@@ -16,6 +17,7 @@ const container = {
 
 export function AnalyticsView() {
   const jobs = useQuery({ queryKey: ["opportunities"], queryFn: () => opportunityService.list() });
+  const isLoading = jobs.isLoading;
   const data = useMemo(() => {
     const items = jobs.data ?? [];
     const scores = items.map((item) => Number(item.match_score ?? item.score ?? 0));
@@ -32,37 +34,57 @@ export function AnalyticsView() {
         <h1 className="text-2xl font-semibold">Insights</h1>
         <p className="text-sm text-muted-foreground">Saved jobs by type/source and match score trends.</p>
       </motion.div>
-      <motion.div variants={container} initial="hidden" animate="visible" className="grid gap-4 sm:grid-cols-3">
-        <motion.div variants={staggerItem}>
-          <Card><CardContent className="flex flex-col items-center gap-3 p-5 text-center">
-            <span className="text-xs font-medium text-muted-foreground">Average Match</span>
-            <ScoreBadge score={data.avg} size="lg" />
-          </CardContent></Card>
-        </motion.div>
-        <motion.div variants={staggerItem}>
-          <Card><CardContent className="flex flex-col items-center gap-3 p-5 text-center">
-            <span className="text-xs font-medium text-muted-foreground">Scored Jobs</span>
-            <span className="text-3xl font-semibold tabular-nums text-primary">{data.scoredCount}</span>
-          </CardContent></Card>
-        </motion.div>
-        <motion.div variants={staggerItem}>
-          <Card><CardContent className="flex flex-col items-center gap-3 p-5 text-center">
-            <span className="text-xs font-medium text-muted-foreground">High Match (80+)</span>
-            <span className="text-3xl font-semibold tabular-nums text-emerald-500">{data.buckets[3].count}</span>
-          </CardContent></Card>
-        </motion.div>
-      </motion.div>
-      <motion.div variants={container} initial="hidden" animate="visible" className="grid gap-4 lg:grid-cols-2">
-        <motion.div variants={staggerItem}>
-          <Card><CardHeader><CardTitle>Jobs by Type</CardTitle></CardHeader><CardContent><SourceChart data={data.byType.length ? data.byType : [{ name: "No data", value: 1 }]} /></CardContent></Card>
-        </motion.div>
-        <motion.div variants={staggerItem}>
-          <Card><CardHeader><CardTitle>Jobs by Source</CardTitle></CardHeader><CardContent><SourceChart data={data.bySource.length ? data.bySource : [{ name: "No data", value: 1 }]} /></CardContent></Card>
-        </motion.div>
-        <motion.div variants={staggerItem}>
-          <Card><CardHeader><CardTitle>Match Trends</CardTitle></CardHeader><CardContent><ScoreDistribution data={data.buckets} /></CardContent></Card>
-        </motion.div>
-      </motion.div>
+      {isLoading ? (
+        <div className="space-y-5">
+          <div className="grid gap-4 sm:grid-cols-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="flex flex-col items-center gap-3 rounded-lg border p-5 text-center">
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-16 w-16 rounded-full" />
+              </div>
+            ))}
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <SkeletonChart />
+            <SkeletonChart />
+            <SkeletonChart />
+          </div>
+        </div>
+      ) : (
+        <>
+          <motion.div variants={container} initial="hidden" animate="visible" className="grid gap-4 sm:grid-cols-3">
+            <motion.div variants={staggerItem}>
+              <Card><CardContent className="flex flex-col items-center gap-3 p-5 text-center">
+                <span className="text-xs font-medium text-muted-foreground">Average Match</span>
+                <ScoreBadge score={data.avg} size="lg" />
+              </CardContent></Card>
+            </motion.div>
+            <motion.div variants={staggerItem}>
+              <Card><CardContent className="flex flex-col items-center gap-3 p-5 text-center">
+                <span className="text-xs font-medium text-muted-foreground">Scored Jobs</span>
+                <span className="text-3xl font-semibold tabular-nums text-primary">{data.scoredCount}</span>
+              </CardContent></Card>
+            </motion.div>
+            <motion.div variants={staggerItem}>
+              <Card><CardContent className="flex flex-col items-center gap-3 p-5 text-center">
+                <span className="text-xs font-medium text-muted-foreground">High Match (80+)</span>
+                <span className="text-3xl font-semibold tabular-nums text-emerald-500">{data.buckets[3].count}</span>
+              </CardContent></Card>
+            </motion.div>
+          </motion.div>
+          <motion.div variants={container} initial="hidden" animate="visible" className="grid gap-4 lg:grid-cols-2">
+            <motion.div variants={staggerItem}>
+              <Card><CardHeader><CardTitle>Jobs by Type</CardTitle></CardHeader><CardContent><SourceChart data={data.byType.length ? data.byType : [{ name: "No data", value: 1 }]} /></CardContent></Card>
+            </motion.div>
+            <motion.div variants={staggerItem}>
+              <Card><CardHeader><CardTitle>Jobs by Source</CardTitle></CardHeader><CardContent><SourceChart data={data.bySource.length ? data.bySource : [{ name: "No data", value: 1 }]} /></CardContent></Card>
+            </motion.div>
+            <motion.div variants={staggerItem}>
+              <Card><CardHeader><CardTitle>Match Trends</CardTitle></CardHeader><CardContent><ScoreDistribution data={data.buckets} /></CardContent></Card>
+            </motion.div>
+          </motion.div>
+        </>
+      )}
     </motion.div>
   );
 }

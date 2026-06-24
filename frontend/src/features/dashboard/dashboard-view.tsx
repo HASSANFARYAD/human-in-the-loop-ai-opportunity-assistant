@@ -7,6 +7,7 @@ import { Briefcase, CalendarClock, ClipboardCheck, Sparkles, Timer } from "lucid
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SourceChart, ScoreDistribution, TrendChart } from "@/components/charts/analytics-charts";
 import { NextBestAction } from "@/components/ui/next-best-action";
+import { Skeleton, SkeletonKPIRow, SkeletonChart } from "@/components/ui/skeleton";
 import { opportunityService } from "@/services/opportunity.service";
 import { staggerItem } from "@/lib/animation";
 import { cn } from "@/lib/utils";
@@ -97,33 +98,45 @@ export function DashboardView() {
         <h1 className="text-2xl font-semibold">Dashboard</h1>
         <p className="text-sm text-muted-foreground">Track saved jobs, match scores, reviews, and upcoming deadlines.</p>
       </motion.div>
-      {isLoading ? <div className="rounded-md border p-4 text-sm text-muted-foreground">Loading dashboard data...</div> : null}
       {hasError ? <div className="rounded-md border border-destructive/30 p-4 text-sm text-destructive">Some dashboard data could not be loaded. Refresh or check the API connection.</div> : null}
 
-      <NextBestAction
-        unscoredCount={unscoredCount}
-        hasProfile={false}
-        hasAiProvider={false}
-        totalJobs={savedJobs.length}
-      />
-
-      <motion.div variants={container} initial="hidden" animate="visible" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Kpi label="Saved Jobs" value={savedJobs.length} icon={Briefcase} />
-        <Kpi label="High Match (80+)" value={savedJobs.filter((j) => Number(j.match_score ?? j.score ?? 0) >= 80).length} icon={Sparkles} />
-        <Kpi label="Need Review" value={savedJobs.filter((j) => (j.status ?? "new").includes("review")).length} icon={ClipboardCheck} />
-        <Kpi label="Upcoming Deadlines" value={upcomingDeadlines} icon={CalendarClock} urgent={upcomingDeadlines > 0} />
-      </motion.div>
-      <motion.div variants={chartContainer} initial="hidden" animate="visible" className="grid gap-4 lg:grid-cols-2">
-        <motion.div variants={staggerItem}>
-          <Card><CardHeader><CardTitle>Job Sources</CardTitle></CardHeader><CardContent><SourceChart data={chartData.sources.length ? chartData.sources : [{ name: "No data", value: 1 }]} /></CardContent></Card>
-        </motion.div>
-        <motion.div variants={staggerItem}>
-          <Card><CardHeader><CardTitle>Match Score Distribution</CardTitle></CardHeader><CardContent><ScoreDistribution data={chartData.buckets} /></CardContent></Card>
-        </motion.div>
-        <motion.div variants={staggerItem}>
-          <Card><CardHeader><CardTitle>Weekly Activity</CardTitle></CardHeader><CardContent>{hasWeeklyData ? <TrendChart data={chartData.weekly} /> : <div className="py-12 text-center text-sm text-muted-foreground">No data available</div>}</CardContent></Card>
-        </motion.div>
-      </motion.div>
+      {isLoading ? (
+        <div className="space-y-6">
+          <Skeleton className="h-24 w-full rounded-lg" />
+          <SkeletonKPIRow />
+          <div className="grid gap-4 lg:grid-cols-2">
+            <SkeletonChart />
+            <SkeletonChart />
+            <SkeletonChart />
+          </div>
+        </div>
+      ) : (
+        <>
+          <NextBestAction
+            unscoredCount={unscoredCount}
+            hasProfile={false}
+            hasAiProvider={false}
+            totalJobs={savedJobs.length}
+          />
+          <motion.div variants={container} initial="hidden" animate="visible" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <Kpi label="Saved Jobs" value={savedJobs.length} icon={Briefcase} />
+            <Kpi label="High Match (80+)" value={savedJobs.filter((j) => Number(j.match_score ?? j.score ?? 0) >= 80).length} icon={Sparkles} />
+            <Kpi label="Need Review" value={savedJobs.filter((j) => (j.status ?? "new").includes("review")).length} icon={ClipboardCheck} />
+            <Kpi label="Upcoming Deadlines" value={upcomingDeadlines} icon={CalendarClock} urgent={upcomingDeadlines > 0} />
+          </motion.div>
+          <motion.div variants={chartContainer} initial="hidden" animate="visible" className="grid gap-4 lg:grid-cols-2">
+            <motion.div variants={staggerItem}>
+              <Card><CardHeader><CardTitle>Job Sources</CardTitle></CardHeader><CardContent><SourceChart data={chartData.sources.length ? chartData.sources : [{ name: "No data", value: 1 }]} /></CardContent></Card>
+            </motion.div>
+            <motion.div variants={staggerItem}>
+              <Card><CardHeader><CardTitle>Match Score Distribution</CardTitle></CardHeader><CardContent><ScoreDistribution data={chartData.buckets} /></CardContent></Card>
+            </motion.div>
+            <motion.div variants={staggerItem}>
+              <Card><CardHeader><CardTitle>Weekly Activity</CardTitle></CardHeader><CardContent>{hasWeeklyData ? <TrendChart data={chartData.weekly} /> : <div className="py-12 text-center text-sm text-muted-foreground">No data available</div>}</CardContent></Card>
+            </motion.div>
+          </motion.div>
+        </>
+      )}
     </motion.div>
   );
 }

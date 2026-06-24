@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { DataFields } from "@/components/ui/data-display";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Skeleton } from "@/components/ui/skeleton";
 import { opportunityService } from "@/services/opportunity.service";
 import { formatDate, scoreTone } from "@/lib/utils";
 import type { Opportunity, TailoredResume } from "@/types/api";
@@ -216,7 +217,29 @@ export function OpportunityDetailView() {
     setRecording(false);
   };
 
-  if (!item) return <div className="text-sm text-muted-foreground">Loading job...</div>;
+  if (!item) {
+    return (
+      <div className="space-y-5">
+        <div className="flex items-start gap-4">
+          <Skeleton className="h-16 w-16 rounded-lg" />
+          <div className="flex-1 space-y-2">
+            <Skeleton className="h-6 w-3/5" />
+            <Skeleton className="h-4 w-2/5" />
+            <Skeleton className="h-4 w-1/4" />
+          </div>
+        </div>
+        <div className="grid gap-4 md:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="space-y-2 rounded-lg border p-4">
+              <Skeleton className="h-3 w-16" />
+              <Skeleton className="h-5 w-20" />
+            </div>
+          ))}
+        </div>
+        <Skeleton className="h-64 w-full rounded-lg" />
+      </div>
+    );
+  }
   const importable = isImportableOpportunity(item);
   const scoreValue = importable ? item.match_score ?? item.score ?? null : null;
   const tailoredResume = (resumeReviews.data ?? []).find((entry) => entry.type === "tailored_resume") ?? null;
