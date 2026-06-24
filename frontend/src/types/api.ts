@@ -218,6 +218,24 @@ export interface AgentSection {
   message?: string;
   data?: unknown;
   job?: { id: number; title?: string; company?: string };
+  suggestions?: string[];
+}
+
+export interface AgentPersona {
+  tone: "professional" | "friendly" | "casual";
+  detail_level: "concise" | "balanced" | "thorough";
+  focus_area: "general" | "technical" | "managerial";
+}
+
+export interface PromptVersion {
+  id?: number;
+  name: string;
+  version: string;
+  template: string;
+  description?: string;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface AgentChatResponse {
