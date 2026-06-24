@@ -297,6 +297,14 @@ def _profile_with_id_alias(doc: dict) -> dict:
     return item
 
 
+def _job_with_id_alias(doc: dict) -> dict:
+    """Add 'id' as an alias for 'job_id' to maintain API compatibility."""
+    item = _strip_id(doc)
+    if item and "job_id" in item:
+        item["id"] = item["job_id"]
+    return item
+
+
 def list_profiles(user_id: int) -> list[dict[str, Any]]:
     docs = get_collection("profiles").find({"user_id": user_id}).sort([("is_default", pymongo.DESCENDING), ("name", pymongo.ASCENDING)])
     return [_profile_with_id_alias(d) for d in docs]
@@ -412,7 +420,7 @@ def list_jobs(user_id: int = 1, workspace_id: int | None = None, content_type: s
     cursor = jobs.find(filters).sort("updated_at", pymongo.DESCENDING)
     results = []
     for job in cursor:
-        item = _strip_id(job)
+        item = _job_with_id_alias(job)
         app = get_collection("applications").find_one({"job_id": item["job_id"]})
         if app:
             item["status"] = app.get("status", "")
@@ -439,7 +447,7 @@ def get_job(job_id: int, user_id: int = 1, workspace_id: int | None = None) -> d
         job = jobs.find_one({"job_id": job_id, "user_id": user_id, "workspace_id": scoped_workspace_id})
     if not job:
         return {}
-    item = _strip_id(job)
+    item = _job_with_id_alias(job)
     app = get_collection("applications").find_one({"job_id": job_id})
     if app:
         item["status"] = app.get("status", "")

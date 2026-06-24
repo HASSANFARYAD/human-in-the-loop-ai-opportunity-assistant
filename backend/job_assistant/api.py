@@ -2081,7 +2081,7 @@ async def score_jobs_batch(payload: BatchScoreIn, user: dict = Depends(current_u
     candidate_jobs = list_jobs(user["id"], content_type="job")
     ids = [int(job_id) for job_id in payload.job_ids]
     if payload.score_all_unscored:
-        ids = [int(job["id"]) for job in candidate_jobs if job.get("match_score") is None]
+        ids = [int(job["job_id"]) for job in candidate_jobs if job.get("match_score") is None]
     if not ids:
         detail = "No unscored jobs are available for scoring." if payload.score_all_unscored else "Select at least one job to score."
         raise HTTPException(status_code=400, detail=detail)
