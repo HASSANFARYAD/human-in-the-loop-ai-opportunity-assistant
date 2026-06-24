@@ -19,7 +19,7 @@ import { ResumePreview } from "./components/resume-preview";
 import { CoverLetterPreview } from "./components/cover-letter-preview";
 import { opportunityService } from "@/services/opportunity.service";
 import { formatDate, scoreTone } from "@/lib/utils";
-import type { Opportunity, TailoredResume } from "@/types/api";
+import type { Opportunity, Profile, TailoredResume } from "@/types/api";
 
 const VALID_OPPORTUNITY_TYPES = new Set(["job", "internship", "contract", "freelance"]);
 const SAFE_AUDIO_SCHEMES = new Set(["http:", "https:", "blob:", "data:"]);
@@ -69,7 +69,7 @@ function asText(value: unknown): string {
   return String(value);
 }
 
-function TailoredResumeCard({ resume }: { resume: TailoredResume | null }) {
+function TailoredResumeCard({ resume, profile, job }: { resume: TailoredResume | null; profile?: Profile | null; job?: Opportunity | null }) {
   const resumeDraft = asText(resume?.resume_draft);
   const copyText = [
     resumeDraft,
@@ -99,7 +99,7 @@ function TailoredResumeCard({ resume }: { resume: TailoredResume | null }) {
             <TabsList className="w-full">
               <TabsTrigger value="overview" className="flex-1">Overview</TabsTrigger>
               <TabsTrigger value="cover" className="flex-1">Cover Note</TabsTrigger>
-              <TabsTrigger value="draft" className="flex-1">Resume Draft</TabsTrigger>
+              <TabsTrigger value="draft" className="flex-1">Resume Preview</TabsTrigger>
             </TabsList>
             <TabsContent value="overview" className="w-full space-y-4">
               {resume?.tailored_summary ? <Section title="Tailored summary"><p className="whitespace-pre-wrap leading-6">{resume.tailored_summary}</p></Section> : null}
@@ -109,10 +109,10 @@ function TailoredResumeCard({ resume }: { resume: TailoredResume | null }) {
               {asList(resume?.application_guidance).length ? <Section title="Application guidance"><ul className="list-disc space-y-1 pl-5">{asList(resume?.application_guidance).map((item) => <li key={item}>{item}</li>)}</ul></Section> : null}
             </TabsContent>
             <TabsContent value="cover" className="w-full">
-              {resume?.optional_cover_note ? <Section title="Optional cover note"><p className="whitespace-pre-wrap leading-6">{resume.optional_cover_note}</p></Section> : <div className="rounded-md border border-dashed p-4 text-muted-foreground">No cover note was generated for this draft.</div>}
+              {resume?.optional_cover_note ? <CoverLetterPreview resume={resume} job={job ?? null} /> : <div className="rounded-md border border-dashed p-4 text-muted-foreground">No cover note was generated for this draft.</div>}
             </TabsContent>
             <TabsContent value="draft" className="w-full">
-              {resumeDraft ? <Section title="Copy-ready resume draft"><pre className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-sans leading-6">{resumeDraft}</pre></Section> : <div className="rounded-md border border-dashed p-4 text-muted-foreground">No resume draft available yet.</div>}
+              {resumeDraft ? <ResumePreview resume={resume} profile={profile ?? null} /> : <div className="rounded-md border border-dashed p-4 text-muted-foreground">No resume draft available yet.</div>}
             </TabsContent>
           </Tabs>
         ) : null}
@@ -282,7 +282,7 @@ export function OpportunityDetailView() {
             <Card><CardHeader><CardTitle>AI Evaluation</CardTitle></CardHeader><CardContent><DataFields data={item.evaluation ?? {}} /></CardContent></Card>
           </TabsContent>
           <TabsContent value="resume">
-            <TailoredResumeCard resume={tailoredResume} />
+            <TailoredResumeCard resume={tailoredResume} profile={(profiles.data ?? []).find((p) => p.is_default) ?? null} job={item} />
           </TabsContent>
           <TabsContent value="materials">
             <Card><CardHeader><CardTitle>Application Materials</CardTitle></CardHeader><CardContent><DataFields data={materials.data ?? {}} /></CardContent></Card>
