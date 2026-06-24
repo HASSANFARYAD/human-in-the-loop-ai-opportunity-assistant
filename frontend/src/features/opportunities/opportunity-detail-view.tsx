@@ -92,23 +92,23 @@ function TailoredResumeCard({ resume }: { resume: TailoredResume | null }) {
         {!resume ? <div className="rounded-md border border-dashed p-4 text-muted-foreground">No tailored resume yet. Use Tailor resume to generate a job-specific draft from your saved profile.</div> : null}
         {resume?.using_fallback ? <div className="rounded-md border p-3 text-muted-foreground">AI provider settings were unavailable or failed, so a local tailored draft was generated.{resume?.ai_error ? <span className="block mt-1 text-xs">{resume.ai_error}</span> : null}</div> : null}
         {resume ? (
-          <Tabs defaultValue="overview" className="space-y-4">
-            <TabsList>
-              <TabsTrigger value="overview">Overview</TabsTrigger>
-              <TabsTrigger value="cover">Cover Note</TabsTrigger>
-              <TabsTrigger value="draft">Resume Draft</TabsTrigger>
+          <Tabs defaultValue="overview" className="w-full space-y-4">
+            <TabsList className="w-full">
+              <TabsTrigger value="overview" className="flex-1">Overview</TabsTrigger>
+              <TabsTrigger value="cover" className="flex-1">Cover Note</TabsTrigger>
+              <TabsTrigger value="draft" className="flex-1">Resume Draft</TabsTrigger>
             </TabsList>
-            <TabsContent value="overview" className="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
+            <TabsContent value="overview" className="w-full space-y-4">
               {resume?.tailored_summary ? <Section title="Tailored summary"><p className="whitespace-pre-wrap leading-6">{resume.tailored_summary}</p></Section> : null}
               {asList(resume?.tailored_experience_bullets).length ? <Section title="Tailored experience bullets"><ul className="list-disc space-y-1 pl-5">{asList(resume?.tailored_experience_bullets).map((item) => <li key={item}>{item}</li>)}</ul></Section> : null}
               {asList(resume?.skills_to_emphasize).length ? <Section title="Skills to emphasize"><p>{asList(resume?.skills_to_emphasize).join(", ")}</p></Section> : null}
               {asList(resume?.keywords_to_include).length ? <Section title="Keywords to include"><p>{asList(resume?.keywords_to_include).join(", ")}</p></Section> : null}
               {asList(resume?.application_guidance).length ? <Section title="Application guidance"><ul className="list-disc space-y-1 pl-5">{asList(resume?.application_guidance).map((item) => <li key={item}>{item}</li>)}</ul></Section> : null}
             </TabsContent>
-            <TabsContent value="cover" className="max-h-[60vh] overflow-y-auto pr-1">
+            <TabsContent value="cover" className="w-full">
               {resume?.optional_cover_note ? <Section title="Optional cover note"><p className="whitespace-pre-wrap leading-6">{resume.optional_cover_note}</p></Section> : <div className="rounded-md border border-dashed p-4 text-muted-foreground">No cover note was generated for this draft.</div>}
             </TabsContent>
-            <TabsContent value="draft" className="max-h-[60vh] overflow-y-auto pr-1">
+            <TabsContent value="draft" className="w-full">
               {resumeDraft ? <Section title="Copy-ready resume draft"><pre className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-sans leading-6">{resumeDraft}</pre></Section> : <div className="rounded-md border border-dashed p-4 text-muted-foreground">No resume draft available yet.</div>}
             </TabsContent>
           </Tabs>
@@ -310,7 +310,7 @@ export function OpportunityDetailView() {
             <div className="flex items-center justify-between"><span className="text-muted-foreground">Is this relevant?</span><span className="flex gap-2"><Button size="icon" variant="outline" className="h-8 w-8" disabled={scoreFeedback.isPending} onClick={() => scoreFeedback.mutate("relevant")} aria-label="Mark relevant"><ThumbsUp className="h-4 w-4" /></Button><Button size="icon" variant="outline" className="h-8 w-8" disabled={scoreFeedback.isPending} onClick={() => scoreFeedback.mutate("irrelevant")} aria-label="Mark irrelevant"><ThumbsDown className="h-4 w-4" /></Button></span></div>
             {item.url && importable ? <Button asChild variant="outline" className="w-full"><a href={item.url} target="_blank" rel="noopener noreferrer"><ExternalLink className="h-4 w-4" /> Apply</a></Button> : <Button variant="outline" className="w-full" disabled>Apply unavailable</Button>}
             {item.source_email_open_url || item.source_url ? <Button asChild variant="outline" className="w-full"><a href={item.source_email_open_url || item.source_url || ""} target="_blank" rel="noopener noreferrer"><ExternalLink className="h-4 w-4" /> Open original source</a></Button> : null}<Button variant="outline" className="w-full" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button>
-            <Button variant="outline" className="w-full" onClick={() => statusUpdate.mutate("Applied")}><ExternalLink className="h-4 w-4" /> Mark applied</Button>
+            <Button variant="outline" className="w-full" loading={statusUpdate.isPending} onClick={() => statusUpdate.mutate("Applied")}><ExternalLink className="h-4 w-4" /> Mark applied</Button>
             {(profiles.data?.length ?? 0) > 1 ? (
               <label className="block text-xs text-muted-foreground">
                 Profile for scoring & tailoring
@@ -326,8 +326,8 @@ export function OpportunityDetailView() {
                 </select>
               </label>
             ) : null}
-            <Button className="w-full" disabled={!importable} onClick={() => score.mutate()}><Sparkles className="h-4 w-4" /> Refresh AI score</Button>
-            <Button className="w-full" variant="secondary" disabled={!importable} onClick={() => generate.mutate()}><FileText className="h-4 w-4" /> Generate materials</Button>
+            <Button className="w-full" loading={score.isPending} disabled={!importable} onClick={() => score.mutate()}><Sparkles className="h-4 w-4" /> Refresh AI score</Button>
+            <Button className="w-full" variant="secondary" loading={generate.isPending} disabled={!importable} onClick={() => generate.mutate()}><FileText className="h-4 w-4" /> Generate materials</Button>
             <Button className="w-full" variant="secondary" loading={tailorResume.isPending} disabled={!importable} onClick={() => tailorResume.mutate()}><FileText className="h-4 w-4" /> Tailor resume</Button>
             <label className="block text-xs text-muted-foreground">
               Resume document format
