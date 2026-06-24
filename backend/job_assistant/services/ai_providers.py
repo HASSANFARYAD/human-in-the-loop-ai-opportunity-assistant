@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from functools import lru_cache
 from typing import Any, Dict, Optional
 
@@ -244,6 +245,9 @@ def _generate_text(system: str, user: str, settings: dict[str, Any]) -> str:
     return _openai_compatible(api_key, model, system, user, config.get("base_url"))
 
 
+logger = logging.getLogger(__name__)
+
+
 def ask_json(
     system: str,
     user: str,
@@ -258,9 +262,15 @@ def ask_json(
     api_key = (settings.get("api_key") or "").strip()
     base_url = config.get("base_url") or ""
     if provider not in {"huggingface_local"} and provider != "langchain_openai" and not api_key:
-        return dict(fallback)
+        logger.warning("ask_json: %s has no API key — falling back to static data (user_id=%s)", provider, user_id)
+        out = dict(fallback)
+        out["_ai_error"] = f"{provider}: Missing API key — check encryption key and integration settings"
+        return out
     if provider == "langchain_openai" and not api_key and not _is_local_ollama_base_url(base_url):
-        return dict(fallback)
+        logger.warning("ask_json: langchain_openai has no API key and no local Ollama base URL — falling back (user_id=%s)", user_id)
+        out = dict(fallback)
+        out["_ai_error"] = f"{provider}: Missing API key"
+        return out
 
     try:
         text = _generate_text(system, user, settings)
@@ -288,8 +298,10 @@ def ask_text(
     api_key = (settings.get("api_key") or "").strip()
     base_url = config.get("base_url") or ""
     if provider not in {"huggingface_local"} and provider != "langchain_openai" and not api_key:
+        logger.warning("ask_text: %s has no API key — returning empty (user_id=%s)", provider, user_id)
         return ""
     if provider == "langchain_openai" and not api_key and not _is_local_ollama_base_url(base_url):
+        logger.warning("ask_text: langchain_openai has no API key and no local Ollama base URL — returning empty (user_id=%s)", user_id)
         return ""
 
     try:
