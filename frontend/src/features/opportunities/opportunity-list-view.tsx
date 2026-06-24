@@ -13,6 +13,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { DataTable } from "@/components/ui/data-display";
+import { ScoreBadge } from "@/components/ui/score-badge";
+import { EmptyStateCard } from "@/components/ui/empty-state-card";
 import { opportunityService } from "@/services/opportunity.service";
 import { formatDate, scoreTone } from "@/lib/utils";
 import type { BatchScoreResult, Opportunity, OpportunityContentType, ProfileJobDiscoveryResult } from "@/types/api";
@@ -240,21 +242,15 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
       ) : null}
       {batchResult ? <BatchScoreResultPanel result={batchResult} /> : null}
       {!jobs.isLoading && !pageItems.length ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 p-8 text-center">
-            <BriefcaseEmpty />
-            <div>
-              <h2 className="text-lg font-semibold">{emptyTitle}</h2>
-              <p className="mt-1 text-sm text-muted-foreground">{emptyMessage}</p>
-            </div>
-            {(jobs.data ?? []).length === 0 && !hasActiveClientFilters ? (
-              <div className="flex flex-wrap justify-center gap-2">
-                <Button asChild><Link href="/opportunities?source=public">Find jobs</Link></Button>
-                <Button asChild variant="outline"><Link href="/opportunities?import=manual">Add job</Link></Button>
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
+        <EmptyStateCard
+          icon={Search}
+          title={emptyTitle}
+          description={emptyMessage}
+          actions={(jobs.data ?? []).length === 0 && !hasActiveClientFilters ? [
+            { label: "Find jobs", href: "/opportunities?source=public", icon: Search },
+            { label: "Add job", href: "/opportunities?import=manual", icon: Search, variant: "outline" },
+          ] : undefined}
+        />
       ) : (
       <div className="overflow-x-auto rounded-lg border">
         <table className="w-full min-w-[860px] text-sm">
@@ -295,7 +291,7 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
                   <td className="p-3"><Badge>{item.classification || item.opportunity_type || "job"}</Badge></td>
                   <td className="p-3">{item.source}</td>
                   <td className="p-3">{formatDate(item.deadline)}</td>
-                  <td className={`p-3 font-semibold ${scoreTone(scoreValue)}`}>{scoreValue == null ? "Skipped" : Number(scoreValue)}</td>
+                  <td className="p-3"><ScoreBadge score={scoreValue} size="sm" /></td>
                   <td className="p-3"><Badge>{item.status || "new"}</Badge></td>
                   <td className="p-3 text-right">
                     <div className="flex justify-end gap-2">
@@ -350,10 +346,6 @@ function BatchScoreResultPanel({ result }: { result: BatchScoreResult }) {
       </CardContent>
     </Card>
   );
-}
-
-function BriefcaseEmpty() {
-  return <div className="grid h-12 w-12 place-items-center rounded-md bg-primary/10 text-primary"><Search className="h-5 w-5" /></div>;
 }
 
 function ManualImportView() {

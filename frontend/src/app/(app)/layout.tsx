@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { MobileNav, Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
+import { PageTransition } from "@/components/ui/page-transition";
 import { authService } from "@/services/auth.service";
 import { workspaceService } from "@/services/workspace.service";
 import { useAuthStore } from "@/stores/auth-store";
@@ -61,7 +62,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <Suspense fallback={null}>
           <MobileNav />
         </Suspense>
-        <main className="mx-auto w-full min-w-0 max-w-7xl flex-1 p-4 md:p-6">{children}</main>
+        <main className="mx-auto w-full min-w-0 max-w-7xl flex-1 p-4 md:p-6"><PageTransition>{children}</PageTransition></main>
       </div>
     </div>
   );

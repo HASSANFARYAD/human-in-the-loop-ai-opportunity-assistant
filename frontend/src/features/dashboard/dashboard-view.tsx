@@ -3,11 +3,13 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { Briefcase, CalendarClock, ClipboardCheck, Sparkles } from "lucide-react";
+import { Briefcase, CalendarClock, ClipboardCheck, Sparkles, Timer } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SourceChart, ScoreDistribution, TrendChart } from "@/components/charts/analytics-charts";
+import { NextBestAction } from "@/components/ui/next-best-action";
 import { opportunityService } from "@/services/opportunity.service";
 import { staggerItem } from "@/lib/animation";
+import { cn } from "@/lib/utils";
 
 const container = {
   hidden: {},
@@ -19,19 +21,27 @@ const chartContainer = {
   visible: { transition: { staggerChildren: 0.1, delayChildren: 0.3 } },
 };
 
-function Kpi({ label, value, icon: Icon }: { label: string; value: string | number; icon: typeof Briefcase }) {
+function Kpi({ label, value, icon: Icon, urgent }: { label: string; value: string | number; icon: typeof Briefcase; urgent?: boolean }) {
   return (
     <motion.div variants={staggerItem}>
       <Card>
         <CardContent className="flex items-center justify-between p-5">
           <div>
-            <div className="text-sm text-muted-foreground">{label}</div>
-            <div className="mt-2 text-2xl font-semibold tabular-nums">{value}</div>
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              {urgent ? <Timer className="h-3.5 w-3.5 text-destructive" /> : null}
+              {label}
+            </div>
+            <div className={cn("mt-2 text-2xl font-semibold tabular-nums", urgent && value !== 0 && Number(value) > 0 && "text-destructive")}>
+              {value}
+            </div>
           </div>
           <motion.span
             whileHover={{ rotate: 12, scale: 1.15 }}
             transition={{ type: "spring", stiffness: 300, damping: 15 }}
-            className="grid h-10 w-10 place-items-center rounded-md bg-primary/10 text-primary"
+            className={cn(
+              "grid h-10 w-10 place-items-center rounded-md",
+              urgent ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary",
+            )}
           >
             <Icon className="h-5 w-5" />
           </motion.span>
@@ -66,6 +76,16 @@ export function DashboardView() {
   const isLoading = jobs.isLoading;
   const hasError = jobs.isError;
 
+  const unscoredCount = useMemo(
+    () => savedJobs.filter((j) => j.match_score == null && j.score == null).length,
+    [savedJobs],
+  );
+
+  const upcomingDeadlines = useMemo(
+    () => savedJobs.filter((j) => j.deadline).length,
+    [savedJobs],
+  );
+
   return (
     <motion.div
       variants={container}
@@ -79,11 +99,19 @@ export function DashboardView() {
       </motion.div>
       {isLoading ? <div className="rounded-md border p-4 text-sm text-muted-foreground">Loading dashboard data...</div> : null}
       {hasError ? <div className="rounded-md border border-destructive/30 p-4 text-sm text-destructive">Some dashboard data could not be loaded. Refresh or check the API connection.</div> : null}
+
+      <NextBestAction
+        unscoredCount={unscoredCount}
+        hasProfile={false}
+        hasAiProvider={false}
+        totalJobs={savedJobs.length}
+      />
+
       <motion.div variants={container} initial="hidden" animate="visible" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Saved Jobs" value={savedJobs.length} icon={Briefcase} />
-        <Kpi label="High Match" value={savedJobs.filter((j) => Number(j.match_score ?? j.score ?? 0) >= 80).length} icon={Sparkles} />
-        <Kpi label="Pending Reviews" value={savedJobs.filter((j) => (j.status ?? "new").includes("review")).length} icon={ClipboardCheck} />
-        <Kpi label="Upcoming Deadlines" value={savedJobs.filter((j) => j.deadline).length} icon={CalendarClock} />
+        <Kpi label="High Match (80+)" value={savedJobs.filter((j) => Number(j.match_score ?? j.score ?? 0) >= 80).length} icon={Sparkles} />
+        <Kpi label="Need Review" value={savedJobs.filter((j) => (j.status ?? "new").includes("review")).length} icon={ClipboardCheck} />
+        <Kpi label="Upcoming Deadlines" value={upcomingDeadlines} icon={CalendarClock} urgent={upcomingDeadlines > 0} />
       </motion.div>
       <motion.div variants={chartContainer} initial="hidden" animate="visible" className="grid gap-4 lg:grid-cols-2">
         <motion.div variants={staggerItem}>
