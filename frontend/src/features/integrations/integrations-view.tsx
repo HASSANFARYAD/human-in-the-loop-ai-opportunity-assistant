@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Database, KeyRound, Mail, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Bot, Database, KeyRound, Mail, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,7 @@ const AI_PROVIDERS = [
   ["langchain_openai", "LangChain + OpenAI-compatible"],
   ["azure_openai", "Azure OpenAI"],
   ["grok", "Grok / xAI"],
+  ["groq", "Groq"],
   ["claude", "Anthropic Claude"],
   ["gemini", "Google Gemini"],
   ["huggingface", "Hugging Face"],
@@ -34,88 +35,15 @@ const AI_PROVIDER_DEFAULTS: Record<string, Record<string, string>> = {
   langchain_openai: { model: "llama3.1", base_url: "http://localhost:11434/v1" },
   azure_openai: { model: "Kimi-K2.5", endpoint: "", api_version: "2024-10-21", deployment: "" },
   grok: { model: "grok-3-mini", base_url: "https://api.x.ai/v1" },
+  groq: { model: "llama-3.3-70b-versatile", base_url: "https://api.groq.com/openai/v1" },
   claude: { model: "claude-3-5-sonnet-latest" },
   gemini: { model: "gemini-1.5-pro" },
   huggingface: { model: "mistralai/Mistral-7B-Instruct-v0.3", endpoint: "" },
 };
 
-const AI_PROVIDER_MODEL_FALLBACKS: Record<string, string[]> = {
-  huggingface_local: ["Qwen/Qwen2.5-0.5B-Instruct", "HuggingFaceTB/SmolLM2-360M-Instruct", "TinyLlama/TinyLlama-1.1B-Chat-v1.0"],
-  openai: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"],
-  langchain_openai: ["llama3.1", "llama3.1:8b", "gpt-4o-mini"],
-  azure_openai: ["Kimi-K2.5"],
-  grok: ["grok-3-mini", "grok-3", "grok-2-latest"],
-  claude: ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"],
-  gemini: ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"],
-  huggingface: ["mistralai/Mistral-7B-Instruct-v0.3", "meta-llama/Meta-Llama-3-8B-Instruct"],
-};
-
 function isLocalOllamaBaseUrl(baseUrl: string) {
   const normalized = baseUrl.trim().replace(/\/$/, "");
   return normalized.startsWith("http://localhost:11434") || normalized.startsWith("http://127.0.0.1:11434") || normalized.startsWith("http://[::1]:11434");
-}
-
-async function fetchAiModels(provider: string, apiKey: string, config: Record<string, string>) {
-  const baseUrl = (config.base_url || "").trim().replace(/\/$/, "");
-  const localOllama = provider === "langchain_openai" && isLocalOllamaBaseUrl(baseUrl || "http://localhost:11434/v1");
-
-  if (provider !== "huggingface_local" && !apiKey.trim() && !localOllama) throw new Error("Enter the provider API key before fetching models");
-
-  if (provider === "huggingface_local") {
-    return AI_PROVIDER_MODEL_FALLBACKS.huggingface_local;
-  }
-
-  if (provider === "openai" || provider === "grok") {
-    const baseUrl = (provider === "grok" ? config.base_url || AI_PROVIDER_DEFAULTS.grok.base_url : config.base_url || "https://api.openai.com/v1").replace(/\/$/, "");
-    const response = await fetch(`${baseUrl}/models`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15000) });
-    if (!response.ok) throw new Error(`Model fetch failed with ${response.status}`);
-    const data = await response.json();
-    return ((data.data ?? []) as Array<{ id?: string }>).map((item) => item.id).filter(Boolean) as string[];
-  }
-
-  if (provider === "langchain_openai" && localOllama) {
-    const ollamaBase = baseUrl.replace(/\/v1$/, "");
-    const response = await fetch(`${ollamaBase || "http://localhost:11434"}/api/tags`, { signal: AbortSignal.timeout(15000) });
-    if (!response.ok) throw new Error(`Model fetch failed with ${response.status}`);
-    const data = await response.json();
-    return ((data.models ?? []) as Array<{ name?: string; model?: string }>).map((item) => item.name || item.model).filter(Boolean) as string[];
-  }
-
-  if (provider === "langchain_openai") {
-    const response = await fetch(`${baseUrl || "https://api.openai.com/v1"}/models`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15000) });
-    if (!response.ok) throw new Error(`Model fetch failed with ${response.status}`);
-    const data = await response.json();
-    return ((data.data ?? []) as Array<{ id?: string }>).map((item) => item.id).filter(Boolean) as string[];
-  }
-
-  if (provider === "claude") {
-    const response = await fetch("https://api.anthropic.com/v1/models", { headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }, signal: AbortSignal.timeout(15000) });
-    if (!response.ok) throw new Error(`Model fetch failed with ${response.status}`);
-    const data = await response.json();
-    return ((data.data ?? []) as Array<{ id?: string }>).map((item) => item.id).filter(Boolean) as string[];
-  }
-
-  if (provider === "gemini") {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`, { signal: AbortSignal.timeout(15000) });
-    if (!response.ok) throw new Error(`Model fetch failed with ${response.status}`);
-    const data = await response.json();
-    return ((data.models ?? []) as Array<{ name?: string; supportedGenerationMethods?: string[] }>)
-      .filter((item) => item.supportedGenerationMethods?.includes("generateContent"))
-      .map((item) => item.name?.replace("models/", ""))
-      .filter(Boolean) as string[];
-  }
-
-  if (provider === "azure_openai") {
-    const endpoint = (config.endpoint || "").replace(/\/$/, "");
-    const apiVersion = config.api_version || AI_PROVIDER_DEFAULTS.azure_openai.api_version;
-    if (!endpoint) throw new Error("Enter the Azure endpoint before fetching deployments");
-    const response = await fetch(`${endpoint}/openai/deployments?api-version=${encodeURIComponent(apiVersion)}`, { headers: { "api-key": apiKey }, signal: AbortSignal.timeout(15000) });
-    if (!response.ok) throw new Error(`Deployment fetch failed with ${response.status}`);
-    const data = await response.json();
-    return ((data.data ?? []) as Array<{ id?: string; model?: string }>).map((item) => item.id || item.model).filter(Boolean) as string[];
-  }
-
-  return AI_PROVIDER_MODEL_FALLBACKS[provider] ?? [];
 }
 
 const SERVICES = [
@@ -362,8 +290,6 @@ function AiProviderForm({
   const { apiKey, setApiKey, config, setConfig } = form;
   const provider = config.provider || "huggingface_local";
   const providerDefaults = AI_PROVIDER_DEFAULTS[provider] ?? AI_PROVIDER_DEFAULTS.openai;
-  const [modelOptions, setModelOptions] = useState<string[]>(AI_PROVIDER_MODEL_FALLBACKS[provider] ?? [providerDefaults.model].filter(Boolean));
-  const [modelsLoading, setModelsLoading] = useState(false);
   const update = (key: string, value: string) => setConfig((current) => ({ ...current, [key]: value }));
   const modelValue = config.model || providerDefaults.model || "";
   const localOllama = provider === "langchain_openai" && isLocalOllamaBaseUrl(config.base_url || providerDefaults.base_url || "http://localhost:11434/v1");
@@ -379,7 +305,6 @@ function AiProviderForm({
       api_version: defaults.api_version || "",
       deployment: defaults.deployment || "",
     });
-    setModelOptions(AI_PROVIDER_MODEL_FALLBACKS[nextProvider] ?? [defaults.model].filter(Boolean));
   };
 
   const saveConfig: Record<string, unknown> = { provider, model: modelValue };
@@ -389,30 +314,13 @@ function AiProviderForm({
   if (provider === "openai" && config.base_url) saveConfig.base_url = config.base_url;
   if (provider === "langchain_openai") saveConfig.base_url = config.base_url || providerDefaults.base_url || "http://localhost:11434/v1";
   if (provider === "grok") saveConfig.base_url = config.base_url || providerDefaults.base_url;
+  if (provider === "groq") saveConfig.base_url = config.base_url || providerDefaults.base_url;
   if (provider === "azure_openai") {
     saveConfig.endpoint = config.endpoint || "";
     saveConfig.api_version = config.api_version || providerDefaults.api_version;
     saveConfig.deployment = config.deployment || "";
   }
   if (provider === "huggingface") saveConfig.endpoint = config.endpoint || "";
-
-  const handleFetchModels = async () => {
-    setModelsLoading(true);
-    try {
-      const models = await fetchAiModels(provider, apiKey, config);
-      const nextModels = models.length ? models : AI_PROVIDER_MODEL_FALLBACKS[provider] ?? [];
-      setModelOptions(nextModels);
-      if (nextModels.length && !nextModels.includes(modelValue)) update("model", nextModels[0]);
-      toast.success(models.length ? "Models loaded from provider" : "Using recommended models");
-    } catch (error) {
-      const fallbackModels = AI_PROVIDER_MODEL_FALLBACKS[provider] ?? [];
-      setModelOptions(fallbackModels);
-      if (fallbackModels.length && !fallbackModels.includes(modelValue)) update("model", fallbackModels[0]);
-      toast.error(`${(error as Error).message}. Showing recommended models.`);
-    } finally {
-      setModelsLoading(false);
-    }
-  };
 
   return (
     <div className="grid gap-4 md:grid-cols-2">
@@ -429,7 +337,7 @@ function AiProviderForm({
       <Field label="Provider"><select className="h-10 rounded-md border bg-background px-3 text-sm" value={provider} onChange={(event) => handleProviderChange(event.target.value)}>{AI_PROVIDERS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
       {provider === "openai" || provider === "langchain_openai" ? <Field label={provider === "langchain_openai" ? "Base URL (Ollama or compatible)" : "Base URL (optional)"}><Input value={config.base_url ?? ""} onChange={(event) => update("base_url", event.target.value)} placeholder={provider === "langchain_openai" ? "http://localhost:11434/v1" : "Leave blank for OpenAI default"} /></Field> : null}
       {provider === "huggingface_local" ? <Field label="Local model"><Input value={config.model ?? providerDefaults.model} onChange={(event) => update("model", event.target.value)} placeholder="Qwen/Qwen2.5-0.5B-Instruct" /></Field> : null}
-      {provider === "grok" ? <Field label="Base URL"><Input value={config.base_url || providerDefaults.base_url} onChange={(event) => update("base_url", event.target.value)} /></Field> : null}
+      {provider === "grok" || provider === "groq" ? <Field label="Base URL"><Input value={config.base_url || providerDefaults.base_url} onChange={(event) => update("base_url", event.target.value)} /></Field> : null}
       {provider === "azure_openai" ? (
         <>
           <Field label="Azure endpoint"><Input value={config.endpoint ?? ""} onChange={(event) => update("endpoint", event.target.value)} placeholder="https://your-resource.openai.azure.com" /></Field>
@@ -438,21 +346,9 @@ function AiProviderForm({
         </>
       ) : null}
       {provider === "huggingface" ? <Field label="Endpoint override (optional)"><Input value={config.endpoint ?? ""} onChange={(event) => update("endpoint", event.target.value)} placeholder={`https://api-inference.huggingface.co/models/${modelValue}`} /></Field> : null}
-      <div className="grid gap-2 md:col-span-2">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-64 flex-1">
-            <Field label={provider === "azure_openai" ? "Deployment / model" : "Model"}>
-              <select className="h-10 rounded-md border bg-background px-3 text-sm" value={modelValue} onChange={(event) => update("model", event.target.value)}>
-                {Array.from(new Set([modelValue, ...modelOptions].filter(Boolean))).map((model) => <option key={model} value={model}>{model}</option>)}
-              </select>
-            </Field>
-          </div>
-          <Button variant="outline" disabled={modelsLoading || provider === "huggingface_local" || (!apiKey.trim() && !localOllama)} onClick={handleFetchModels}>
-            <RefreshCw className={modelsLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"} /> Fetch models
-          </Button>
-        </div>
-        <p className="text-xs text-muted-foreground">{provider === "huggingface_local" ? "Local HF models do not need an API key. Pick a small instruct model like Qwen/Qwen2.5-0.5B-Instruct, then save." : localOllama ? "Ollama can be queried locally without an API key. Use the local OpenAI-compatible endpoint, then fetch installed models." : "Enter the API key first, then fetch models. If the provider blocks browser model-list calls, recommended models are shown."}</p>
-      </div>
+      <Field label={provider === "azure_openai" ? "Deployment / model" : "Model"}>
+        <Input value={modelValue} onChange={(event) => update("model", event.target.value)} placeholder={providerDefaults.model || "Enter model name"} />
+      </Field>
       <SaveButton disabled={saving || (apiKeyRequired && !apiKey && !selected?.has_api_key)} onClick={() => onSave(saveConfig)} />
     </div>
   );
