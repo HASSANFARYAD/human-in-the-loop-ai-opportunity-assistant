@@ -29,6 +29,13 @@ from job_assistant.auth import (
 from job_assistant.compliance import admin_review, apply_retention_policies, approve_user_deletion, export_user_data, list_compliance_exports, request_user_deletion
 from job_assistant.config import settings
 from job_assistant.db import (
+    create_conversation,
+    list_conversations,
+    get_conversation,
+    update_conversation,
+    delete_conversation,
+    add_conversation_message,
+    get_conversation_messages,
     create_feedback,
     create_reminder,
     cleanup_non_opportunity_records,
@@ -103,7 +110,7 @@ from job_assistant.db import (
 from job_assistant.runtime import runtime_status, validate_startup_configuration
 from job_assistant.provider_registry import provider_registry
 from job_assistant.ai_orchestrator import ai_orchestrator
-from job_assistant.agent_chat import chat_reply, classify_intent, run_job_search
+from job_assistant.agent_chat import chat_reply, chat_reply_stream, classify_intent, run_job_search
 from job_assistant.automation_engine import automation_engine
 from job_assistant.observability import acknowledge_alert, metrics_summary, prometheus_text
 from job_assistant.publishing_engine import approve_post, publish_post, validate_target
@@ -423,7 +430,17 @@ class AIAskIn(BaseModel):
 class AgentChatIn(BaseModel):
     message: str
     history: list[Dict[str, str]] = Field(default_factory=list)
+    conversation_id: Optional[int] = None
     workspace_id: Optional[int] = None
+
+
+class ConversationCreateIn(BaseModel):
+    title: str = ""
+    workspace_id: Optional[int] = None
+
+
+class ConversationUpdateIn(BaseModel):
+    title: str
 
 
 class ScoreFeedbackIn(BaseModel):
@@ -1402,43 +1419,103 @@ async def agent_chat_stream(payload: AgentChatIn, user: dict = Depends(current_u
     workspace_id = payload.workspace_id
     history = payload.history
     message = payload.message
+    conversation_id = payload.conversation_id
 
     def _sse(event: str, data: dict[str, Any]) -> str:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
     def event_stream():
+        nonlocal conversation_id
         try:
+            # Auto-create conversation on first message
+            if not conversation_id:
+                title = (message[:80] + "...") if len(message) > 80 else message
+                conversation_id = create_conversation(user_id, title, workspace_id=workspace_id)
+                yield _sse("conversation", {"conversation_id": conversation_id})
+
+            # Save user message
+            add_conversation_message(conversation_id, "user", message)
+
             routing = classify_intent(message, history=history, user_id=user_id)
             profile = get_profile(user_id) or {}
             yield _sse("intents", {"intents": routing["intents"]})
+
+            assistant_sections: list[dict[str, Any]] = []
             for intent in routing["intents"]:
                 try:
                     if intent == "chat":
-                        # Stream the conversational reply word-by-word for a
-                        # live, human-like typing experience.
                         opportunities = list_jobs(user_id, workspace_id=workspace_id)
-                        reply = chat_reply(message, history=history, profile=profile, opportunities=opportunities, user_id=user_id)
                         yield _sse("section", {"agent": "chat", "type": "message", "message": ""})
-                        words = reply.split(" ")
-                        for i, word in enumerate(words):
-                            chunk = word if i == 0 else " " + word
-                            yield _sse("delta", {"text": chunk})
+                        full_reply = ""
+                        stream_iter = chat_reply_stream(
+                            message, history=history, profile=profile,
+                            opportunities=opportunities, user_id=user_id,
+                        )
+                        for token in stream_iter:
+                            full_reply += token
+                            yield _sse("delta", {"text": token})
+                        assistant_sections.append({"agent": "chat", "type": "message", "message": full_reply})
                         continue
+
                     section = _run_agent_intent(intent, routing, profile, user_id, workspace_id, message=message, history=history)
+                    assistant_sections.append(section)
                 except HTTPException as exc:
                     section = {"agent": intent, "type": "error", "message": str(exc.detail)}
+                    assistant_sections.append(section)
                     yield _sse("section", section)
                     continue
                 except Exception:
                     section = {"agent": intent, "type": "error", "message": "Something went wrong while running this step."}
+                    assistant_sections.append(section)
                     yield _sse("section", section)
                     continue
                 yield _sse("section", section)
-            yield _sse("done", {})
+
+            # Save assistant response
+            content = next((s.get("message", "") for s in assistant_sections if s.get("type") == "message"), "")
+            add_conversation_message(conversation_id, "assistant", content, sections=assistant_sections)
+            yield _sse("done", {"conversation_id": conversation_id})
         except Exception:
             yield _sse("error", {"message": "The assistant could not complete your request."})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/agent/conversations")
+async def create_conversation_endpoint(payload: ConversationCreateIn, user: dict = Depends(current_user)):
+    title = payload.title.strip() or "New conversation"
+    cid = create_conversation(user["id"], title, workspace_id=payload.workspace_id)
+    return {"conversation_id": cid, "title": title}
+
+
+@router.get("/agent/conversations")
+async def list_conversations_endpoint(limit: int = 50, user: dict = Depends(current_user)):
+    return list_conversations(user["id"], limit=limit)
+
+
+@router.get("/agent/conversations/{conversation_id}")
+async def get_conversation_endpoint(conversation_id: int, user: dict = Depends(current_user)):
+    conv = get_conversation(conversation_id, user["id"])
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    messages = get_conversation_messages(conversation_id)
+    return {**conv, "messages": messages}
+
+
+@router.patch("/agent/conversations/{conversation_id}")
+async def update_conversation_endpoint(conversation_id: int, payload: ConversationUpdateIn, user: dict = Depends(current_user)):
+    ok = update_conversation(conversation_id, user["id"], payload.dict())
+    if not ok:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"status": "ok"}
+
+
+@router.delete("/agent/conversations/{conversation_id}")
+async def delete_conversation_endpoint(conversation_id: int, user: dict = Depends(current_user)):
+    ok = delete_conversation(conversation_id, user["id"])
+    if not ok:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"status": "ok"}
 
 
 @router.get("/automation/rules")
