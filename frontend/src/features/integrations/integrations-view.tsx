@@ -67,7 +67,7 @@ async function fetchAiModels(provider: string, apiKey: string, config: Record<st
 
   if (provider === "openai" || provider === "grok") {
     const baseUrl = (provider === "grok" ? config.base_url || AI_PROVIDER_DEFAULTS.grok.base_url : config.base_url || "https://api.openai.com/v1").replace(/\/$/, "");
-    const response = await fetch(`${baseUrl}/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
+    const response = await fetch(`${baseUrl}/models`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`Model fetch failed with ${response.status}`);
     const data = await response.json();
     return ((data.data ?? []) as Array<{ id?: string }>).map((item) => item.id).filter(Boolean) as string[];
@@ -75,28 +75,28 @@ async function fetchAiModels(provider: string, apiKey: string, config: Record<st
 
   if (provider === "langchain_openai" && localOllama) {
     const ollamaBase = baseUrl.replace(/\/v1$/, "");
-    const response = await fetch(`${ollamaBase || "http://localhost:11434"}/api/tags`);
+    const response = await fetch(`${ollamaBase || "http://localhost:11434"}/api/tags`, { signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`Model fetch failed with ${response.status}`);
     const data = await response.json();
     return ((data.models ?? []) as Array<{ name?: string; model?: string }>).map((item) => item.name || item.model).filter(Boolean) as string[];
   }
 
   if (provider === "langchain_openai") {
-    const response = await fetch(`${baseUrl || "https://api.openai.com/v1"}/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
+    const response = await fetch(`${baseUrl || "https://api.openai.com/v1"}/models`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`Model fetch failed with ${response.status}`);
     const data = await response.json();
     return ((data.data ?? []) as Array<{ id?: string }>).map((item) => item.id).filter(Boolean) as string[];
   }
 
   if (provider === "claude") {
-    const response = await fetch("https://api.anthropic.com/v1/models", { headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" } });
+    const response = await fetch("https://api.anthropic.com/v1/models", { headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }, signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`Model fetch failed with ${response.status}`);
     const data = await response.json();
     return ((data.data ?? []) as Array<{ id?: string }>).map((item) => item.id).filter(Boolean) as string[];
   }
 
   if (provider === "gemini") {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`);
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`, { signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`Model fetch failed with ${response.status}`);
     const data = await response.json();
     return ((data.models ?? []) as Array<{ name?: string; supportedGenerationMethods?: string[] }>)
@@ -109,7 +109,7 @@ async function fetchAiModels(provider: string, apiKey: string, config: Record<st
     const endpoint = (config.endpoint || "").replace(/\/$/, "");
     const apiVersion = config.api_version || AI_PROVIDER_DEFAULTS.azure_openai.api_version;
     if (!endpoint) throw new Error("Enter the Azure endpoint before fetching deployments");
-    const response = await fetch(`${endpoint}/openai/deployments?api-version=${encodeURIComponent(apiVersion)}`, { headers: { "api-key": apiKey } });
+    const response = await fetch(`${endpoint}/openai/deployments?api-version=${encodeURIComponent(apiVersion)}`, { headers: { "api-key": apiKey }, signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`Deployment fetch failed with ${response.status}`);
     const data = await response.json();
     return ((data.data ?? []) as Array<{ id?: string; model?: string }>).map((item) => item.id || item.model).filter(Boolean) as string[];
