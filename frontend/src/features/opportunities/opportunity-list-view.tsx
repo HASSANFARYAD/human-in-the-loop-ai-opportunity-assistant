@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { DataTable } from "@/components/ui/data-display";
 import { ScoreBadge } from "@/components/ui/score-badge";
 import { EmptyStateCard } from "@/components/ui/empty-state-card";
+import { SkeletonTable } from "@/components/ui/skeleton";
 import { opportunityService } from "@/services/opportunity.service";
 import { formatDate, scoreTone } from "@/lib/utils";
 import type { BatchScoreResult, Opportunity, OpportunityContentType, ProfileJobDiscoveryResult } from "@/types/api";
@@ -241,7 +242,9 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
         </div>
       ) : null}
       {batchResult ? <BatchScoreResultPanel result={batchResult} /> : null}
-      {!jobs.isLoading && !pageItems.length ? (
+      {jobs.isLoading ? (
+        <SkeletonTable rows={6} cols={7} />
+      ) : !pageItems.length ? (
         <EmptyStateCard
           icon={Search}
           title={emptyTitle}

@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { DataFields, DataTable } from "@/components/ui/data-display";
+import { Skeleton } from "@/components/ui/skeleton";
 import { auditService } from "@/services/audit.service";
 import { feedbackService } from "@/services/feedback.service";
 import { opportunityService } from "@/services/opportunity.service";
@@ -89,7 +90,7 @@ function AdminConfiguration({ data, loading }: { data?: { configs: AdminConfig[]
               <CardContent className="p-5">
                 <Icon className="mb-3 h-5 w-5 text-primary" />
                 <div className="font-medium">{item.title.replace(" Settings", "")}</div>
-                <div className="mt-2 text-2xl font-semibold capitalize">{loading ? "loading" : status}</div>
+                <div className="mt-2 text-2xl font-semibold capitalize">{loading ? <Skeleton className="h-7 w-20" /> : status}</div>
                 <div className="text-xs text-muted-foreground">{statuses[item.type]?.active_count ?? 0} active / {statuses[item.type]?.count ?? 0} saved</div>
               </CardContent>
             </Card>
