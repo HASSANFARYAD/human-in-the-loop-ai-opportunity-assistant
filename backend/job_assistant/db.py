@@ -178,14 +178,22 @@ def create_user(email: str, password_hash: str, full_name: str = "") -> int:
     return user_id
 
 
+def _user_with_id_alias(doc: dict) -> dict:
+    """Add 'id' as an alias for 'user_id' to maintain API compatibility."""
+    item = _strip_id(doc)
+    if item and "user_id" in item:
+        item["id"] = item["user_id"]
+    return item
+
+
 def get_user_by_email(email: str) -> dict[str, Any]:
     doc = get_collection("users").find_one({"lower_email": email.strip().lower()})
-    return _strip_id(doc) if doc else {}
+    return _user_with_id_alias(doc) if doc else {}
 
 
 def get_user(user_id: int) -> dict[str, Any]:
     doc = get_collection("users").find_one({"user_id": user_id, "is_active": 1})
-    return _strip_id(doc) if doc else {}
+    return _user_with_id_alias(doc) if doc else {}
 
 
 def _strip_id(doc: dict) -> dict:
@@ -1067,7 +1075,7 @@ def get_user_by_session_token(token: str) -> dict[str, Any]:
     if not doc:
         return {}
     user = get_collection("users").find_one({"user_id": doc["user_id"], "is_active": 1})
-    return _strip_id(user) if user else {}
+    return _user_with_id_alias(user) if user else {}
 
 
 def revoke_session_token(token: str) -> None:
