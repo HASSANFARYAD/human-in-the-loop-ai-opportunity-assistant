@@ -110,7 +110,7 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "30"))
     session_cookie_name: str = os.getenv("SESSION_COOKIE_NAME", "job_assistant_refresh")
     session_cookie_secure: bool = _bool_env("SESSION_COOKIE_SECURE", os.getenv("ENVIRONMENT", "dev") == "prod")
-    session_cookie_samesite: str = os.getenv("SESSION_COOKIE_SAMESITE", "lax").strip().lower()
+    session_cookie_samesite: str = os.getenv("SESSION_COOKIE_SAMESITE", "none" if os.getenv("ENVIRONMENT", "dev") == "prod" else "lax").strip().lower()
     session_cookie_path: str = os.getenv("SESSION_COOKIE_PATH", "/api/v1/auth")
     password_reset_token_expire_minutes: int = int(os.getenv("PASSWORD_RESET_TOKEN_EXPIRE_MINUTES", "60"))
     frontend_reset_password_url: str = os.getenv("FRONTEND_RESET_PASSWORD_URL", f"{os.getenv('FRONTEND_BASE_URL', os.getenv('APP_BASE_URL', 'http://localhost:3000')).rstrip('/')}/reset-password")
