@@ -48,7 +48,7 @@ def _openai_compatible(api_key: str, model: str, system: str, user: str, base_ur
     from openai import OpenAI
 
     client = OpenAI(api_key=api_key, base_url=base_url or None)
-    response = client.chat.completions.create(model=model, messages=_messages(system, user), temperature=0.2)
+    response = client.chat.completions.create(model=model, messages=_messages(system, user), temperature=0.2, max_tokens=4096)
     return response.choices[0].message.content or ""
 
 
@@ -61,7 +61,7 @@ def _langchain_openai(api_key: str, model: str, system: str, user: str, config: 
     if not resolved_api_key:
         raise ValueError("Missing API key for LangChain OpenAI-compatible provider")
 
-    client = ChatOpenAI(api_key=resolved_api_key, base_url=base_url, model=model, temperature=0.2)
+    client = ChatOpenAI(api_key=resolved_api_key, base_url=base_url, model=model, temperature=0.2, max_tokens=4096)
     response = client.invoke([SystemMessage(content=system), HumanMessage(content=user)])
     content = getattr(response, "content", "")
     if isinstance(content, list):
@@ -110,7 +110,7 @@ def _huggingface_local(model: str, system: str, user: str) -> str:
     with torch.no_grad():
         output_ids = loaded_model.generate(
             **inputs,
-            max_new_tokens=900,
+            max_new_tokens=4096,
             do_sample=False,
             temperature=0.2,
             pad_token_id=tokenizer.eos_token_id or tokenizer.pad_token_id,
@@ -135,9 +135,9 @@ def _azure_openai(api_key: str, model: str, system: str, user: str, config: dict
         api_style = "responses" if any(tag in name for tag in ("codex", "gpt-5", "o1", "o3", "o4")) else "chat"
     client = AzureOpenAI(api_key=api_key, azure_endpoint=endpoint, api_version=api_version)
     if api_style == "responses":
-        response = client.responses.create(model=deployment, instructions=system, input=user)
+        response = client.responses.create(model=deployment, instructions=system, input=user, max_output_tokens=4096)
         return response.output_text or ""
-    response = client.chat.completions.create(model=deployment, messages=_messages(system, user), temperature=0.2)
+    response = client.chat.completions.create(model=deployment, messages=_messages(system, user), temperature=0.2, max_tokens=4096)
     return response.choices[0].message.content or ""
 
 
@@ -154,7 +154,7 @@ def _claude(api_key: str, model: str, system: str, user: str) -> str:
             "model": model,
             "system": system,
             "messages": [{"role": "user", "content": user}],
-            "max_tokens": 1800,
+            "max_tokens": 4096,
             "temperature": 0.2,
         },
         timeout=60,
@@ -171,7 +171,7 @@ def _gemini(api_key: str, model: str, system: str, user: str) -> str:
         json={
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": user}]}],
-            "generationConfig": {"temperature": 0.2},
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096},
         },
         timeout=60,
     )
@@ -186,7 +186,7 @@ def _huggingface(api_key: str, model: str, system: str, user: str, config: dict[
     response = requests.post(
         endpoint,
         headers={"Authorization": f"Bearer {api_key}"},
-        json={"inputs": prompt, "parameters": {"temperature": 0.2, "max_new_tokens": 1600}},
+        json={"inputs": prompt, "parameters": {"temperature": 0.2, "max_new_tokens": 4096}},
         timeout=60,
     )
     response.raise_for_status()
