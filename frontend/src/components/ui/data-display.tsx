@@ -51,7 +51,7 @@ export function DataTable({ rows, columns }: { rows: Record<string, unknown>[]; 
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={String(row.id ?? index)} className="border-t">
+            <tr key={String(row.id ?? index)} className="border-t transition-colors hover:bg-muted/30">
               {columns.map((column) => <td key={column} className="max-w-[320px] break-words p-3 align-top">{formatDisplayValue(row[column])}</td>)}
             </tr>
           ))}

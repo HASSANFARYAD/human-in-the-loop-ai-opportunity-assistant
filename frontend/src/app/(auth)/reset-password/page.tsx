@@ -79,7 +79,7 @@ function ResetPasswordForm() {
           {password && policyMessages.length ? <div className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{policyMessages.map((item) => <p key={item}>{item}</p>)}</div> : null}
           {message ? <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">{message} <Link href="/login" className="font-medium underline">Sign in</Link></p> : null}
           {error ? <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-200">{error}</p> : null}
-          <Button className="w-full" type="submit" disabled={loading || !token}>{loading ? "Updating..." : "Update password"}</Button>
+          <Button className="w-full" type="submit" loading={loading} disabled={!token}>Update password</Button>
         </form>
       </CardContent>
     </Card>

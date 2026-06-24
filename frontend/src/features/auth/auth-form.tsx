@@ -88,8 +88,8 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
               <span className="text-sm font-medium">Password</span>
               <Input id="auth-password" placeholder="Enter your password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} {...form.register("password")} />
             </label>
-            <Button className="w-full" disabled={mutation.isPending}>
-              {mutation.isPending ? "Working..." : mode === "login" ? "Sign in" : "Register"}
+            <Button className="w-full" loading={mutation.isPending}>
+              {mode === "login" ? "Sign in" : "Register"}
             </Button>
           </form>
           <div className="mt-5 flex items-center justify-between text-sm text-muted-foreground">

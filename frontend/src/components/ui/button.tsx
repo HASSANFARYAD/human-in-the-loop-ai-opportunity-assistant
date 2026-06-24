@@ -4,6 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { springTap } from "@/lib/animation";
+import { Spinner } from "./spinner";
 
 const buttonVariants = cva(
   "inline-flex h-10 items-center justify-center gap-2 rounded-md px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
@@ -28,14 +29,15 @@ const buttonVariants = cva(
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {
   asChild?: boolean;
+  loading?: boolean;
 }
 
 const MotionButton = motion.button;
 
-export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(({ className, variant, size, asChild = false, ...props }, ref) => {
+export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(({ className, variant, size, asChild = false, loading, disabled, children, ...props }, ref) => {
   if (asChild) {
     const Comp = Slot as React.ElementType;
-    return <Comp className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...(props as Record<string, unknown>)} />;
+    return <Comp className={cn(buttonVariants({ variant, size, className }))} ref={ref} disabled={disabled || loading} {...(props as Record<string, unknown>)} />;
   }
   return (
     <MotionButton
@@ -44,8 +46,12 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(({ classN
       whileTap={{ scale: 0.96 }}
       transition={springTap}
       className={cn(buttonVariants({ variant, size, className }), "will-change-transform")}
+      disabled={disabled || loading}
       {...(props as Record<string, unknown>)}
-    />
+    >
+      {loading ? <Spinner className="h-4 w-4 shrink-0" /> : null}
+      {children}
+    </MotionButton>
   );
 });
 Button.displayName = "Button";

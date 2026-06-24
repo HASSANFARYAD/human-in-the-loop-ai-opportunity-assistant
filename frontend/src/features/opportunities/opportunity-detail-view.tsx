@@ -292,7 +292,7 @@ export function OpportunityDetailView() {
               <CardContent className="space-y-3">
                 <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Add private tracking notes..." />
                 <div className="flex flex-wrap items-center gap-3">
-                  <Button disabled={saveNotes.isPending || notes === (item.notes ?? "")} onClick={() => saveNotes.mutate()}>{saveNotes.isPending ? "Saving..." : "Save notes"}</Button>
+                  <Button loading={saveNotes.isPending} disabled={notes === (item.notes ?? "")} onClick={() => saveNotes.mutate()}>Save notes</Button>
                   {notes !== (item.notes ?? "") ? <span className="text-sm text-muted-foreground">Unsaved changes</span> : <span className="text-sm text-muted-foreground">Notes are saved</span>}
                 </div>
               </CardContent>
@@ -328,7 +328,7 @@ export function OpportunityDetailView() {
             ) : null}
             <Button className="w-full" disabled={!importable} onClick={() => score.mutate()}><Sparkles className="h-4 w-4" /> Refresh AI score</Button>
             <Button className="w-full" variant="secondary" disabled={!importable} onClick={() => generate.mutate()}><FileText className="h-4 w-4" /> Generate materials</Button>
-            <Button className="w-full" variant="secondary" disabled={!importable || tailorResume.isPending} onClick={() => tailorResume.mutate()}><FileText className="h-4 w-4" /> {tailorResume.isPending ? "Tailoring..." : "Tailor resume"}</Button>
+            <Button className="w-full" variant="secondary" loading={tailorResume.isPending} disabled={!importable} onClick={() => tailorResume.mutate()}><FileText className="h-4 w-4" /> Tailor resume</Button>
             <label className="block text-xs text-muted-foreground">
               Resume document format
               <select
@@ -341,10 +341,10 @@ export function OpportunityDetailView() {
                 ))}
               </select>
             </label>
-            <Button className="w-full" variant="secondary" disabled={!importable || buildResume.isPending} onClick={() => buildResume.mutate()}><FileText className="h-4 w-4" /> {buildResume.isPending ? "Building..." : "Build resume (DOCX)"}</Button>
-            <Button className="w-full" variant="secondary" disabled={prep.isPending} onClick={() => prep.mutate()}><Sparkles className="h-4 w-4" /> {prep.isPending ? "Generating..." : "Generate interview prep"}</Button>
+            <Button className="w-full" variant="secondary" loading={buildResume.isPending} disabled={!importable} onClick={() => buildResume.mutate()}><FileText className="h-4 w-4" /> Build resume (DOCX)</Button>
+            <Button className="w-full" variant="secondary" loading={prep.isPending} onClick={() => prep.mutate()}><Sparkles className="h-4 w-4" /> Generate interview prep</Button>
             <Button className="w-full" variant={recording ? "destructive" : "outline"} onClick={recording ? stopRecording : startRecording}>{recording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />} {recording ? "Stop recording" : "Start practice recording"}</Button>
-            <Button className="w-full" variant="destructive" disabled={remove.isPending} onClick={confirmDelete}><Trash2 className="h-4 w-4" /> {remove.isPending ? "Deleting..." : "Delete job"}</Button>
+            <Button className="w-full" variant="destructive" loading={remove.isPending} onClick={confirmDelete}><Trash2 className="h-4 w-4" /> Delete job</Button>
           </CardContent>
         </Card>
         <Card><CardHeader><CardTitle>Recordings</CardTitle></CardHeader><CardContent className="space-y-3">{(recordings.data ?? []).length ? (recordings.data ?? []).map((recording) => <audio key={String(recording.id)} controls className="w-full" src={safeAudioUrl(recording.playback_url || recording.data_url)} />) : <div className="text-sm text-muted-foreground">No recordings saved yet.</div>}</CardContent></Card>

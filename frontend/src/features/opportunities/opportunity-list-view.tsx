@@ -288,7 +288,7 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
               const importable = isImportableOpportunity(item);
               const scoreValue = visibleScore(item);
               return (
-                <motion.tr key={item.id} variants={staggerRow} className="border-t">
+                <motion.tr key={item.id} variants={staggerRow} className="border-t transition-colors hover:bg-muted/30">
                   <td className="p-3"><input type="checkbox" aria-label={`Select ${item.title}`} disabled={!importable || scoringBusy} checked={selected.includes(item.id)} onChange={() => toggleSelected(item.id)} /></td>
                   <td className="p-3"><Link href={`/opportunities/${item.id}`} className="font-medium hover:text-primary">{item.title}</Link><div className="text-muted-foreground">{item.company || "Unknown company"} - {item.location || "Remote/unspecified"}</div>{!importable ? <div className="text-xs text-destructive">{item.blocked_reason || item.classification_reason || "Not a job"}</div> : null}</td>
                   <td className="p-3"><Badge>{item.classification || item.opportunity_type || "job"}</Badge></td>
@@ -495,7 +495,7 @@ function PublicDiscoveryView() {
         <div className="flex flex-wrap gap-2 md:col-span-3">{PUBLIC_SOURCES.map((item) => <button key={item} type="button" className={`rounded-md border px-3 py-1.5 text-sm ${sources.includes(item) ? "glass-subtle text-foreground" : "text-muted-foreground"}`} onClick={() => toggleSource(item)}>{item}</button>)}</div>
         <div className="flex flex-wrap gap-2 md:col-span-3">
           <Button disabled={!sources.length || discover.isPending || profileDiscover.isPending} onClick={() => discover.mutate()}><Search className="h-4 w-4" /> Fetch jobs</Button>
-          <Button variant="outline" disabled={!sources.length || discover.isPending || profileDiscover.isPending} onClick={() => profileDiscover.mutate()}><Sparkles className="h-4 w-4" /> {profileDiscover.isPending ? "Finding..." : "Find jobs from profile"}</Button>
+          <Button variant="outline" loading={profileDiscover.isPending} disabled={!sources.length || discover.isPending} onClick={() => profileDiscover.mutate()}><Sparkles className="h-4 w-4" /> Find jobs from profile</Button>
         </div>
       </CardContent></Card>
       {profileResult ? <ProfileDiscoverySummary result={profileResult} /> : null}
