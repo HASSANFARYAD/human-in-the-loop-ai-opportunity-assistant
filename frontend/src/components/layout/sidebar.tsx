@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
   BarChart3,
@@ -20,6 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { springTap } from "@/lib/animation";
+import { opportunityService } from "@/services/opportunity.service";
 
 const groups = [
   { label: "Overview", items: [{ href: "/dashboard", label: "Dashboard", icon: Gauge }, { href: "/agent", label: "Assistant", icon: Sparkles }, { href: "/analytics", label: "Insights", icon: BarChart3 }] },
@@ -66,6 +68,8 @@ export function Sidebar() {
     const query = searchParams.toString();
     return query ? `${pathname}?${query}` : pathname;
   }, [pathname, searchParams]);
+  const { data: jobs } = useQuery({ queryKey: ["opportunities"], queryFn: () => opportunityService.list(), staleTime: 30_000 });
+  const unscoredCount = useMemo(() => (jobs ?? []).filter((j) => j.match_score == null && j.score == null).length, [jobs]);
   const initiallyOpen = useMemo(
     () =>
       Object.fromEntries(
@@ -140,6 +144,15 @@ export function Sidebar() {
                       >
                         <Icon className="h-4 w-4 shrink-0" />
                         <span className="truncate">{navItem.label}</span>
+                        {navItem.label === "All Jobs" && unscoredCount > 0 ? (
+                          <motion.span
+                            initial={{ scale: 0 }}
+                            animate={{ scale: 1 }}
+                            className="ml-auto rounded-full bg-destructive px-1.5 py-0.5 text-[10px] font-semibold leading-none text-destructive-foreground"
+                          >
+                            {unscoredCount}
+                          </motion.span>
+                        ) : null}
                       </Link>
                     </motion.div>
                   );

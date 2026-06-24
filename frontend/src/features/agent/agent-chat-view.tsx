@@ -17,9 +17,10 @@ type ChatMessage =
   | { role: "assistant"; sections: AgentSection[] };
 
 const SUGGESTIONS = [
-  "Find me remote backend jobs",
-  "Tailor my resume for the latest job",
-  "Prep me for an interview",
+  { title: "Find remote jobs", desc: "Search job boards for roles matching your skills", query: "Find me remote backend jobs" },
+  { title: "Tailor my resume", desc: "Customize your resume for a specific role", query: "Tailor my resume for the latest job" },
+  { title: "Interview prep", desc: "Get ready with common questions and tips", query: "Prep me for an interview" },
+  { title: "Score my matches", desc: "Evaluate how well jobs fit your profile", query: "Score my saved jobs" },
 ];
 
 export function AgentChatView() {
@@ -93,19 +94,31 @@ export function AgentChatView() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ type: "spring", stiffness: 200, damping: 24 }}
-            className="flex h-full flex-col items-center justify-center gap-4 text-center"
+            className="flex h-full flex-col items-center justify-center gap-6 text-center"
           >
             <motion.span
               animate={{ scale: [1, 1.08, 1] }}
               transition={{ repeat: Infinity, duration: 3, ease: "easeInOut" }}
-              className="grid h-12 w-12 place-items-center rounded-full bg-primary/10 text-primary"
+              className="grid h-16 w-16 place-items-center rounded-2xl bg-primary/10 text-primary"
             >
-              <Sparkles className="h-6 w-6" />
+              <Sparkles className="h-8 w-8" />
             </motion.span>
-            <div className="text-sm text-muted-foreground">Try one of these:</div>
-            <div className="flex flex-wrap justify-center gap-2">
+            <div className="max-w-sm">
+              <h2 className="text-lg font-semibold">How can I help you?</h2>
+              <p className="mt-1 text-sm text-muted-foreground">I can find jobs, tailor resumes, prep for interviews, and more.</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
               {SUGGESTIONS.map((s) => (
-                <button key={s} onClick={() => submit(s)} className="glass-subtle rounded-full px-4 py-2 text-sm transition hover:bg-white/40 dark:hover:bg-white/10">{s}</button>
+                <motion.button
+                  key={s.query}
+                  whileHover={{ scale: 1.03, y: -2 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => submit(s.query)}
+                  className="glass-subtle flex flex-col items-start gap-1 rounded-xl border p-4 text-left transition hover:bg-white/40 dark:hover:bg-white/10"
+                >
+                  <span className="text-sm font-medium">{s.title}</span>
+                  <span className="text-xs text-muted-foreground">{s.desc}</span>
+                </motion.button>
               ))}
             </div>
           </motion.div>
@@ -161,15 +174,22 @@ function Thinking() {
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="flex items-center gap-2 text-sm text-muted-foreground"
+      className="flex items-center gap-3 text-sm text-muted-foreground"
     >
-      <motion.span
-        animate={{ scale: [1, 1.15, 1] }}
-        transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
-      >
-        <Bot className="h-4 w-4 text-primary" />
-      </motion.span>
-      Thinking…
+      <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary/10 text-primary">
+        <Bot className="h-4 w-4" />
+      </span>
+      <span className="flex items-center gap-1">
+        Thinking
+        {[0, 1, 2].map((i) => (
+          <motion.span
+            key={i}
+            className="inline-block h-1 w-1 rounded-full bg-muted-foreground"
+            animate={{ opacity: [0.3, 1, 0.3] }}
+            transition={{ repeat: Infinity, duration: 1.4, delay: i * 0.2, ease: "easeInOut" }}
+          />
+        ))}
+      </span>
     </motion.div>
   );
 }
