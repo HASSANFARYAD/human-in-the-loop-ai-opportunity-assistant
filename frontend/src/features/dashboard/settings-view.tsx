@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -216,25 +216,23 @@ function ProfileManager() {
   const qc = useQueryClient();
   const profiles = useQuery({ queryKey: ["profiles"], queryFn: opportunityService.profiles });
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [creatingNew, setCreatingNew] = useState(false);
 
-  const list = profiles.data ?? [];
-  // Default selection: the default profile, else the first.
+  const list = useMemo(() => profiles.data ?? [], [profiles.data]);
+
   useEffect(() => {
-    if (list.length && (selectedId === null || !list.some((p) => p.id === selectedId))) {
+    if (list.length && (selectedId === null || !list.some((p) => p.id === selectedId)) && !creatingNew) {
       const def = list.find((p) => p.is_default) ?? list[0];
       setSelectedId(def?.id ?? null);
     }
-  }, [list, selectedId]);
+  }, [list, selectedId, creatingNew]);
 
-  const create = useMutation({
-    mutationFn: () => opportunityService.createProfile({ name: "New profile" }),
-    onSuccess: (result) => {
-      toast.success("Profile created");
-      qc.invalidateQueries({ queryKey: ["profiles"] });
-      setSelectedId(result.id);
-    },
-    onError: (error) => toast.error(error.message),
-  });
+  useEffect(() => {
+    if (creatingNew && selectedId !== null && list.some((p) => p.id === selectedId)) {
+      setCreatingNew(false);
+    }
+  }, [list, creatingNew, selectedId]);
+
   const makeDefault = useMutation({
     mutationFn: (id: number) => opportunityService.setDefaultProfile(id),
     onSuccess: () => {
@@ -257,6 +255,20 @@ function ProfileManager() {
 
   const selected = list.find((p) => p.id === selectedId) ?? null;
 
+  const handleNewProfile = () => {
+    setCreatingNew(true);
+    setSelectedId(null);
+  };
+
+  const handleSelectProfile = (id: number | null) => {
+    if (id !== null) setSelectedId(id);
+    setCreatingNew(false);
+  };
+
+  const handleCreated = (id: number) => {
+    setSelectedId(id);
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -269,40 +281,50 @@ function ProfileManager() {
             <button
               key={p.id}
               type="button"
-              onClick={() => setSelectedId(p.id ?? null)}
-              className={`rounded-full border px-3 py-1.5 text-sm transition ${p.id === selectedId ? "glass-subtle border-primary text-foreground" : "text-muted-foreground hover:bg-white/30 dark:hover:bg-white/10"}`}
+              onClick={() => handleSelectProfile(p.id ?? null)}
+              className={`rounded-full border px-3 py-1.5 text-sm transition ${p.id === selectedId && !creatingNew ? "glass-subtle border-primary text-foreground" : "text-muted-foreground hover:bg-white/30 dark:hover:bg-white/10"}`}
             >
               {p.name || "Untitled"}{p.is_default ? " ★" : ""}
             </button>
           ))}
-          <Button variant="outline" size="sm" disabled={create.isPending} onClick={() => create.mutate()}>+ New profile</Button>
+          <Button variant="outline" size="sm" onClick={handleNewProfile}>+ New profile</Button>
         </div>
-        {selected ? (
+        {selected || creatingNew ? (
           <div className="flex flex-wrap items-center gap-2 border-b pb-3">
-            {!selected.is_default ? (
+            {selected && !selected.is_default ? (
               <Button variant="outline" size="sm" disabled={makeDefault.isPending} onClick={() => selected.id && makeDefault.mutate(selected.id)}>Set as default</Button>
-            ) : <span className="text-xs text-muted-foreground">This is your default profile.</span>}
-            {list.length > 1 ? (
+            ) : selected ? <span className="text-xs text-muted-foreground">This is your default profile.</span> : null}
+            {selected && list.length > 1 ? (
               <Button variant="outline" size="sm" disabled={remove.isPending} onClick={() => selected.id && remove.mutate(selected.id)}>Delete</Button>
             ) : null}
           </div>
         ) : null}
-        {selected ? <ProfileForm key={selected.id} profile={selected} profileId={selected.id ?? null} /> : <p className="text-sm text-muted-foreground">Create a profile to get started.</p>}
+        {creatingNew ? (
+          <ProfileForm key="new" profile={{}} profileId={null} onCreated={handleCreated} />
+        ) : selected ? (
+          <ProfileForm key={selected.id} profile={selected} profileId={selected.id ?? null} onCreated={handleCreated} />
+        ) : (
+          <p className="text-sm text-muted-foreground">Create a profile to get started.</p>
+        )}
       </CardContent>
     </Card>
   );
 }
 
-function ProfileForm({ profile, profileId }: { profile: Profile; profileId: number | null }) {
+function ProfileForm({ profile, profileId, onCreated }: { profile: Profile; profileId: number | null; onCreated?: (id: number) => void }) {
   const qc = useQueryClient();
   const [form, setForm] = useState<Profile>(profile);
   useEffect(() => setForm(profile), [profile]);
   const save = useMutation({
-    mutationFn: () => (profileId ? opportunityService.updateProfileById(profileId, form) : opportunityService.updateProfile(form)),
-    onSuccess: () => {
+    mutationFn: () => {
+      if (profileId) return opportunityService.updateProfileById(profileId, form);
+      return opportunityService.createProfile(form);
+    },
+    onSuccess: (result: { status: string; id: number } | undefined) => {
       toast.success("Profile saved");
       qc.invalidateQueries({ queryKey: ["profiles"] });
       qc.invalidateQueries({ queryKey: ["profile"] });
+      if (!profileId && result?.id) onCreated?.(result.id);
     },
     onError: (error) => toast.error(error.message),
   });
