@@ -1195,12 +1195,14 @@ def save_automation_preferences(user_id: int, prefs: Dict[str, Any]) -> None:
     )
 
 
+CONVERSATION_STATES = {"idle", "searching", "tailoring", "interviewing", "chatting"}
+
 def create_conversation(user_id: int, title: str, workspace_id: int | None = None) -> int:
     cid = _next_id("conversation_id")
     now = utc_now()
     get_collection("conversations").insert_one({
         "conversation_id": cid, "user_id": user_id, "workspace_id": workspace_id,
-        "title": title, "created_at": now, "updated_at": now,
+        "title": title, "state": "idle", "created_at": now, "updated_at": now,
     })
     return cid
 
@@ -1262,6 +1264,16 @@ def get_conversation_messages(conversation_id: int, limit: int = 100) -> list[di
         }
         result.append(item)
     return result
+
+
+def set_conversation_state(conversation_id: int, user_id: int, state: str) -> bool:
+    if state not in CONVERSATION_STATES:
+        return False
+    result = get_collection("conversations").update_one(
+        {"conversation_id": conversation_id, "user_id": user_id},
+        {"$set": {"state": state, "updated_at": utc_now()}},
+    )
+    return result.modified_count > 0
 
 
 def _conversation_with_id_alias(doc: dict) -> dict:

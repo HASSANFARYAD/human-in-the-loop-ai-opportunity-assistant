@@ -4,8 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
-  Bot, ExternalLink, FileText, MessageSquare, Plus, Search, Send, Sparkles, Trash2, User,
+  Bot, ExternalLink, FileText, MessageSquare, Pencil, Plus, RefreshCw, Search, Send, Sparkles, Trash2, User, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -74,6 +76,119 @@ export function AgentChatView() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, busy]);
+
+  const submitFromEdit = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || busy) return;
+
+    const history: AgentChatTurn[] = messages
+      .slice(0, -1)
+      .map((m) =>
+        m.role === "user" ? { role: "user", content: m.content } : { role: "assistant", content: summarize(m.sections) },
+      );
+
+    setMessages((prev) => [...prev.slice(0, -1), { role: "user", content: trimmed }, { role: "assistant", sections: [] }]);
+    setError("");
+    setBusy(true);
+
+    const appendSection = (section: AgentSection) =>
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role === "assistant") next[next.length - 1] = { role: "assistant", sections: [...last.sections, section] };
+        return next;
+      });
+
+    const appendDelta = (text: string) =>
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role !== "assistant" || last.sections.length === 0) return next;
+        const sections = [...last.sections];
+        const tail = sections[sections.length - 1];
+        if (tail.type === "message") {
+          sections[sections.length - 1] = { ...tail, message: (tail.message ?? "") + text };
+          next[next.length - 1] = { role: "assistant", sections };
+        }
+        return next;
+      });
+
+    try {
+      await agentService.chatStream(trimmed, history, {
+        onConversation: (id) => {
+          setConversationId(id);
+          queryClient.invalidateQueries({ queryKey: ["conversations"] });
+        },
+        onSection: appendSection,
+        onDelta: appendDelta,
+        onError: setError,
+      }, activeWorkspace?.id, conversationId);
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    } catch {
+      setError("The assistant could not complete your request.");
+    } finally {
+      setBusy(false);
+    }
+  }, [messages, busy, conversationId, activeWorkspace, queryClient]);
+
+  const regenerate = useCallback(async (index: number) => {
+    if (busy || index < 1) return;
+    const userMsg = messages[index - 1];
+    if (userMsg.role !== "user") return;
+
+    const history: AgentChatTurn[] = messages
+      .slice(0, index - 1)
+      .map((m) =>
+        m.role === "user" ? { role: "user", content: m.content } : { role: "assistant", content: summarize(m.sections) },
+      );
+
+    setMessages((prev) => {
+      const next = prev.slice(0, index);
+      next.push({ role: "assistant", sections: [] });
+      return next;
+    });
+    setError("");
+    setBusy(true);
+
+    const appendSection = (section: AgentSection) =>
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role === "assistant") next[next.length - 1] = { role: "assistant", sections: [...last.sections, section] };
+        return next;
+      });
+
+    const appendDelta = (text: string) =>
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role !== "assistant" || last.sections.length === 0) return next;
+        const sections = [...last.sections];
+        const tail = sections[sections.length - 1];
+        if (tail.type === "message") {
+          sections[sections.length - 1] = { ...tail, message: (tail.message ?? "") + text };
+          next[next.length - 1] = { role: "assistant", sections };
+        }
+        return next;
+      });
+
+    try {
+      await agentService.chatStream(userMsg.content, history, {
+        onConversation: (id) => {
+          setConversationId(id);
+          queryClient.invalidateQueries({ queryKey: ["conversations"] });
+        },
+        onSection: appendSection,
+        onDelta: appendDelta,
+        onError: setError,
+      }, activeWorkspace?.id, conversationId);
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    } catch {
+      setError("The assistant could not complete your request.");
+    } finally {
+      setBusy(false);
+    }
+  }, [messages, busy, conversationId, activeWorkspace, queryClient]);
 
   async function submit(text: string) {
     const trimmed = text.trim();
@@ -222,7 +337,31 @@ export function AgentChatView() {
               initial="hidden"
               animate="visible"
             >
-              {messages.map((m, i) => <MessageBubble key={i} message={m} busy={busy && i === messages.length - 1} />)}
+              {messages.map((m, i) => (
+            <MessageBubble
+              key={i}
+              message={m}
+              busy={busy && i === messages.length - 1}
+              isLast={i === messages.length - 1}
+              onEdit={
+                m.role === "user" && !busy
+                  ? (content) => {
+                      setMessages((prev) => {
+                        const next = prev.slice(0, i);
+                        next.push({ role: "user", content });
+                        return next;
+                      });
+                      submitFromEdit(content);
+                    }
+                  : undefined
+              }
+              onRegenerate={
+                m.role === "assistant" && !busy && i === messages.length - 1
+                  ? () => regenerate(i)
+                  : undefined
+              }
+            />
+          ))}
             </motion.div>
           ) : null}
           {error ? <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-sm text-destructive">{error}</motion.div> : null}
@@ -291,25 +430,96 @@ const bubbleVariants = {
   visible: { opacity: 1, y: 0, scale: 1, transition: { type: "spring" as const, stiffness: 260, damping: 24 } },
 };
 
-function MessageBubble({ message, busy }: { message: ChatMessage; busy: boolean }) {
+function MessageBubble({
+  message, busy, onEdit, onRegenerate, isLast,
+}: {
+  message: ChatMessage; busy: boolean; onEdit?: (content: string) => void; onRegenerate?: () => void; isLast?: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState(message.role === "user" ? message.content : "");
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length);
+    }
+  }, [editing]);
+
   if (message.role === "user") {
+    if (editing) {
+      return (
+        <motion.div variants={bubbleVariants} initial="hidden" animate="visible" className="flex justify-end gap-2">
+          <div className="flex max-w-[80%] flex-col gap-2">
+            <Textarea
+              ref={inputRef}
+              value={editText}
+              onChange={(e) => setEditText(e.target.value)}
+              className="min-h-[60px] resize-none text-sm"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  onEdit?.(editText);
+                  setEditing(false);
+                }
+              }}
+            />
+            <div className="flex justify-end gap-1">
+              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setEditing(false)}>
+                <X className="mr-1 h-3 w-3" />Cancel
+              </Button>
+              <Button size="sm" className="h-7 text-xs" onClick={() => { onEdit?.(editText); setEditing(false); }}>
+                Save
+              </Button>
+            </div>
+          </div>
+          <span className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"><User className="h-4 w-4" /></span>
+        </motion.div>
+      );
+    }
     return (
-      <motion.div variants={bubbleVariants} initial="hidden" animate="visible" className="flex justify-end gap-2">
-        <div className="glass-subtle max-w-[80%] rounded-2xl rounded-br-sm px-4 py-2.5 text-sm">{message.content}</div>
+      <motion.div variants={bubbleVariants} initial="hidden" animate="visible" className="group flex justify-end gap-2">
+        <div className="flex items-start gap-1">
+          <div className="glass-subtle max-w-[80%] rounded-2xl rounded-br-sm px-4 py-2.5 text-sm">{message.content}</div>
+          <button
+            onClick={() => { setEditText(message.content); setEditing(true); }}
+            className="mt-1 hidden h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent group-hover:flex"
+            title="Edit"
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+        </div>
         <span className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"><User className="h-4 w-4" /></span>
       </motion.div>
     );
   }
   return (
-    <motion.div variants={bubbleVariants} initial="hidden" animate="visible" className="flex gap-2">
+    <motion.div variants={bubbleVariants} initial="hidden" animate="visible" className="group flex gap-2">
       <span className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary/10 text-primary"><Bot className="h-4 w-4" /></span>
       <div className="min-w-0 flex-1 space-y-3">
         {message.sections.map((section, i) => (
           <SectionView key={i} section={section} />
         ))}
         {busy ? <Thinking /> : null}
+        {!busy && isLast && onRegenerate ? (
+          <button
+            onClick={onRegenerate}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            title="Regenerate"
+          >
+            <RefreshCw className="h-3 w-3" />Regenerate
+          </button>
+        ) : null}
       </div>
     </motion.div>
+  );
+}
+
+function MarkdownMessage({ content }: { content: string }) {
+  return (
+    <div className="prose prose-sm max-w-none dark:prose-invert prose-p:leading-relaxed prose-pre:rounded-lg">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    </div>
   );
 }
 
@@ -360,5 +570,9 @@ function SectionView({ section }: { section: AgentSection }) {
     return <div className="text-sm text-destructive">{section.message}</div>;
   }
 
-  return <div className="glass-subtle max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm">{section.message}</div>;
+  return (
+    <div className="glass-subtle max-w-[90%] rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm">
+      {section.message ? <MarkdownMessage content={section.message} /> : null}
+    </div>
+  );
 }

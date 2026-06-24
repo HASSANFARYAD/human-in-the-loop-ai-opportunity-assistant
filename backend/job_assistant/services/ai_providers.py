@@ -497,3 +497,137 @@ def ask_text(
         return (_generate_text(system, user, settings) or "").strip()
     except Exception:
         return ""
+
+
+def _openai_compatible_tool_call(
+    api_key: str, model: str, system: str, user: str, tools: list[dict[str, Any]], base_url: str | None = None,
+) -> dict[str, Any]:
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key, base_url=base_url or None)
+    response = client.chat.completions.create(
+        model=model, messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+        tools=tools, tool_choice="auto", temperature=0.1, max_tokens=4096,
+    )
+    msg = response.choices[0].message
+    if msg.tool_calls:
+        for tc in msg.tool_calls:
+            args = json.loads(tc.function.arguments)
+            if isinstance(args, dict):
+                return args
+    if msg.content:
+        return _json_from_text(msg.content, {})
+    return {}
+
+
+def ask_tool_json(
+    system: str,
+    user: str,
+    tools: list[dict[str, Any]],
+    fallback: Dict[str, Any],
+    *,
+    user_id: Optional[int] = None,
+    provider_settings: Optional[dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Use provider-native tool/function calling to extract structured JSON.
+
+    Falls back to ``ask_json`` when the provider does not support tools.
+    """
+    settings = provider_settings or get_user_ai_settings(user_id)
+    config = settings.get("config", {}) or {}
+    provider = (config.get("provider") or DEFAULT_PROVIDER).strip().lower()
+    api_key = (settings.get("api_key") or "").strip()
+    base_url = config.get("base_url") or ""
+    no_key = provider not in {"huggingface_local"} and provider != "langchain_openai" and not api_key
+    no_key_lc = provider == "langchain_openai" and not api_key and not _is_local_ollama_base_url(base_url)
+    if no_key or no_key_lc:
+        out = dict(fallback)
+        out["_ai_error"] = f"{provider}: Missing API key"
+        return out
+
+    # Providers with native tool support
+    tool_support = {"openai", "grok", "groq", "azure_openai", "claude", "gemini"}
+    if provider in tool_support and api_key:
+        try:
+            model = (config.get("model") or "gpt-4o-mini").strip()
+            if provider == "openai":
+                return _openai_compatible_tool_call(api_key, model, system, user, tools, config.get("base_url"))
+            if provider == "grok":
+                return _openai_compatible_tool_call(api_key, model or "grok-3-mini", system, user, tools, config.get("base_url") or "https://api.x.ai/v1")
+            if provider == "groq":
+                return _openai_compatible_tool_call(api_key, model, system, user, tools, config.get("base_url") or "https://api.groq.com/openai/v1")
+            if provider == "azure_openai":
+                from openai import AzureOpenAI
+                endpoint = config.get("endpoint") or ""
+                api_version = config.get("api_version") or "2024-10-21"
+                deployment = config.get("deployment") or model
+                client = AzureOpenAI(api_key=api_key, azure_endpoint=endpoint, api_version=api_version)
+                response = client.chat.completions.create(
+                    model=deployment, messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                    tools=tools, tool_choice="auto", temperature=0.1, max_tokens=4096,
+                )
+                msg = response.choices[0].message
+                if msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        args = json.loads(tc.function.arguments)
+                        if isinstance(args, dict):
+                            return args
+                if msg.content:
+                    return _json_from_text(msg.content, {})
+                return dict(fallback)
+            if provider == "claude":
+                import json as _json
+                resp = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                    json={
+                        "model": model or "claude-3-5-sonnet-latest",
+                        "system": system,
+                        "messages": [{"role": "user", "content": user}],
+                        "tools": tools,
+                        "max_tokens": 4096,
+                        "temperature": 0.1,
+                    },
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                for block in data.get("content", []):
+                    if block.get("type") == "tool_use":
+                        return block.get("input", {})
+                text = "\n".join(p.get("text", "") for p in data.get("content", []) if p.get("type") == "text")
+                if text:
+                    return _json_from_text(text, {})
+                return dict(fallback)
+            if provider == "gemini":
+                import json as _json
+                gemini_tools = []
+                for t in tools:
+                    if t.get("type") == "function":
+                        gemini_tools.append({"functionDeclarations": [t["function"]]})
+                endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+                resp = requests.post(
+                    endpoint,
+                    json={
+                        "systemInstruction": {"parts": [{"text": system}]},
+                        "contents": [{"role": "user", "parts": [{"text": user}]}],
+                        "tools": gemini_tools,
+                        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 4096},
+                    },
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    for part in parts:
+                        if "functionCall" in part:
+                            return part["functionCall"].get("args", {})
+                        if "text" in part:
+                            return _json_from_text(part["text"], {})
+                return dict(fallback)
+        except Exception as exc:
+            logger.warning("ask_tool_json failed for %s, falling back: %s", provider, exc)
+
+    return ask_json(system, user, fallback, provider_settings=settings)

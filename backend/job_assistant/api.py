@@ -36,6 +36,7 @@ from job_assistant.db import (
     delete_conversation,
     add_conversation_message,
     get_conversation_messages,
+    set_conversation_state,
     create_feedback,
     create_reminder,
     cleanup_non_opportunity_records,
@@ -1439,6 +1440,11 @@ async def agent_chat_stream(payload: AgentChatIn, user: dict = Depends(current_u
             routing = classify_intent(message, history=history, user_id=user_id)
             profile = get_profile(user_id) or {}
             yield _sse("intents", {"intents": routing["intents"]})
+
+            # Set conversation state based on first intent
+            intent_to_state = {"job_search": "searching", "tailor_resume": "tailoring", "interview_prep": "interviewing", "chat": "chatting"}
+            first_state = intent_to_state.get(routing["intents"][0], "idle") if routing["intents"] else "idle"
+            set_conversation_state(conversation_id, user_id, first_state)
 
             assistant_sections: list[dict[str, Any]] = []
             for intent in routing["intents"]:

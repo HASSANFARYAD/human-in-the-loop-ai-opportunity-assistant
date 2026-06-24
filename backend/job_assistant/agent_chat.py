@@ -24,19 +24,44 @@ logger = logging.getLogger(__name__)
 
 VALID_INTENTS = {"job_search", "tailor_resume", "interview_prep", "chat"}
 
-_INTENT_SCHEMA_HINT = {
-    "intents": ["job_search"],
-    "search_query": "",
-    "job_reference": "",
-    "reply": "",
-}
+_INTENT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "route_intent",
+            "description": "Route a career-assistant user message to one or more capabilities. "
+                           "Pick chat for greetings, casual conversation, or questions that need "
+                           "no agent action. For compound requests, order intents appropriately.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "intents": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": list(VALID_INTENTS)},
+                        "description": "Ordered list of intents to execute",
+                    },
+                    "search_query": {
+                        "type": "string",
+                        "description": "Job search query when intents includes job_search",
+                    },
+                    "job_reference": {
+                        "type": "string",
+                        "description": "Company name or job title the user referenced for tailoring or interview prep",
+                    },
+                },
+                "required": ["intents"],
+            },
+        },
+    },
+]
+_INTENT_TOOLS_FALLBACK = {"intents": ["chat"], "search_query": "", "job_reference": ""}
 
 
 def classify_intent(message: str, history: Optional[List[Dict[str, str]]] = None, user_id: Optional[int] = None) -> Dict[str, Any]:
-    """Classify a user message into one or more agent intents.
+    """Classify a user message into one or more agent intents using tool calling.
 
-    Returns ``{"intents": [...], "search_query": str, "job_reference": str,
-    "reply": str}``. Compound requests yield multiple intents in run order.
+    Returns ``{"intents": [...], "search_query": str, "job_reference": str}``.
+    Compound requests yield multiple intents in run order.
     """
     history_text = ""
     for turn in (history or [])[-6:]:
@@ -46,16 +71,11 @@ def classify_intent(message: str, history: Optional[List[Dict[str, str]]] = None
 
     system = (
         "You route a career-assistant user message to one or more agents. "
-        "Return ONLY JSON with keys: intents (array, ordered, from "
-        "[job_search, tailor_resume, interview_prep, chat]), search_query "
-        "(string for job_search), job_reference (company/title the user named "
-        "for tailoring/prep, else empty), reply (a short natural-language "
-        "reply ONLY when intents is exactly [chat], else empty). "
-        "Pick chat for greetings or questions that need no agent."
+        "Use the route_intent tool to decide which capabilities to invoke."
     )
     user = f"Conversation so far:\n{history_text}\nUser message: {message}\n\nClassify it."
 
-    data = ai_orchestrator.ask_json(system, user, dict(_INTENT_SCHEMA_HINT), user_id=user_id, task_type="agent_routing")
+    data = ai_orchestrator.ask_tool_json(system, user, _INTENT_TOOLS, dict(_INTENT_TOOLS_FALLBACK), user_id=user_id, task_type="agent_routing")
 
     intents = [i for i in (data.get("intents") or []) if i in VALID_INTENTS]
     if not intents:
@@ -64,7 +84,6 @@ def classify_intent(message: str, history: Optional[List[Dict[str, str]]] = None
         "intents": intents,
         "search_query": str(data.get("search_query") or "").strip(),
         "job_reference": str(data.get("job_reference") or "").strip(),
-        "reply": str(data.get("reply") or "").strip(),
     }
 
 

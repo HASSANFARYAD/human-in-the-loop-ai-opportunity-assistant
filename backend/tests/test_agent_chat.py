@@ -6,8 +6,8 @@ from job_assistant import agent_chat
 def test_classify_intent_normalizes_and_defaults(monkeypatch):
     monkeypatch.setattr(
         agent_chat.ai_orchestrator,
-        "ask_json",
-        lambda *a, **k: {"intents": ["job_search", "bogus"], "search_query": " .NET remote ", "job_reference": "", "reply": ""},
+        "ask_tool_json",
+        lambda *a, **k: {"intents": ["job_search", "bogus"], "search_query": " .NET remote ", "job_reference": ""},
     )
     out = agent_chat.classify_intent("find me jobs")
     assert out["intents"] == ["job_search"]  # bogus dropped
@@ -15,10 +15,9 @@ def test_classify_intent_normalizes_and_defaults(monkeypatch):
 
 
 def test_classify_intent_falls_back_to_chat(monkeypatch):
-    monkeypatch.setattr(agent_chat.ai_orchestrator, "ask_json", lambda *a, **k: {"intents": [], "reply": "hi"})
+    monkeypatch.setattr(agent_chat.ai_orchestrator, "ask_tool_json", lambda *a, **k: {"intents": []})
     out = agent_chat.classify_intent("hello")
     assert out["intents"] == ["chat"]
-    assert out["reply"] == "hi"
 
 
 def test_run_job_search_scores_and_sorts(monkeypatch):
