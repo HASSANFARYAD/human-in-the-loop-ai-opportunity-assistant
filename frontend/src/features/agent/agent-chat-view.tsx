@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { motion } from "framer-motion";
 import { Bot, ExternalLink, FileText, MessageSquare, Search, Send, Sparkles, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -88,19 +89,39 @@ export function AgentChatView() {
 
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
         {messages.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-            <span className="grid h-12 w-12 place-items-center rounded-full bg-primary/10 text-primary"><Sparkles className="h-6 w-6" /></span>
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ type: "spring", stiffness: 200, damping: 24 }}
+            className="flex h-full flex-col items-center justify-center gap-4 text-center"
+          >
+            <motion.span
+              animate={{ scale: [1, 1.08, 1] }}
+              transition={{ repeat: Infinity, duration: 3, ease: "easeInOut" }}
+              className="grid h-12 w-12 place-items-center rounded-full bg-primary/10 text-primary"
+            >
+              <Sparkles className="h-6 w-6" />
+            </motion.span>
             <div className="text-sm text-muted-foreground">Try one of these:</div>
             <div className="flex flex-wrap justify-center gap-2">
               {SUGGESTIONS.map((s) => (
                 <button key={s} onClick={() => submit(s)} className="glass-subtle rounded-full px-4 py-2 text-sm transition hover:bg-white/40 dark:hover:bg-white/10">{s}</button>
               ))}
             </div>
-          </div>
+          </motion.div>
         ) : (
-          messages.map((m, i) => <MessageBubble key={i} message={m} busy={busy && i === messages.length - 1} />)
+          <motion.div
+            variants={{
+              hidden: {},
+              visible: { transition: { staggerChildren: 0.06 } },
+            }}
+            initial="hidden"
+            animate="visible"
+          >
+            {messages.map((m, i) => <MessageBubble key={i} message={m} busy={busy && i === messages.length - 1} />)}
+          </motion.div>
         )}
-        {error ? <div className="text-sm text-destructive">{error}</div> : null}
+        {error ? <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-sm text-destructive">{error}</motion.div> : null}
       </div>
 
       <form
@@ -137,23 +158,38 @@ function summarize(sections: AgentSection[]): string {
 
 function Thinking() {
   return (
-    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-      <Bot className="h-4 w-4 animate-pulse text-primary" /> Thinking…
-    </div>
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex items-center gap-2 text-sm text-muted-foreground"
+    >
+      <motion.span
+        animate={{ scale: [1, 1.15, 1] }}
+        transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
+      >
+        <Bot className="h-4 w-4 text-primary" />
+      </motion.span>
+      Thinking…
+    </motion.div>
   );
 }
+
+const bubbleVariants = {
+  hidden: { opacity: 0, y: 16, scale: 0.97 },
+  visible: { opacity: 1, y: 0, scale: 1, transition: { type: "spring" as const, stiffness: 260, damping: 24 } },
+};
 
 function MessageBubble({ message, busy }: { message: ChatMessage; busy: boolean }) {
   if (message.role === "user") {
     return (
-      <div className="flex justify-end gap-2">
+      <motion.div variants={bubbleVariants} initial="hidden" animate="visible" className="flex justify-end gap-2">
         <div className="glass-subtle max-w-[80%] rounded-2xl rounded-br-sm px-4 py-2.5 text-sm">{message.content}</div>
         <span className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"><User className="h-4 w-4" /></span>
-      </div>
+      </motion.div>
     );
   }
   return (
-    <div className="flex gap-2">
+    <motion.div variants={bubbleVariants} initial="hidden" animate="visible" className="flex gap-2">
       <span className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary/10 text-primary"><Bot className="h-4 w-4" /></span>
       <div className="min-w-0 flex-1 space-y-3">
         {message.sections.map((section, i) => (
@@ -161,7 +197,7 @@ function MessageBubble({ message, busy }: { message: ChatMessage; busy: boolean 
         ))}
         {busy ? <Thinking /> : null}
       </div>
-    </div>
+    </motion.div>
   );
 }
 

@@ -1,9 +1,10 @@
 "use client";
 
 import { createContext, useContext, useState, type ReactNode } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 
-type TabsContextValue = { value: string; setValue: (value: string) => void };
+type TabsContextValue = { value: string; setValue: (value: string) => void; activeIndex: number; setActiveIndex: (index: number) => void };
 const TabsContext = createContext<TabsContextValue | null>(null);
 
 function useTabs() {
@@ -26,24 +27,39 @@ export function Tabs({
   children: ReactNode;
 }) {
   const [uncontrolled, setUncontrolled] = useState(defaultValue ?? "");
+  const [activeIndex, setActiveIndex] = useState(0);
   const value = controlledValue ?? uncontrolled;
   const setValue = (next: string) => {
     if (controlledValue === undefined) setUncontrolled(next);
     onValueChange?.(next);
   };
   return (
-    <TabsContext.Provider value={{ value, setValue }}>
+    <TabsContext.Provider value={{ value, setValue, activeIndex, setActiveIndex }}>
       <div className={className}>{children}</div>
     </TabsContext.Provider>
   );
 }
 
 export function TabsList({ className, children }: { className?: string; children: ReactNode }) {
+  const { value } = useTabs();
+  const items = (Array.isArray(children) ? children : [children]) as React.ReactElement[];
+  const activeIndex = items.findIndex(
+    (child) => child && child.props && (child.props as Record<string, string>).value === value,
+  );
+
   return (
     <div
       role="tablist"
-      className={cn("flex flex-wrap gap-1 rounded-lg border bg-muted/40 p-1", className)}
+      className={cn("relative flex flex-wrap gap-1 rounded-lg border bg-muted/40 p-1", className)}
     >
+      {activeIndex >= 0 ? (
+        <motion.div
+          layoutId="tab-indicator"
+          className="absolute inset-y-1 rounded-md bg-background shadow-sm"
+          style={{ left: `calc(${activeIndex * 100}% / ${items.length} + 2px)`, width: `calc(${100 / items.length}% - 4px)` }}
+          transition={{ type: "spring", stiffness: 400, damping: 30 }}
+        />
+      ) : null}
       {children}
     </div>
   );
@@ -59,8 +75,8 @@ export function TabsTrigger({ value, className, children }: { value: string; cla
       aria-selected={selected}
       onClick={() => setValue(value)}
       className={cn(
-        "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-        selected ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+        "relative z-10 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+        selected ? "text-foreground" : "text-muted-foreground hover:text-foreground",
         className,
       )}
     >
@@ -73,8 +89,18 @@ export function TabsContent({ value, className, children }: { value: string; cla
   const { value: active } = useTabs();
   if (active !== value) return null;
   return (
-    <div role="tabpanel" className={className}>
-      {children}
-    </div>
+    <AnimatePresence mode="wait">
+      <motion.div
+        key={value}
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -8 }}
+        transition={{ type: "spring", stiffness: 260, damping: 24 }}
+        role="tabpanel"
+        className={className}
+      >
+        {children}
+      </motion.div>
+    </AnimatePresence>
   );
 }

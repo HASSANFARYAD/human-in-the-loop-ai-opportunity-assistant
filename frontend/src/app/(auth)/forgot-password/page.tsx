@@ -40,13 +40,16 @@ export default function ForgotPasswordPage() {
         <p className="text-sm text-muted-foreground">Enter your email and we will send reset instructions if an account exists.</p>
       </CardHeader>
       <CardContent>
-        <form className="space-y-4" onSubmit={submit}>
-          <label><span className="sr-only">Email</span><Input id="reset-email" type="email" placeholder="Email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+        <form className="space-y-5" onSubmit={submit}>
+          <label className="block space-y-1.5">
+            <span className="text-sm font-medium">Email</span>
+            <Input id="reset-email" type="email" placeholder="you@example.com" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+          </label>
           {message ? <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">{message}</p> : null}
           {error ? <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-200">{error}</p> : null}
           <Button className="w-full" type="submit" disabled={loading}>{loading ? "Sending..." : "Send reset link"}</Button>
         </form>
-        <Link href="/login" className="block text-sm text-muted-foreground hover:text-foreground">Back to sign in</Link>
+        <Link href="/login" className="mt-5 block text-sm text-muted-foreground hover:text-foreground">Back to sign in</Link>
       </CardContent>
     </Card>
   );

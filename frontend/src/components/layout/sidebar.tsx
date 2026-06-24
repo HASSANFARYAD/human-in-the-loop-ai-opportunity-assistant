@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { motion } from "framer-motion";
 import {
   BarChart3,
   Bot,
@@ -18,6 +19,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { springTap } from "@/lib/animation";
 
 const groups = [
   { label: "Overview", items: [{ href: "/dashboard", label: "Dashboard", icon: Gauge }, { href: "/agent", label: "Assistant", icon: Sparkles }, { href: "/analytics", label: "Insights", icon: BarChart3 }] },
@@ -41,6 +43,21 @@ const groups = [
     ],
   },
 ];
+
+const container = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.04, delayChildren: 0.1 } },
+};
+
+const item = {
+  hidden: { opacity: 0, x: -16 },
+  visible: { opacity: 1, x: 0, transition: { type: "spring" as const, stiffness: 260, damping: 24 } },
+};
+
+const groupContainer = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.03 } },
+};
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -78,35 +95,60 @@ export function Sidebar() {
         <span className="grid h-9 w-9 place-items-center rounded-md bg-primary text-primary-foreground"><Sparkles className="h-5 w-5" /></span>
         <span className="font-semibold">Job Assistant</span>
       </Link>
-      <nav className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4">
+      <motion.nav
+        variants={container}
+        initial="hidden"
+        animate="visible"
+        className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4"
+      >
         {groups.map((group) => (
-          <section key={group.label}>
-            <button
+          <motion.section key={group.label} variants={item}>
+            <motion.button
               type="button"
+              whileTap={{ scale: 0.97 }}
+              transition={springTap}
               className="flex h-9 w-full items-center justify-between rounded-md px-2 text-xs font-semibold uppercase text-muted-foreground transition hover:bg-white/30 hover:text-foreground dark:hover:bg-white/10"
               aria-expanded={Boolean(openGroups[group.label])}
               onClick={() => toggleGroup(group.label)}
             >
               <span>{group.label}</span>
-              <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", !openGroups[group.label] && "-rotate-90")} />
-            </button>
+              <motion.span
+                animate={{ rotate: openGroups[group.label] ? 0 : -90 }}
+                transition={{ type: "spring", stiffness: 260, damping: 20 }}
+              >
+                <ChevronDown className="h-3.5 w-3.5" />
+              </motion.span>
+            </motion.button>
             {openGroups[group.label] ? (
-              <div className="mt-1 space-y-1 pb-2">
-                {group.items.map((item) => {
-                  const active = currentHref === item.href || (item.href === pathname && !searchParams.toString());
-                  const Icon = item.icon;
+              <motion.div
+                variants={groupContainer}
+                initial="hidden"
+                animate="visible"
+                className="mt-1 space-y-1 pb-2"
+              >
+                {group.items.map((navItem) => {
+                  const active = currentHref === navItem.href || (navItem.href === pathname && !searchParams.toString());
+                  const Icon = navItem.icon;
                   return (
-                    <Link key={`${group.label}-${item.label}`} href={item.href} className={cn("flex h-9 items-center gap-3 rounded-md px-2 text-sm text-muted-foreground transition hover:bg-white/30 hover:text-foreground dark:hover:bg-white/10", active && "glass-subtle text-foreground")}>
-                      <Icon className="h-4 w-4 shrink-0" />
-                      <span className="truncate">{item.label}</span>
-                    </Link>
+                    <motion.div key={`${group.label}-${navItem.label}`} variants={item}>
+                      <Link
+                        href={navItem.href}
+                        className={cn(
+                          "flex h-9 items-center gap-3 rounded-md px-2 text-sm text-muted-foreground transition hover:bg-white/30 hover:text-foreground dark:hover:bg-white/10",
+                          active && "glass-subtle text-foreground",
+                        )}
+                      >
+                        <Icon className="h-4 w-4 shrink-0" />
+                        <span className="truncate">{navItem.label}</span>
+                      </Link>
+                    </motion.div>
                   );
                 })}
-              </div>
+              </motion.div>
             ) : null}
-          </section>
+          </motion.section>
         ))}
-      </nav>
+      </motion.nav>
     </aside>
   );
 }
@@ -121,24 +163,30 @@ export function MobileNav() {
   const items = groups.flatMap((group) => group.items).slice(0, 8);
 
   return (
-    <nav className="glass-strong sticky top-16 z-10 flex gap-2 overflow-x-auto border-b px-3 py-2 lg:hidden">
-      {items.map((item) => {
-        const active = currentHref === item.href || (item.href === pathname && !searchParams.toString());
-        const Icon = item.icon;
+    <motion.nav
+      variants={container}
+      initial="hidden"
+      animate="visible"
+      className="glass-strong sticky top-16 z-10 flex gap-2 overflow-x-auto border-b px-3 py-2 lg:hidden"
+    >
+      {items.map((navItem) => {
+        const active = currentHref === navItem.href || (navItem.href === pathname && !searchParams.toString());
+        const Icon = navItem.icon;
         return (
-          <Link
-            key={item.href}
-            href={item.href}
-            className={cn(
-              "flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm text-muted-foreground transition hover:bg-white/30 hover:text-foreground dark:hover:bg-white/10",
-              active && "glass-subtle text-foreground",
-            )}
-          >
-            <Icon className="h-4 w-4 shrink-0" />
-            <span>{item.label}</span>
-          </Link>
+          <motion.div key={navItem.href} variants={item}>
+            <Link
+              href={navItem.href}
+              className={cn(
+                "flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm text-muted-foreground transition hover:bg-white/30 hover:text-foreground dark:hover:bg-white/10",
+                active && "glass-subtle text-foreground",
+              )}
+            >
+              <Icon className="h-4 w-4 shrink-0" />
+              <span>{navItem.label}</span>
+            </Link>
+          </motion.div>
         );
       })}
-    </nav>
+    </motion.nav>
   );
 }
