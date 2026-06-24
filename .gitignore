@@ -20,3 +20,7 @@ logs/*
 .cache/
 .pytest_cache/
 *.sqlite3
+.opencode/*
+.claude/*
+logs/
+*.log
