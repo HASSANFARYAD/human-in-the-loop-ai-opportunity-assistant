@@ -126,7 +126,7 @@ def request_password_reset(email: str, reset_url_base: str, ip_address: str = ""
         return
     token = secrets.token_urlsafe(48)
     expires_at = (datetime.now(timezone.utc) + timedelta(minutes=settings.password_reset_token_expire_minutes)).isoformat(timespec="seconds")
-    create_password_reset_token(int(user["id"]), token, expires_at, ip_address=ip_address, user_agent=user_agent)
+    create_password_reset_token(int(user["user_id"]), token, expires_at, ip_address=ip_address, user_agent=user_agent)
     separator = "&" if "?" in reset_url_base else "?"
     send_password_reset_email(email, f"{reset_url_base}{separator}token={token}")
 
@@ -139,17 +139,17 @@ def reset_password(token: str, new_password: str) -> bool:
     if not user:
         return False
     validate_password_policy(new_password, user.get("email", ""))
-    if not consume_password_reset_token(int(reset_token["id"])):
+    if not consume_password_reset_token(int(reset_token["password_reset_token_id"])):
         return False
-    update_user_password(int(user["id"]), hash_password(new_password))
-    revoke_user_sessions(int(user["id"]))
+    update_user_password(int(user["user_id"]), hash_password(new_password))
+    revoke_user_sessions(int(user["user_id"]))
     return True
 
 
 def create_access_token(user: dict[str, Any]) -> str:
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
     payload = {
-        "sub": str(user["id"]),
+        "sub": str(user["user_id"]),
         "email": user["email"],
         "exp": expires_at,
     }
@@ -197,7 +197,7 @@ else:
 
 def public_user(user: dict[str, Any]) -> dict[str, Any]:
     return {
-        "id": user["id"],
+        "id": user["user_id"],
         "email": user["email"],
         "full_name": user.get("full_name", ""),
         "created_at": user.get("created_at", ""),
@@ -205,7 +205,7 @@ def public_user(user: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_refresh_token(user: dict[str, Any], days: int = 30) -> str:
-    return create_session_token(int(user["id"]), days=days)
+    return create_session_token(int(user["user_id"]), days=days)
 
 
 def user_from_refresh_token(token: str) -> dict[str, Any]:
