@@ -96,7 +96,7 @@ export const opportunityService = {
       await apiClient.post<{ status: string; filename: string; applied_to_profile: boolean; characters: number; extracted: Record<string, string> }>(
         "/profile/upload-resume",
         form,
-        { headers: { "Content-Type": "multipart/form-data" } },
+        { headers: { "Content-Type": "multipart/form-data" }, timeout: 120000 },
       )
     ).data;
   },
