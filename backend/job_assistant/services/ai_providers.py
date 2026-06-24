@@ -16,6 +16,7 @@ SUPPORTED_PROVIDERS = {
     "langchain_openai": "LangChain + OpenAI-compatible",
     "azure_openai": "Azure OpenAI / Foundry",
     "grok": "Grok / xAI",
+    "groq": "Groq",
     "claude": "Anthropic Claude",
     "gemini": "Google Gemini",
     "huggingface": "Hugging Face Inference",
@@ -236,6 +237,8 @@ def _generate_text(system: str, user: str, settings: dict[str, Any]) -> str:
         return _azure_openai(api_key, model, system, user, config)
     if provider == "grok":
         return _openai_compatible(api_key, model or "grok-3-mini", system, user, config.get("base_url") or "https://api.x.ai/v1")
+    if provider == "groq":
+        return _openai_compatible(api_key, model, system, user, config.get("base_url") or "https://api.groq.com/openai/v1")
     if provider == "claude":
         return _claude(api_key, model or "claude-3-5-sonnet-latest", system, user)
     if provider == "gemini":
