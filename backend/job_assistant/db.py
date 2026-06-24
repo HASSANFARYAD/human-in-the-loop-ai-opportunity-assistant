@@ -281,9 +281,17 @@ def delete_profile(user_id: int, profile_id: int) -> bool:
     return True
 
 
+def _profile_with_id_alias(doc: dict) -> dict:
+    """Add 'id' as an alias for 'profile_id' to maintain API compatibility."""
+    item = _strip_id(doc)
+    if item and "profile_id" in item:
+        item["id"] = item["profile_id"]
+    return item
+
+
 def list_profiles(user_id: int) -> list[dict[str, Any]]:
     docs = get_collection("profiles").find({"user_id": user_id}).sort([("is_default", pymongo.DESCENDING), ("name", pymongo.ASCENDING)])
-    return [_strip_id(d) for d in docs]
+    return [_profile_with_id_alias(d) for d in docs]
 
 
 def get_profile(user_id: int = 1, profile_id: int | None = None) -> Dict[str, Any]:
@@ -292,7 +300,7 @@ def get_profile(user_id: int = 1, profile_id: int | None = None) -> Dict[str, An
         doc = profiles.find_one({"profile_id": profile_id, "user_id": user_id})
     else:
         doc = profiles.find_one({"user_id": user_id}, sort=[("is_default", pymongo.DESCENDING), ("_id", pymongo.ASCENDING)])
-    return _strip_id(doc) if doc else {}
+    return _profile_with_id_alias(doc) if doc else {}
 
 
 def _workspace_scope_for_user(user_id: int, workspace_id: int | None = None) -> tuple[int, int]:
