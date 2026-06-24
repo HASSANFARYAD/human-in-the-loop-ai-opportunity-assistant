@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, FileText, Mic, Printer, Sparkles, Square, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
+import { Eye, ExternalLink, FileText, Mic, Printer, Sparkles, Square, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { DataFields } from "@/components/ui/data-display";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PreviewDialog } from "@/components/ui/preview-dialog";
+import { ResumePreview } from "./components/resume-preview";
+import { CoverLetterPreview } from "./components/cover-letter-preview";
 import { opportunityService } from "@/services/opportunity.service";
 import { formatDate, scoreTone } from "@/lib/utils";
 import type { Opportunity, TailoredResume } from "@/types/api";
@@ -152,6 +155,7 @@ export function OpportunityDetailView() {
     },
     onError: (error) => toast.error(error.message || "Failed to delete job"),
   });
+  const [preview, setPreview] = useState<"resume" | "cover-letter" | null>(null);
   const [recording, setRecording] = useState(false);
   const [notes, setNotes] = useState("");
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -328,7 +332,9 @@ export function OpportunityDetailView() {
             ) : null}
             <Button className="w-full" loading={score.isPending} disabled={!importable} onClick={() => score.mutate()}><Sparkles className="h-4 w-4" /> Refresh AI score</Button>
             <Button className="w-full" variant="secondary" loading={generate.isPending} disabled={!importable} onClick={() => generate.mutate()}><FileText className="h-4 w-4" /> Generate materials</Button>
+            {tailoredResume?.optional_cover_note ? <Button className="w-full" variant="ghost" size="sm" onClick={() => setPreview("cover-letter")}><Eye className="h-3.5 w-3.5" /> Preview cover letter</Button> : null}
             <Button className="w-full" variant="secondary" loading={tailorResume.isPending} disabled={!importable} onClick={() => tailorResume.mutate()}><FileText className="h-4 w-4" /> Tailor resume</Button>
+            {tailoredResume ? <Button className="w-full" variant="ghost" size="sm" onClick={() => setPreview("resume")}><Eye className="h-3.5 w-3.5" /> Preview resume</Button> : null}
             <label className="block text-xs text-muted-foreground">
               Resume document format
               <select
@@ -350,6 +356,20 @@ export function OpportunityDetailView() {
         <Card><CardHeader><CardTitle>Recordings</CardTitle></CardHeader><CardContent className="space-y-3">{(recordings.data ?? []).length ? (recordings.data ?? []).map((recording) => <audio key={String(recording.id)} controls className="w-full" src={safeAudioUrl(recording.playback_url || recording.data_url)} />) : <div className="text-sm text-muted-foreground">No recordings saved yet.</div>}</CardContent></Card>
         <Card><CardHeader><CardTitle>History</CardTitle></CardHeader><CardContent className="text-sm text-muted-foreground">Created {formatDate(item.created_at)} · Updated {formatDate(item.updated_at)}</CardContent></Card>
       </aside>
+      <PreviewDialog
+        open={preview === "resume"}
+        onClose={() => setPreview(null)}
+        title="Resume Preview"
+      >
+        <ResumePreview resume={tailoredResume} profile={(profiles.data ?? []).find((p) => p.is_default) ?? null} />
+      </PreviewDialog>
+      <PreviewDialog
+        open={preview === "cover-letter"}
+        onClose={() => setPreview(null)}
+        title="Cover Letter Preview"
+      >
+        <CoverLetterPreview resume={tailoredResume} job={item} />
+      </PreviewDialog>
     </div>
   );
 }
