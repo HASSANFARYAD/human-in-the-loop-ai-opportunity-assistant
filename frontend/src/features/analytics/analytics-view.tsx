@@ -2,9 +2,16 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { motion } from "framer-motion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScoreDistribution, SourceChart } from "@/components/charts/analytics-charts";
 import { opportunityService } from "@/services/opportunity.service";
+import { staggerItem } from "@/lib/animation";
+
+const container = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.1, delayChildren: 0.1 } },
+};
 
 export function AnalyticsView() {
   const jobs = useQuery({ queryKey: ["opportunities"], queryFn: () => opportunityService.list() });
@@ -17,13 +24,22 @@ export function AnalyticsView() {
     return { byType, bySource, buckets };
   }, [jobs.data]);
   return (
-    <div className="space-y-5">
-      <div><h1 className="text-2xl font-semibold">Insights</h1><p className="text-sm text-muted-foreground">Saved jobs by type/source and match score trends.</p></div>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card><CardHeader><CardTitle>Jobs by Type</CardTitle></CardHeader><CardContent><SourceChart data={data.byType.length ? data.byType : [{ name: "No data", value: 1 }]} /></CardContent></Card>
-        <Card><CardHeader><CardTitle>Jobs by Source</CardTitle></CardHeader><CardContent><SourceChart data={data.bySource.length ? data.bySource : [{ name: "No data", value: 1 }]} /></CardContent></Card>
-        <Card><CardHeader><CardTitle>Match Trends</CardTitle></CardHeader><CardContent><ScoreDistribution data={data.buckets} /></CardContent></Card>
-      </div>
-    </div>
+    <motion.div variants={container} initial="hidden" animate="visible" className="space-y-5">
+      <motion.div variants={staggerItem}>
+        <h1 className="text-2xl font-semibold">Insights</h1>
+        <p className="text-sm text-muted-foreground">Saved jobs by type/source and match score trends.</p>
+      </motion.div>
+      <motion.div variants={container} initial="hidden" animate="visible" className="grid gap-4 lg:grid-cols-2">
+        <motion.div variants={staggerItem}>
+          <Card><CardHeader><CardTitle>Jobs by Type</CardTitle></CardHeader><CardContent><SourceChart data={data.byType.length ? data.byType : [{ name: "No data", value: 1 }]} /></CardContent></Card>
+        </motion.div>
+        <motion.div variants={staggerItem}>
+          <Card><CardHeader><CardTitle>Jobs by Source</CardTitle></CardHeader><CardContent><SourceChart data={data.bySource.length ? data.bySource : [{ name: "No data", value: 1 }]} /></CardContent></Card>
+        </motion.div>
+        <motion.div variants={staggerItem}>
+          <Card><CardHeader><CardTitle>Match Trends</CardTitle></CardHeader><CardContent><ScoreDistribution data={data.buckets} /></CardContent></Card>
+        </motion.div>
+      </motion.div>
+    </motion.div>
   );
 }

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { motion } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpDown, ExternalLink, Plus, Search, Sparkles, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
@@ -191,9 +192,18 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
   if (showMaterials) return <MaterialsView />;
   if (showReminders) return <RemindersView />;
 
+  const staggerContainer = {
+    hidden: {},
+    visible: { transition: { staggerChildren: 0.04, delayChildren: 0.08 } },
+  };
+  const staggerRow = {
+    hidden: { opacity: 0, x: -8 },
+    visible: { opacity: 1, x: 0, transition: { type: "spring" as const, stiffness: 260, damping: 24 } },
+  };
+
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+    <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="space-y-5">
+      <motion.div variants={staggerRow} className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">{source === "public" ? "Find Jobs" : reviewOnly ? "Review Jobs" : "All Jobs"}</h1>
           <p className="text-sm text-muted-foreground">Search, filter, score, and track jobs matched to your resume and preferences.</p>
@@ -204,7 +214,7 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
           </Button>
           <Button asChild><Link href="/opportunities?import=manual"><Plus className="h-4 w-4" /> Add job</Link></Button>
         </div>
-      </div>
+      </motion.div>
       <Card className="no-print">
         <CardContent className="grid gap-3 p-4 md:grid-cols-[1fr_180px_180px]">
           <div className="relative">
@@ -274,12 +284,12 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
               <th className="p-3 text-right">Actions</th>
             </tr>
           </thead>
-          <tbody>
+          <motion.tbody variants={staggerContainer} initial="hidden" animate="visible">
             {pageItems.map((item) => {
               const importable = isImportableOpportunity(item);
               const scoreValue = visibleScore(item);
               return (
-                <tr key={item.id} className="border-t">
+                <motion.tr key={item.id} variants={staggerRow} className="border-t">
                   <td className="p-3"><input type="checkbox" aria-label={`Select ${item.title}`} disabled={!importable || scoringBusy} checked={selected.includes(item.id)} onChange={() => toggleSelected(item.id)} /></td>
                   <td className="p-3"><Link href={`/opportunities/${item.id}`} className="font-medium hover:text-primary">{item.title}</Link><div className="text-muted-foreground">{item.company || "Unknown company"} - {item.location || "Remote/unspecified"}</div>{!importable ? <div className="text-xs text-destructive">{item.blocked_reason || item.classification_reason || "Not a job"}</div> : null}</td>
                   <td className="p-3"><Badge>{item.classification || item.opportunity_type || "job"}</Badge></td>
@@ -294,10 +304,10 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
                       <Button size="sm" variant="outline" disabled={deleteMutation.isPending} onClick={() => confirmDelete(item.id, item.title)}><Trash2 className="h-3.5 w-3.5" /> Delete</Button>
                     </div>
                   </td>
-                </tr>
+                </motion.tr>
               );
             })}
-          </tbody>
+          </motion.tbody>
         </table>
       </div>
       )}
@@ -309,7 +319,7 @@ export function OpportunityListView({ reviewOnly = false }: { reviewOnly?: boole
           <Button size="sm" variant="outline" disabled={page === pages} onClick={() => setPage((p) => p + 1)}>Next</Button>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }
 

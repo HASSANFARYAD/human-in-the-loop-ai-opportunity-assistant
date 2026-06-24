@@ -1,7 +1,9 @@
 import * as React from "react";
 import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
+import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { springTap } from "@/lib/animation";
 
 const buttonVariants = cva(
   "inline-flex h-10 items-center justify-center gap-2 rounded-md px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
@@ -28,8 +30,22 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   asChild?: boolean;
 }
 
+const MotionButton = motion.button;
+
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(({ className, variant, size, asChild = false, ...props }, ref) => {
-  const Comp = asChild ? Slot : "button";
-  return <Comp className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...props} />;
+  if (asChild) {
+    const Comp = Slot as React.ElementType;
+    return <Comp className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...(props as Record<string, unknown>)} />;
+  }
+  return (
+    <MotionButton
+      ref={ref}
+      whileHover={{ scale: 1.03 }}
+      whileTap={{ scale: 0.96 }}
+      transition={springTap}
+      className={cn(buttonVariants({ variant, size, className }), "will-change-transform")}
+      {...(props as Record<string, unknown>)}
+    />
+  );
 });
 Button.displayName = "Button";

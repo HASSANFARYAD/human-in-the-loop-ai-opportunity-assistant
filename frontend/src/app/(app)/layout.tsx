@@ -25,9 +25,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       setAuthReady(true);
       if (!ok) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const me = useQuery({

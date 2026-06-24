@@ -2,22 +2,42 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { motion } from "framer-motion";
 import { Briefcase, CalendarClock, ClipboardCheck, Sparkles } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SourceChart, ScoreDistribution, TrendChart } from "@/components/charts/analytics-charts";
 import { opportunityService } from "@/services/opportunity.service";
+import { staggerItem } from "@/lib/animation";
+
+const container = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.08, delayChildren: 0.1 } },
+};
+
+const chartContainer = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.1, delayChildren: 0.3 } },
+};
 
 function Kpi({ label, value, icon: Icon }: { label: string; value: string | number; icon: typeof Briefcase }) {
   return (
-    <Card>
-      <CardContent className="flex items-center justify-between p-5">
-        <div>
-          <div className="text-sm text-muted-foreground">{label}</div>
-          <div className="mt-2 text-2xl font-semibold">{value}</div>
-        </div>
-        <span className="grid h-10 w-10 place-items-center rounded-md bg-primary/10 text-primary"><Icon className="h-5 w-5" /></span>
-      </CardContent>
-    </Card>
+    <motion.div variants={staggerItem}>
+      <Card>
+        <CardContent className="flex items-center justify-between p-5">
+          <div>
+            <div className="text-sm text-muted-foreground">{label}</div>
+            <div className="mt-2 text-2xl font-semibold tabular-nums">{value}</div>
+          </div>
+          <motion.span
+            whileHover={{ rotate: 12, scale: 1.15 }}
+            transition={{ type: "spring", stiffness: 300, damping: 15 }}
+            className="grid h-10 w-10 place-items-center rounded-md bg-primary/10 text-primary"
+          >
+            <Icon className="h-5 w-5" />
+          </motion.span>
+        </CardContent>
+      </Card>
+    </motion.div>
   );
 }
 
@@ -47,24 +67,35 @@ export function DashboardView() {
   const hasError = jobs.isError;
 
   return (
-    <div className="space-y-6">
-      <div>
+    <motion.div
+      variants={container}
+      initial="hidden"
+      animate="visible"
+      className="space-y-6"
+    >
+      <motion.div variants={staggerItem}>
         <h1 className="text-2xl font-semibold">Dashboard</h1>
         <p className="text-sm text-muted-foreground">Track saved jobs, match scores, reviews, and upcoming deadlines.</p>
-      </div>
+      </motion.div>
       {isLoading ? <div className="rounded-md border p-4 text-sm text-muted-foreground">Loading dashboard data...</div> : null}
       {hasError ? <div className="rounded-md border border-destructive/30 p-4 text-sm text-destructive">Some dashboard data could not be loaded. Refresh or check the API connection.</div> : null}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <motion.div variants={container} initial="hidden" animate="visible" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Saved Jobs" value={savedJobs.length} icon={Briefcase} />
         <Kpi label="High Match" value={savedJobs.filter((j) => Number(j.match_score ?? j.score ?? 0) >= 80).length} icon={Sparkles} />
         <Kpi label="Pending Reviews" value={savedJobs.filter((j) => (j.status ?? "new").includes("review")).length} icon={ClipboardCheck} />
         <Kpi label="Upcoming Deadlines" value={savedJobs.filter((j) => j.deadline).length} icon={CalendarClock} />
-      </div>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card><CardHeader><CardTitle>Job Sources</CardTitle></CardHeader><CardContent><SourceChart data={chartData.sources.length ? chartData.sources : [{ name: "No data", value: 1 }]} /></CardContent></Card>
-        <Card><CardHeader><CardTitle>Match Score Distribution</CardTitle></CardHeader><CardContent><ScoreDistribution data={chartData.buckets} /></CardContent></Card>
-        <Card><CardHeader><CardTitle>Weekly Activity</CardTitle></CardHeader><CardContent>{hasWeeklyData ? <TrendChart data={chartData.weekly} /> : <div className="py-12 text-center text-sm text-muted-foreground">No data available</div>}</CardContent></Card>
-      </div>
-    </div>
+      </motion.div>
+      <motion.div variants={chartContainer} initial="hidden" animate="visible" className="grid gap-4 lg:grid-cols-2">
+        <motion.div variants={staggerItem}>
+          <Card><CardHeader><CardTitle>Job Sources</CardTitle></CardHeader><CardContent><SourceChart data={chartData.sources.length ? chartData.sources : [{ name: "No data", value: 1 }]} /></CardContent></Card>
+        </motion.div>
+        <motion.div variants={staggerItem}>
+          <Card><CardHeader><CardTitle>Match Score Distribution</CardTitle></CardHeader><CardContent><ScoreDistribution data={chartData.buckets} /></CardContent></Card>
+        </motion.div>
+        <motion.div variants={staggerItem}>
+          <Card><CardHeader><CardTitle>Weekly Activity</CardTitle></CardHeader><CardContent>{hasWeeklyData ? <TrendChart data={chartData.weekly} /> : <div className="py-12 text-center text-sm text-muted-foreground">No data available</div>}</CardContent></Card>
+        </motion.div>
+      </motion.div>
+    </motion.div>
   );
 }
