@@ -60,6 +60,7 @@ Concrete value: less context-switching, higher-signal targeting (scoring + learn
 - **Resume review** — AI feedback on a resume against a target role/job (strengths, gaps, missing keywords, formatting tips).
 
 ### Opportunity discovery (multi-source)
+- **Enter job details directly** — structured form with title, company, and description fields (no URL required). Runs through the same classification, dedup, and scoring pipeline as auto-discovered jobs.
 - **Paste text or URL** → AI extracts a clean opportunity (handles single listings and pages with multiple nested listings).
 - **Public job feeds** — RemoteJobs, Arbeitnow, Remotive, Jobicy, Hacker News, etc.
 - **LinkedIn via RapidAPI**, **Apify scraper actors**, and **paginated URL import** for custom boards.

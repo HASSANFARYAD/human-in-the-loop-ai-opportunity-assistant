@@ -353,12 +353,19 @@ function BatchScoreResultPanel({ result }: { result: BatchScoreResult }) {
 
 function ManualImportView() {
   const qc = useQueryClient();
+  const [mode, setMode] = useState<"paste" | "form">("paste");
   const [source, setSource] = useState("Manual");
   const [opportunityType, setOpportunityType] = useState("auto");
   const [workLocationFilter, setWorkLocationFilter] = useState("all");
   const [raw, setRaw] = useState("");
   const [preview, setPreview] = useState<Opportunity | null>(null);
   const [previewList, setPreviewList] = useState<Opportunity[]>([]);
+  const [formTitle, setFormTitle] = useState("");
+  const [formCompany, setFormCompany] = useState("");
+  const [formDescription, setFormDescription] = useState("");
+  const [formUrl, setFormUrl] = useState("");
+  const [formLocation, setFormLocation] = useState("");
+  const [formRemoteType, setFormRemoteType] = useState("");
   const isListingUrl = /^https?:\/\/\S+/i.test(raw.trim()) && /indeed\.[a-z.]+\/(?:jobs|q-|jobs\/search|jobs\/collections)/i.test(raw.trim());
   const extract = useMutation({
     mutationFn: () => opportunityService.extract({ raw, source, opportunity_type: opportunityType, work_location_filter: workLocationFilter }),
@@ -404,32 +411,94 @@ function ManualImportView() {
     },
     onError: (error) => toast.error(error.message),
   });
+  const manualEntry = useMutation({
+    mutationFn: () => opportunityService.manualEntry({ title: formTitle.trim(), company: formCompany.trim(), description: formDescription.trim(), url: formUrl.trim() || undefined, location: formLocation.trim() || undefined, remote_type: formRemoteType.trim() || undefined, source, opportunity_type: opportunityType === "auto" ? "job" : opportunityType }),
+    onSuccess: (data) => {
+      if (data.imported > 0) {
+        toast.success(`Job saved.${data.skipped_duplicates ? " Skipped duplicate." : ""}`);
+        setFormTitle(""); setFormCompany(""); setFormDescription(""); setFormUrl(""); setFormLocation(""); setFormRemoteType("");
+        qc.invalidateQueries({ queryKey: ["opportunities"] });
+      } else if (data.skipped_duplicates > 0) {
+        toast.info("Duplicate job — already saved.");
+      }
+      if (data.warnings?.length) data.warnings.forEach((w) => toast.warning(w));
+      if (data.errors?.length) data.errors.forEach((e) => toast.error(e));
+    },
+    onError: (error) => toast.error(error.message || "Failed to save job"),
+  });
+  const formValid = formTitle.trim().length > 0 && formDescription.trim().length > 0;
   return (
     <div className="space-y-5">
-      <div><h1 className="text-2xl font-semibold">Add Job</h1><p className="text-sm text-muted-foreground">Paste a job URL, email, or description from LinkedIn, Indeed, company career pages, or recruiter messages. Review the extracted job before saving it.</p></div>
-      <Card><CardContent className="grid gap-4 p-5 md:grid-cols-3">
-        <label className="space-y-1.5 text-sm font-medium">
-          <span>Source</span>
-          <select className="h-10 w-full rounded-md border bg-background/70 px-3 text-sm font-normal" value={source} onChange={(e) => setSource(e.target.value)}>
-            {MANUAL_SOURCES.map((item) => <option key={item} value={item}>{item}</option>)}
-          </select>
-        </label>
-        <label className="space-y-1.5 text-sm font-medium">
-          <span>Job type</span>
-          <select className="h-10 w-full rounded-md border bg-background/70 px-3 text-sm font-normal" value={opportunityType} onChange={(e) => setOpportunityType(e.target.value)}>
-            {OPPORTUNITY_TYPES.map((item) => <option key={item} value={item}>{item}</option>)}
-          </select>
-        </label>
-        <label className="space-y-1.5 text-sm font-medium">
-          <span>Work location</span>
-          <select className="h-10 w-full rounded-md border bg-background/70 px-3 text-sm font-normal" value={workLocationFilter} onChange={(e) => setWorkLocationFilter(e.target.value)}>
-            {WORK_LOCATION_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-          </select>
-        </label>
-        <Textarea className="md:col-span-2" placeholder="Paste job URL, email, or full description..." value={raw} onChange={(e) => setRaw(e.target.value)} />
-        <Button disabled={!raw.trim() || extract.isPending} onClick={() => extract.mutate()}><Sparkles className="h-4 w-4" /> Extract preview</Button>
-        <Button variant="secondary" disabled={isListingUrl ? importUrl.isPending : (!preview && !previewList.length) || create.isPending} onClick={() => isListingUrl ? importUrl.mutate() : create.mutate(previewList.length ? previewList : undefined)}><Plus className="h-4 w-4" /> {isListingUrl ? "Import jobs from URL" : "Import approved preview"}</Button>
-      </CardContent></Card>
+      <div><h1 className="text-2xl font-semibold">Add Job</h1><p className="text-sm text-muted-foreground">Paste a job URL or description, or enter job details directly.</p></div>
+      <div className="flex gap-2">
+        <button type="button" className={`rounded-md border px-4 py-1.5 text-sm ${mode === "paste" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`} onClick={() => setMode("paste")}>Paste</button>
+        <button type="button" className={`rounded-md border px-4 py-1.5 text-sm ${mode === "form" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`} onClick={() => setMode("form")}>Enter details</button>
+      </div>
+      {mode === "paste" ? (
+        <Card><CardContent className="grid gap-4 p-5 md:grid-cols-3">
+          <label className="space-y-1.5 text-sm font-medium">
+            <span>Source</span>
+            <select className="h-10 w-full rounded-md border bg-background/70 px-3 text-sm font-normal" value={source} onChange={(e) => setSource(e.target.value)}>
+              {MANUAL_SOURCES.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1.5 text-sm font-medium">
+            <span>Job type</span>
+            <select className="h-10 w-full rounded-md border bg-background/70 px-3 text-sm font-normal" value={opportunityType} onChange={(e) => setOpportunityType(e.target.value)}>
+              {OPPORTUNITY_TYPES.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1.5 text-sm font-medium">
+            <span>Work location</span>
+            <select className="h-10 w-full rounded-md border bg-background/70 px-3 text-sm font-normal" value={workLocationFilter} onChange={(e) => setWorkLocationFilter(e.target.value)}>
+              {WORK_LOCATION_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </label>
+          <Textarea className="md:col-span-2" placeholder="Paste job URL, email, or full description..." value={raw} onChange={(e) => setRaw(e.target.value)} />
+          <Button disabled={!raw.trim() || extract.isPending} onClick={() => extract.mutate()}><Sparkles className="h-4 w-4" /> Extract preview</Button>
+          <Button variant="secondary" disabled={isListingUrl ? importUrl.isPending : (!preview && !previewList.length) || create.isPending} onClick={() => isListingUrl ? importUrl.mutate() : create.mutate(previewList.length ? previewList : undefined)}><Plus className="h-4 w-4" /> {isListingUrl ? "Import jobs from URL" : "Import approved preview"}</Button>
+        </CardContent></Card>
+      ) : (
+        <Card><CardContent className="grid gap-4 p-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="space-y-1.5 text-sm font-medium">
+              <span>Job title <span className="text-destructive">*</span></span>
+              <input className="h-10 w-full rounded-md border bg-background/70 px-3 text-sm" placeholder="e.g. Senior Frontend Engineer" value={formTitle} onChange={(e) => setFormTitle(e.target.value)} />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              <span>Company <span className="text-destructive">*</span></span>
+              <input className="h-10 w-full rounded-md border bg-background/70 px-3 text-sm" placeholder="e.g. Acme Corp" value={formCompany} onChange={(e) => setFormCompany(e.target.value)} />
+            </label>
+          </div>
+          <label className="space-y-1.5 text-sm font-medium">
+            <span>Job description <span className="text-destructive">*</span></span>
+            <textarea className="min-h-[180px] w-full rounded-md border bg-background/70 px-3 py-2 text-sm" placeholder="Paste the full job description..." value={formDescription} onChange={(e) => setFormDescription(e.target.value)} />
+          </label>
+          <div className="grid gap-4 md:grid-cols-3">
+            <label className="space-y-1.5 text-sm font-medium">
+              <span>URL (optional)</span>
+              <input className="h-10 w-full rounded-md border bg-background/70 px-3 text-sm" placeholder="https://..." value={formUrl} onChange={(e) => setFormUrl(e.target.value)} />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              <span>Location (optional)</span>
+              <input className="h-10 w-full rounded-md border bg-background/70 px-3 text-sm" placeholder="e.g. San Francisco, CA" value={formLocation} onChange={(e) => setFormLocation(e.target.value)} />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              <span>Remote type (optional)</span>
+              <select className="h-10 w-full rounded-md border bg-background/70 px-3 text-sm font-normal" value={formRemoteType} onChange={(e) => setFormRemoteType(e.target.value)}>
+                <option value="">Not specified</option>
+                <option value="Remote">Remote</option>
+                <option value="Hybrid">Hybrid</option>
+                <option value="On-site">On-site</option>
+              </select>
+            </label>
+          </div>
+          <div className="flex gap-2">
+            <Button disabled={!formValid || manualEntry.isPending} onClick={() => manualEntry.mutate()}><Plus className="h-4 w-4" /> Save job</Button>
+            {manualEntry.data?.imported ? <Button variant="outline" asChild><Link href={`/opportunities/${manualEntry.data.id}`}>Open saved job</Link></Button> : null}
+          </div>
+        </CardContent></Card>
+      )}
       {preview ? <DiscoveryPreview opportunities={[preview]} onImport={(items) => create.mutate(items)} importing={create.isPending} /> : null}
       {previewList.length ? <DiscoveryPreview opportunities={previewList} onImport={(items) => create.mutate(items)} importing={create.isPending} /> : null}
     </div>

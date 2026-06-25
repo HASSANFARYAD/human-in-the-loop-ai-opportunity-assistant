@@ -5,7 +5,7 @@ Local-first Next.js + FastAPI + MongoDB + SQLite assistant for collecting, scori
 ## What It Does
 
 - Stores user accounts, sessions, profile/resume context, provider settings, and opportunity data in SQLite.
-- Imports opportunities from pasted text, CSV, configured Gmail alerts, public no-login sources, and user-configured Apify actors.
+- Imports opportunities from pasted text, CSV, configured Gmail alerts, public no-login sources, user-configured Apify actors, and a structured manual-entry form (title + company + description).
 - Scores job-like opportunities against a saved profile and can draft editable materials, resume reviews, and interview prep.
 - Tracks application status, notes, reminders, recordings metadata, and generated artifacts.
 - **Conversational AI agent** with streaming chat, tool-calling intent classification, follow-up suggestions, and **cross-session agent memory** that recalls user facts across conversations.

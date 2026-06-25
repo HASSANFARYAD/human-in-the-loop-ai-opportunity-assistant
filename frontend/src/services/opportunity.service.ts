@@ -129,4 +129,6 @@ export const opportunityService = {
     (await apiClient.post<{ status: string; source: string; work_location_filter?: string; jobs_found?: number; jobs_imported?: number; jobs_skipped_duplicates?: number; jobs_skipped_location_filter?: number; found: number; imported: number; skipped_duplicates: number; errors: string[]; warnings: string[]; ids: number[] }>("/discovery/import-url", payload)).data,
   importDiscovered: async (opportunities: Opportunity[], workspace_id?: number) =>
     (await apiClient.post<{ status: string; ids: number[]; count: number; found?: number; imported?: number; skipped_duplicates?: number; errors?: string[]; warnings?: string[] }>("/discovery/import", { opportunities, workspace_id })).data,
+  manualEntry: async (payload: { title: string; company: string; description: string; url?: string; location?: string; remote_type?: string; salary_min?: number; salary_max?: number; deadline?: string; opportunity_type?: string; source?: string; workspace_id?: number }) =>
+    (await apiClient.post<{ status: string; id: number | null; ids: number[]; imported: number; skipped_duplicates: number; warnings?: string[]; errors?: string[] }>("/discovery/manual-entry", payload)).data,
 };

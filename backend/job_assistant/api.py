@@ -327,6 +327,21 @@ class DiscoveryImportUrlIn(BaseModel):
         return _normalize_work_location_filter(value)
 
 
+class ManualEntryIn(BaseModel):
+    workspace_id: Optional[int] = None
+    title: str = Field(..., min_length=1)
+    company: str
+    description: str = Field(..., min_length=1)
+    url: Optional[str] = None
+    location: Optional[str] = None
+    remote_type: Optional[str] = None
+    salary_min: Optional[float] = None
+    salary_max: Optional[float] = None
+    deadline: Optional[str] = None
+    opportunity_type: str = "job"
+    source: str = "Manual"
+
+
 class DiscoveryRapidApiIn(BaseModel):
     workspace_id: Optional[int] = None
     title_filter: str
@@ -2247,6 +2262,36 @@ async def discovery_import(payload: DiscoveryImportIn, user: dict = Depends(curr
         "skipped_duplicates": result.skipped_duplicates,
         "errors": result.errors,
         "warnings": result.warnings,
+    }
+
+
+@router.post("/discovery/manual-entry")
+async def discovery_manual_entry(payload: ManualEntryIn, user: dict = Depends(current_user)):
+    opportunity = {
+        "title": payload.title.strip(),
+        "company": payload.company.strip() if payload.company else "",
+        "description": payload.description.strip(),
+        "raw_text": payload.description.strip(),
+        "url": payload.url.strip() if payload.url else "",
+        "location": payload.location.strip() if payload.location else "",
+        "remote_type": payload.remote_type.strip() if payload.remote_type else "",
+        "salary_min": payload.salary_min,
+        "salary_max": payload.salary_max,
+        "deadline": payload.deadline.strip() if payload.deadline else "",
+        "source": payload.source.strip() if payload.source else "Manual",
+        "opportunity_type": payload.opportunity_type,
+    }
+    result = import_opportunities([opportunity], user["id"], workspace_id=payload.workspace_id)
+    if result.errors and not result.imported:
+        raise HTTPException(status_code=500, detail=result.errors[0])
+    return {
+        "status": "success" if not result.errors else "partial_success",
+        "id": result.ids[0] if result.ids else None,
+        "ids": result.ids,
+        "imported": result.imported,
+        "skipped_duplicates": result.skipped_duplicates,
+        "warnings": result.warnings,
+        "errors": result.errors,
     }
 
 
