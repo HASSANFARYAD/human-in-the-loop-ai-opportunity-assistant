@@ -38,14 +38,37 @@ def _matches_query(opportunity: Dict[str, Any], query: str) -> bool:
     return all(term.lower() in haystack for term in query.split())
 
 
+def _content_hash(job: Dict[str, Any]) -> str:
+    raw = "|".join([
+        str(job.get("title") or "").strip().lower(),
+        str(job.get("company") or "").strip().lower(),
+        str(job.get("description") or job.get("raw_text") or "").strip().lower(),
+    ])
+    import hashlib
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _dedupe(opportunities: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    seen: set[str] = set()
+    seen_urls: set[str] = set()
+    seen_hashes: set[str] = set()
+    seen_tc: set[str] = set()
     unique: list[dict[str, Any]] = []
     for opportunity in opportunities:
-        key = opportunity.get("url") or f"{opportunity.get('title')}|{opportunity.get('company')}"
-        if key in seen:
+        url = opportunity.get("url") or ""
+        title = str(opportunity.get("title") or "").strip()
+        company = str(opportunity.get("company") or "").strip()
+        ch = _content_hash(opportunity)
+        tc_key = f"{title}|{company}" if title and company else ""
+        if url and url in seen_urls:
             continue
-        seen.add(key)
+        if ch in seen_hashes:
+            continue
+        if tc_key and tc_key in seen_tc:
+            continue
+        seen_urls.add(url) if url else None
+        seen_hashes.add(ch)
+        if tc_key:
+            seen_tc.add(tc_key)
         unique.append(opportunity)
     return unique
 

@@ -68,6 +68,12 @@ Concrete value: less context-switching, higher-signal targeting (scoring + learn
 - **Gmail ingestion** — connect Gmail, detect job-alert emails, and turn them into tracked opportunities.
 - **Opportunity classifier** — distinguishes real jobs/internships/contracts from newsletters, webinars, and hackathons, and gates what gets imported.
 
+- **Duplicate detection** — every entry point (auto-discovery, manual import, structured manual entry) runs a three-key dedup pipeline before inserting a new job:
+  1. **URL** — exact match on `job_url` (handles the same source listing revisited).
+  2. **Content hash** — SHA-256 of `lowercase(strip(title + "|" + company + "|" + description))` — catches the same job posted on different boards with different URLs.
+  3. **Title + company** — exact match on the normalized pair — catches re-posted jobs (same role, same employer, new URL and date).
+  All three checks are evaluated; a match on any one rejects the insertion. In-memory dedup within a single batch prevents importing the same item twice in one run. *Near-duplicate fuzzy matching (e.g. "Sr. Software Engineer" vs "Senior Software Engineer") is a known gap and is not yet implemented.*
+
 ### Scoring & matching
 - **Match scoring** of each opportunity against the selected profile — overall score plus component breakdown (skills, title, seniority, location, salary, industry, work authorization, deal-breakers).
 - **Per-job profile selection** — choose which profile scores/tailors a given job.

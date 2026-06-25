@@ -381,6 +381,7 @@ def insert_job(job: Dict[str, Any], user_id: int = 1, workspace_id: int | None =
         "raw_source_snippet": job.get("raw_source_snippet", ""),
         "original_url": job.get("original_url", ""),
         "resolved_url": job.get("resolved_url", job.get("url") or ""),
+        "content_hash": job.get("content_hash") or _content_hash(job),
         "created_at": now,
         "updated_at": now,
     }
@@ -398,6 +399,33 @@ def insert_job(job: Dict[str, Any], user_id: int = 1, workspace_id: int | None =
         if existing:
             return int(existing["job_id"])
         raise
+
+
+def _content_hash(job: dict[str, Any]) -> str:
+    raw = "|".join([
+        str(job.get("title") or "").strip().lower(),
+        str(job.get("company") or "").strip().lower(),
+        str(job.get("description") or job.get("raw_text") or "").strip().lower(),
+    ])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def job_exists(job: dict[str, Any], user_id: int = 1, workspace_id: int | None = None) -> bool:
+    """Check if a job already exists by URL, content hash, or title+company combo."""
+    scoped_workspace_id, _ = _workspace_scope_for_user(user_id, workspace_id)
+    query: list[dict[str, Any]] = []
+    url = (job.get("url") or "").strip()
+    if url:
+        query.append({"user_id": user_id, "workspace_id": scoped_workspace_id, "url": url})
+    title = (job.get("title") or "").strip()
+    company = (job.get("company") or "").strip()
+    if title and company:
+        query.append({"user_id": user_id, "workspace_id": scoped_workspace_id, "title": title, "company": company})
+    ch = _content_hash(job)
+    query.append({"user_id": user_id, "workspace_id": scoped_workspace_id, "content_hash": ch})
+    if not query:
+        return False
+    return bool(get_collection("jobs").find_one({"$or": query}))
 
 
 def job_url_exists(url: str, user_id: int = 1, workspace_id: int | None = None) -> bool:
