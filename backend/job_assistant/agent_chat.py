@@ -17,6 +17,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from job_assistant.ai_orchestrator import ai_orchestrator
+from job_assistant.db import get_active_prompt, get_agent_persona
 from job_assistant.services.public_discovery import discover_public_opportunities
 from job_assistant.services.scoring import score_job
 
@@ -122,6 +123,42 @@ def _opportunities_context(opportunities: Optional[List[Dict[str, Any]]]) -> str
     return "\n".join(lines)
 
 
+def _build_chat_system(profile: Optional[Dict[str, Any]], opportunities: Optional[List[Dict[str, Any]]], user_id: Optional[int] = None) -> str:
+    """Build the system prompt from DB template (or hardcoded fallback) + user data."""
+    template = get_active_prompt("chat_system") if user_id else ""
+    if not template:
+        template = (
+            "You are a warm, sharp career assistant inside a job-application app. "
+            "Hold a natural, multi-turn conversation: answer follow-ups, remember "
+            "what was said, ask a clarifying question when it helps. Be concise and "
+            "practical, use the user's own data when relevant, and never invent jobs "
+            "or facts that aren't in the context. You can also act on the user's "
+            "behalf — if they want it, tell them you can search for jobs, tailor "
+            "their resume to a saved opportunity, or run interview prep, and that "
+            "they just need to ask."
+        )
+
+    persona = get_agent_persona(user_id) if user_id else {}
+    persona_notes = ""
+    if persona:
+        parts = []
+        if persona.get("tone"):
+            parts.append(f"Tone: {persona['tone']}")
+        if persona.get("detail_level"):
+            parts.append(f"Detail level: {persona['detail_level']}")
+        if persona.get("focus_area"):
+            parts.append(f"Focus area: {persona['focus_area']}")
+        if parts:
+            persona_notes = "User preferences:\n" + "\n".join(parts) + "\n\n"
+
+    return (
+        f"{template}\n\n"
+        f"{persona_notes}"
+        f"User profile:\n{_profile_context(profile or {})}\n\n"
+        f"Saved opportunities:\n{_opportunities_context(opportunities)}"
+    )
+
+
 def chat_reply_stream(
     message: str,
     history: Optional[List[Dict[str, str]]] = None,
@@ -137,18 +174,7 @@ def chat_reply_stream(
         if content:
             transcript += f"{role}: {content[:800]}\n"
 
-    system = (
-        "You are a warm, sharp career assistant inside a job-application app. "
-        "Hold a natural, multi-turn conversation: answer follow-ups, remember "
-        "what was said, ask a clarifying question when it helps. Be concise and "
-        "practical, use the user's own data when relevant, and never invent jobs "
-        "or facts that aren't in the context. You can also act on the user's "
-        "behalf — if they want it, tell them you can search for jobs, tailor "
-        "their resume to a saved opportunity, or run interview prep, and that "
-        "they just need to ask.\n\n"
-        f"User profile:\n{_profile_context(profile or {})}\n\n"
-        f"Saved opportunities:\n{_opportunities_context(opportunities)}"
-    )
+    system = _build_chat_system(profile, opportunities, user_id)
     user = (
         (f"Conversation so far:\n{transcript}\n" if transcript else "")
         + f"User: {message}\n\nReply as the assistant."
@@ -164,6 +190,42 @@ def chat_reply_stream(
             "I can help you find jobs, tailor your resume to a specific opportunity, "
             "or prep you for interviews — what would you like to start with?"
         )
+
+
+def generate_suggestions(
+    message: str,
+    reply: str,
+    history: Optional[List[Dict[str, str]]] = None,
+    user_id: Optional[int] = None,
+) -> list[str]:
+    """Generate 2-3 follow-up suggestions based on the last exchange."""
+    transcript = ""
+    for turn in (history or [])[-4:]:
+        role = "User" if turn.get("role") == "user" else "Assistant"
+        content = str(turn.get("content", ""))[:300]
+        if content:
+            transcript += f"{role}: {content}\n"
+
+    system = (
+        "Given the conversation so far and the assistant's last reply, suggest "
+        "2-3 short, natural follow-up questions or actions the user could take next. "
+        "Return ONLY a JSON array of strings, each 3-10 words. "
+        "Focus on career-relevant next steps."
+    )
+    user = (
+        f"Conversation so far:\n{transcript}\n"
+        f"Assistant's last reply: {reply[:600]}\n\n"
+        "Suggestions:"
+    )
+
+    fallback: list[str] = [
+        "Find me relevant jobs",
+        "Tailor my resume",
+        "Prep me for an interview",
+    ]
+    data = ai_orchestrator.ask_json(system, user, {"suggestions": fallback}, user_id=user_id, task_type="agent_suggestions")
+    raw = data.get("suggestions") or fallback
+    return [str(s).strip() for s in raw if isinstance(s, str)][:3] or fallback[:3]
 
 
 def chat_reply(
@@ -219,12 +281,39 @@ def _profile_search_query(profile: Dict[str, Any]) -> str:
     ).strip()
 
 
+def _extract_search_context(history: Optional[List[Dict[str, str]]]) -> str:
+    """Extract relevant search terms from recent conversation history."""
+    if not history:
+        return ""
+    context_terms: list[str] = []
+    for turn in history[-6:]:
+        content = str(turn.get("content", "")).strip()
+        if not content:
+            continue
+        msg = content[:500].lower()
+        # Look for role/job/location keywords
+        for prefix in ("roles like", "jobs in", "positions as", "title like", "looking for", "find me"):
+            if prefix in msg[:60]:
+                remainder = msg.split(prefix, 1)[-1].split(".")[0].split("?")[0].strip()
+                if remainder:
+                    context_terms.append(remainder)
+        # Also grab "as a ..." patterns
+        for prefix in ("as a", "as an"):
+            idx = msg.find(prefix)
+            if idx != -1 and idx < 100:
+                after = msg[idx + len(prefix):].split(".")[0].split("?")[0].split(",")[0].strip()
+                if after and len(after) < 60:
+                    context_terms.append(after)
+    return " ".join(context_terms[-3:])  # keep last 3
+
+
 def run_job_search(
     profile: Dict[str, Any],
     query: str = "",
     *,
     user_id: Optional[int] = None,
     limit: int = 12,
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> List[Dict[str, Any]]:
     """Job Search Agent: discover real listings and score them against the profile.
 
@@ -232,7 +321,9 @@ def run_job_search(
     Uses the app's existing public discovery connectors — no scraping or
     fabricated listings.
     """
-    effective_query = query.strip() or _profile_search_query(profile)
+    base_query = query.strip() or _profile_search_query(profile)
+    context = _extract_search_context(history)
+    effective_query = (base_query + " " + context).strip() if context else base_query
     if not effective_query:
         return []
 

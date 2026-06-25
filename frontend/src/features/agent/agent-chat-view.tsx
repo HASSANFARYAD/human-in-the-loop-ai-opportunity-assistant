@@ -7,7 +7,7 @@ import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  Bot, ExternalLink, FileText, MessageSquare, Pencil, Plus, RefreshCw, Search, Send, Sparkles, Trash2, User, X,
+  Bot, ExternalLink, FileText, MessageSquare, Pencil, Plus, RefreshCw, Search, Send, Sparkles, ThumbsDown, ThumbsUp, Trash2, User, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -19,8 +19,8 @@ import type { AgentJobListing, AgentSection, Conversation } from "@/types/api";
 import { cn } from "@/lib/utils";
 
 type ChatMessage =
-  | { role: "user"; content: string }
-  | { role: "assistant"; sections: AgentSection[] };
+  | { role: "user"; content: string; id?: number }
+  | { role: "assistant"; sections: AgentSection[]; suggestions?: string[]; feedback?: "thumbs_up" | "thumbs_down" | null; id?: number };
 
 const SUGGESTIONS = [
   { title: "Find remote jobs", desc: "Search job boards for roles matching your skills", query: "Find me remote backend jobs" },
@@ -108,7 +108,7 @@ export function AgentChatView() {
         const tail = sections[sections.length - 1];
         if (tail.type === "message") {
           sections[sections.length - 1] = { ...tail, message: (tail.message ?? "") + text };
-          next[next.length - 1] = { role: "assistant", sections };
+          next[next.length - 1] = { role: "assistant", sections, id: last.id };
         }
         return next;
       });
@@ -121,6 +121,20 @@ export function AgentChatView() {
         },
         onSection: appendSection,
         onDelta: appendDelta,
+        onSuggestions: (suggestions) =>
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === "assistant") next[next.length - 1] = { ...last, suggestions };
+            return next;
+          }),
+        onDone: (data) =>
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === "assistant" && data.message_id) next[next.length - 1] = { ...last, id: data.message_id };
+            return next;
+          }),
         onError: setError,
       }, activeWorkspace?.id, conversationId);
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
@@ -167,7 +181,7 @@ export function AgentChatView() {
         const tail = sections[sections.length - 1];
         if (tail.type === "message") {
           sections[sections.length - 1] = { ...tail, message: (tail.message ?? "") + text };
-          next[next.length - 1] = { role: "assistant", sections };
+          next[next.length - 1] = { role: "assistant", sections, suggestions: last.suggestions, id: last.id };
         }
         return next;
       });
@@ -180,6 +194,20 @@ export function AgentChatView() {
         },
         onSection: appendSection,
         onDelta: appendDelta,
+        onSuggestions: (suggestions) =>
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === "assistant") next[next.length - 1] = { ...last, suggestions };
+            return next;
+          }),
+        onDone: (data) =>
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === "assistant" && data.message_id) next[next.length - 1] = { ...last, id: data.message_id };
+            return next;
+          }),
         onError: setError,
       }, activeWorkspace?.id, conversationId);
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
@@ -220,7 +248,7 @@ export function AgentChatView() {
         const tail = sections[sections.length - 1];
         if (tail.type === "message") {
           sections[sections.length - 1] = { ...tail, message: (tail.message ?? "") + text };
-          next[next.length - 1] = { role: "assistant", sections };
+          next[next.length - 1] = { role: "assistant", sections, suggestions: last.suggestions, id: last.id };
         }
         return next;
       });
@@ -235,6 +263,20 @@ export function AgentChatView() {
           },
           onSection: appendSection,
           onDelta: appendDelta,
+          onSuggestions: (suggestions) =>
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last?.role === "assistant") next[next.length - 1] = { ...last, suggestions };
+              return next;
+            }),
+          onDone: (data) =>
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last?.role === "assistant" && data.message_id) next[next.length - 1] = { ...last, id: data.message_id };
+              return next;
+            }),
           onError: setError,
         },
         activeWorkspace?.id,
@@ -360,6 +402,30 @@ export function AgentChatView() {
                   ? () => regenerate(i)
                   : undefined
               }
+              onFeedback={
+                m.role === "assistant" && !busy && conversationId && m.id
+                  ? (rating) => {
+                      setMessages((prev) => {
+                        const next = [...prev];
+                        const msg = next[i];
+                        if (msg.role === "assistant") next[i] = { ...msg, feedback: rating };
+                        return next;
+                      });
+                      agentService.recordFeedback(conversationId, m.id!, rating).catch(() => {});
+                    }
+                  : undefined
+              }
+              onSuggestionClick={
+                !busy ? (query) => {
+                  const textarea = document.querySelector<HTMLTextAreaElement>("textarea");
+                  if (textarea) {
+                    textarea.value = query;
+                    textarea.focus();
+                  }
+                  // Optionally submit directly:
+                  submit(query);
+                } : undefined
+              }
             />
           ))}
             </motion.div>
@@ -431,9 +497,11 @@ const bubbleVariants = {
 };
 
 function MessageBubble({
-  message, busy, onEdit, onRegenerate, isLast,
+  message, busy, onEdit, onRegenerate, isLast, onFeedback, onSuggestionClick,
 }: {
   message: ChatMessage; busy: boolean; onEdit?: (content: string) => void; onRegenerate?: () => void; isLast?: boolean;
+  onFeedback?: (rating: "thumbs_up" | "thumbs_down") => void;
+  onSuggestionClick?: (query: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(message.role === "user" ? message.content : "");
@@ -502,13 +570,47 @@ function MessageBubble({
         ))}
         {busy ? <Thinking /> : null}
         {!busy && isLast && onRegenerate ? (
-          <button
-            onClick={onRegenerate}
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            title="Regenerate"
-          >
-            <RefreshCw className="h-3 w-3" />Regenerate
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onRegenerate}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              title="Regenerate"
+            >
+              <RefreshCw className="h-3 w-3" />Regenerate
+            </button>
+            <span className="text-xs text-muted-foreground/50">|</span>
+            <button
+              onClick={() => onFeedback?.("thumbs_up")}
+              className={`flex items-center gap-1 text-xs hover:text-foreground ${
+                message.feedback === "thumbs_up" ? "text-primary" : "text-muted-foreground"
+              }`}
+              title="Helpful"
+            >
+              <ThumbsUp className="h-3 w-3" />
+            </button>
+            <button
+              onClick={() => onFeedback?.("thumbs_down")}
+              className={`flex items-center gap-1 text-xs hover:text-foreground ${
+                message.feedback === "thumbs_down" ? "text-destructive" : "text-muted-foreground"
+              }`}
+              title="Not helpful"
+            >
+              <ThumbsDown className="h-3 w-3" />
+            </button>
+          </div>
+        ) : null}
+        {!busy && message.suggestions && message.suggestions.length > 0 ? (
+          <div className="flex flex-wrap gap-2 pt-1">
+            {message.suggestions.map((s, i) => (
+              <button
+                key={i}
+                onClick={() => onSuggestionClick?.(s)}
+                className="rounded-full border bg-background px-3 py-1 text-xs text-muted-foreground transition hover:border-primary hover:text-foreground"
+              >
+                {s}
+              </button>
+            ))}
+          </div>
         ) : null}
       </div>
     </motion.div>

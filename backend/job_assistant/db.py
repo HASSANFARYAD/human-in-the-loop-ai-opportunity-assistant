@@ -119,6 +119,8 @@ def _ensure_indexes() -> None:
     coll.compliance_exports.create_index("user_id")
     coll.conversations.create_index([("user_id", pymongo.ASCENDING), ("updated_at", pymongo.DESCENDING)])
     coll.conversation_messages.create_index([("conversation_id", pymongo.ASCENDING), ("created_at", pymongo.ASCENDING)])
+    coll.agent_feedback.create_index([("user_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
+    coll.agent_personas.create_index("user_id", unique=True)
 
 
 def _ensure_default_user() -> dict[str, Any]:
@@ -1550,6 +1552,55 @@ def upsert_prompt_version(name: str, version: str, template: str, description: s
 def list_prompt_versions(limit: int = 100) -> list[dict[str, Any]]:
     docs = get_collection("prompt_versions").find().sort([("name", pymongo.ASCENDING), ("version", pymongo.ASCENDING)]).limit(max(1, min(int(limit), 500)))
     return [_strip_id(d) for d in docs]
+
+
+def get_active_prompt(name: str) -> str:
+    """Return the template text of the active prompt version for a given name,
+    or empty string if none is configured."""
+    doc = get_collection("prompt_versions").find_one(
+        {"name": name, "is_active": 1},
+        sort=[("version", pymongo.DESCENDING)],
+    )
+    if doc:
+        return doc.get("template", "")
+    return ""
+
+
+def delete_prompt_version(name: str, version: str) -> bool:
+    result = get_collection("prompt_versions").delete_one({"name": name, "version": version})
+    return result.deleted_count > 0
+
+
+def record_agent_feedback(user_id: int, conversation_id: int, message_id: int, rating: str, workspace_id: int | None = None) -> int:
+    rating = (rating or "").strip().lower()
+    if rating not in ("thumbs_up", "thumbs_down"):
+        raise ValueError("rating must be 'thumbs_up' or 'thumbs_down'")
+    fid = _next_id("agent_feedback_id")
+    get_collection("agent_feedback").insert_one({
+        "agent_feedback_id": fid, "user_id": user_id,
+        "workspace_id": workspace_id, "conversation_id": conversation_id,
+        "message_id": message_id, "rating": rating, "created_at": utc_now(),
+    })
+    return fid
+
+
+def update_agent_persona(user_id: int, persona: dict[str, Any]) -> None:
+    allowed_keys = {"tone", "detail_level", "focus_area"}
+    clean = {k: v for k, v in persona.items() if k in allowed_keys}
+    if not clean:
+        return
+    get_collection("agent_personas").update_one(
+        {"user_id": user_id},
+        {"$set": {**clean, "updated_at": utc_now()}},
+        upsert=True,
+    )
+
+
+def get_agent_persona(user_id: int) -> dict[str, Any]:
+    doc = get_collection("agent_personas").find_one({"user_id": user_id})
+    if doc:
+        return {k: v for k, v in doc.items() if k in ("tone", "detail_level", "focus_area")}
+    return {}
 
 
 def create_automation_rule(user_id: int, payload: Dict[str, Any], workspace_id: int | None = None) -> int:

@@ -1,5 +1,5 @@
 import { API_ORIGIN, apiClient, ensureAccessToken } from "@/services/client";
-import type { AgentChatResponse, AgentSection, Conversation, ConversationDetail } from "@/types/api";
+import type { AgentChatResponse, AgentPersona, AgentSection, Conversation, ConversationDetail, PromptVersion } from "@/types/api";
 
 export interface AgentChatTurn {
   role: "user" | "assistant";
@@ -11,6 +11,8 @@ export interface AgentStreamHandlers {
   onIntents?: (intents: string[]) => void;
   onSection?: (section: AgentSection) => void;
   onDelta?: (text: string) => void;
+  onSuggestions?: (suggestions: string[]) => void;
+  onDone?: (data: { conversation_id: number; message_id?: number }) => void;
   onError?: (message: string) => void;
 }
 
@@ -57,6 +59,8 @@ export const agentService = {
         else if (event === "intents") handlers.onIntents?.(parsed.intents ?? []);
         else if (event === "section") handlers.onSection?.(parsed as AgentSection);
         else if (event === "delta") handlers.onDelta?.(parsed.text ?? "");
+        else if (event === "suggestions") handlers.onSuggestions?.(parsed.suggestions ?? []);
+        else if (event === "done") handlers.onDone?.(parsed);
         else if (event === "error") handlers.onError?.(parsed.message ?? "Stream error");
       } catch {
         handlers.onError?.("Failed to parse stream data");
@@ -98,4 +102,22 @@ export const agentService = {
 
   deleteConversation: async (id: number) =>
     (await apiClient.delete(`/agent/conversations/${id}`)).data,
+
+  recordFeedback: async (conversation_id: number, message_id: number, rating: "thumbs_up" | "thumbs_down") =>
+    (await apiClient.post(`/agent/conversations/${conversation_id}/feedback`, { message_id, rating })).data,
+
+  getPersona: async () =>
+    (await apiClient.get<{ persona: AgentPersona }>("/agent/persona")).data.persona,
+
+  updatePersona: async (persona: AgentPersona) =>
+    (await apiClient.put("/agent/persona", persona)).data,
+
+  listPrompts: async () =>
+    (await apiClient.get<PromptVersion[]>("/admin/prompts")).data,
+
+  upsertPrompt: async (prompt: PromptVersion) =>
+    (await apiClient.post("/admin/prompts", prompt)).data,
+
+  deletePrompt: async (name: string, version: string) =>
+    (await apiClient.delete(`/admin/prompts?name=${encodeURIComponent(name)}&version=${encodeURIComponent(version)}`)).data,
 };

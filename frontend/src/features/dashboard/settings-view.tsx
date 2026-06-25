@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
-import { Activity, Bot, Database, HeartPulse, Mail, Save, ShieldCheck, TestTube2 } from "lucide-react";
+import { Activity, Bot, Brain, Database, HeartPulse, Mail, Save, ShieldCheck, TestTube2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,11 +13,12 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { DataFields, DataTable } from "@/components/ui/data-display";
 import { Skeleton } from "@/components/ui/skeleton";
+import { agentService } from "@/services/agent.service";
 import { auditService } from "@/services/audit.service";
 import { feedbackService } from "@/services/feedback.service";
 import { opportunityService } from "@/services/opportunity.service";
 import { providerService } from "@/services/provider.service";
-import type { AdminConfig, Profile } from "@/types/api";
+import type { AdminConfig, AgentPersona, Profile, PromptVersion } from "@/types/api";
 
 export function SettingsView() {
   const tab = useSearchParams().get("tab") ?? "settings";
@@ -36,6 +37,10 @@ export function SettingsView() {
       </div>
       {tab === "profile" ? (
         <ProfileManager />
+      ) : tab === "persona" ? (
+        <AgentPersonaPanel />
+      ) : tab === "prompts" ? (
+        <PromptAdminPanel />
       ) : tab === "feedback" ? (
         <Card><CardHeader><CardTitle>Feedback</CardTitle></CardHeader><CardContent><DataTable rows={(feedback.data ?? []) as unknown as Record<string, unknown>[]} columns={["title", "category", "severity", "status", "created_at"]} /></CardContent></Card>
       ) : tab === "audit" ? (
@@ -380,6 +385,265 @@ function ProfileForm({ profile, profileId, onCreated }: { profile: Profile; prof
         <Textarea className="md:col-span-2" placeholder="Resume / CV text" value={form.cv_text ?? ""} onChange={(e) => update("cv_text", e.target.value)} />
         <Textarea className="md:col-span-2" placeholder="Deal breakers" value={form.deal_breakers ?? ""} onChange={(e) => update("deal_breakers", e.target.value)} />
         <Button className="md:col-span-2" disabled={save.isPending} onClick={() => save.mutate()}>Save profile</Button>
+    </div>
+  );
+}
+
+
+const TONE_OPTIONS = [
+  { value: "professional", label: "Professional" },
+  { value: "friendly", label: "Friendly" },
+  { value: "casual", label: "Casual" },
+];
+
+const DETAIL_OPTIONS = [
+  { value: "concise", label: "Concise" },
+  { value: "balanced", label: "Balanced" },
+  { value: "thorough", label: "Thorough" },
+];
+
+const FOCUS_OPTIONS = [
+  { value: "general", label: "General" },
+  { value: "technical", label: "Technical" },
+  { value: "managerial", label: "Managerial" },
+];
+
+function AgentPersonaPanel() {
+  const { data: persona, isLoading } = useQuery({
+    queryKey: ["agent-persona"],
+    queryFn: agentService.getPersona,
+  });
+  const queryClient = useQueryClient();
+  const save = useMutation({
+    mutationFn: (p: AgentPersona) => agentService.updatePersona(p),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agent-persona"] });
+      toast.success("Persona updated");
+    },
+    onError: () => toast.error("Failed to update persona"),
+  });
+  const [form, setForm] = useState<AgentPersona>({ tone: "friendly", detail_level: "balanced", focus_area: "general" });
+
+  useEffect(() => {
+    if (persona) setForm(persona);
+  }, [persona]);
+
+  const update = (key: keyof AgentPersona, value: string) =>
+    setForm((prev) => ({ ...prev, [key]: value }));
+
+  if (isLoading) return <Skeleton className="h-48" />;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <UserRound className="h-5 w-5 text-primary" />
+          Agent Persona
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Customize how the career assistant communicates with you.
+        </p>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Tone</label>
+            <select
+              value={form.tone}
+              onChange={(e) => update("tone", e.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              {TONE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Detail Level</label>
+            <select
+              value={form.detail_level}
+              onChange={(e) => update("detail_level", e.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              {DETAIL_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Focus Area</label>
+            <select
+              value={form.focus_area}
+              onChange={(e) => update("focus_area", e.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              {FOCUS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <Button onClick={() => save.mutate(form)} disabled={save.isPending}>
+          {save.isPending ? "Saving..." : "Save Persona"}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+
+function PromptAdminPanel() {
+  const { data: prompts, isLoading } = useQuery({
+    queryKey: ["admin-prompts"],
+    queryFn: agentService.listPrompts,
+  });
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState<PromptVersion | null>(null);
+  const [showNew, setShowNew] = useState(false);
+  const [newPrompt, setNewPrompt] = useState<Partial<PromptVersion>>({
+    name: "chat_system", version: "", template: "", description: "", is_active: false,
+  });
+
+  const upsert = useMutation({
+    mutationFn: (p: PromptVersion) => agentService.upsertPrompt(p),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-prompts"] });
+      toast.success("Prompt saved");
+      setEditing(null);
+      setShowNew(false);
+    },
+    onError: () => toast.error("Failed to save prompt"),
+  });
+
+  const remove = useMutation({
+    mutationFn: ({ name, version }: { name: string; version: string }) =>
+      agentService.deletePrompt(name, version),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-prompts"] });
+      toast.success("Prompt deleted");
+    },
+    onError: () => toast.error("Failed to delete prompt"),
+  });
+
+  if (isLoading) return <Skeleton className="h-48" />;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between">
+          <span className="flex items-center gap-2"><Brain className="h-5 w-5 text-primary" />Prompt Versions</span>
+          <Button variant="outline" size="sm" onClick={() => setShowNew(!showNew)}>
+            {showNew ? "Cancel" : "New Version"}
+          </Button>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {showNew && (
+          <div className="space-y-3 rounded-lg border p-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <label className="text-xs font-medium">Name</label>
+                <Input value={newPrompt.name ?? ""} onChange={(e) => setNewPrompt((p) => ({ ...p, name: e.target.value }))} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium">Version</label>
+                <Input value={newPrompt.version ?? ""} onChange={(e) => setNewPrompt((p) => ({ ...p, version: e.target.value }))} placeholder="e.g. v1.0" />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium">Template</label>
+              <Textarea
+                value={newPrompt.template ?? ""}
+                onChange={(e) => setNewPrompt((p) => ({ ...p, template: e.target.value }))}
+                rows={6}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium">Description</label>
+              <Input value={newPrompt.description ?? ""} onChange={(e) => setNewPrompt((p) => ({ ...p, description: e.target.value }))} />
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="new-active"
+                checked={newPrompt.is_active ?? false}
+                onChange={(e) => setNewPrompt((p) => ({ ...p, is_active: e.target.checked }))}
+                className="h-4 w-4 rounded border-gray-300"
+              />
+              <label htmlFor="new-active" className="text-sm">Set as active</label>
+            </div>
+            <Button size="sm" onClick={() => upsert.mutate(newPrompt as PromptVersion)}>
+              Create
+            </Button>
+          </div>
+        )}
+
+        {(prompts?.length ?? 0) === 0 ? (
+          <p className="text-sm text-muted-foreground">No prompt versions yet. Create one above.</p>
+        ) : (
+          <div className="space-y-2">
+            {prompts?.map((p, i) => (
+              <div key={p.id ?? i} className="rounded-lg border p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-sm font-medium">{p.name}</span>
+                      <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{p.version}</span>
+                      {p.is_active ? (
+                        <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">active</span>
+                      ) : null}
+                    </div>
+                    {p.description ? (
+                      <p className="mt-0.5 text-xs text-muted-foreground">{p.description}</p>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setEditing(editing?.id === p.id ? null : p)}>
+                      {editing?.id === p.id ? "Cancel" : "Edit"}
+                    </Button>
+                    <Button variant="ghost" size="sm" className="h-7 text-xs text-destructive" onClick={() => remove.mutate({ name: p.name, version: p.version })}>
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+                {editing && editing.id === p.id ? (
+                  <PromptEditForm prompt={editing} onSave={upsert.mutate} onCancel={() => setEditing(null)} />
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PromptEditForm({ prompt, onSave, onCancel }: { prompt: PromptVersion; onSave: (p: PromptVersion) => void; onCancel: () => void }) {
+  const [form, setForm] = useState(prompt);
+  return (
+    <div className="mt-3 space-y-3 border-t pt-3">
+      <div className="space-y-1">
+        <label className="text-xs font-medium">Template</label>
+        <Textarea
+          value={form.template}
+          onChange={(e) => setForm({ ...form, template: e.target.value })}
+          rows={6}
+        />
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          id={`edit-active-${form.id}`}
+          checked={form.is_active ?? false}
+          onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
+          className="h-4 w-4 rounded border-gray-300"
+        />
+        <label htmlFor={`edit-active-${form.id}`} className="text-sm">Active</label>
+      </div>
+      <div className="flex gap-2">
+        <Button size="sm" onClick={() => onSave(form)}>Save</Button>
+        <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
+      </div>
     </div>
   );
 }

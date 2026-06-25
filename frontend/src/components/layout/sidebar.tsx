@@ -8,6 +8,7 @@ import { motion } from "framer-motion";
 import {
   BarChart3,
   Bot,
+  Brain,
   Briefcase,
   ChevronDown,
   ClipboardList,
@@ -39,8 +40,10 @@ const groups = [
     label: "Profile",
     items: [
       { href: "/settings?tab=profile", label: "Resume Profile", icon: UserRound },
+      { href: "/settings?tab=persona", label: "Agent Persona", icon: Bot },
       { href: "/integrations?service=ai_provider", label: "AI Provider", icon: Bot },
       { href: "/integrations?service=gmail", label: "Gmail Import", icon: Mail },
+      { href: "/settings?tab=prompts", label: "Prompt Admin", icon: Brain },
       { href: "/settings", label: "Settings", icon: Settings },
     ],
   },

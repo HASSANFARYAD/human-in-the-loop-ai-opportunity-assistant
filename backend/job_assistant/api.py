@@ -37,6 +37,13 @@ from job_assistant.db import (
     add_conversation_message,
     get_conversation_messages,
     set_conversation_state,
+    record_agent_feedback,
+    get_active_prompt,
+    upsert_prompt_version,
+    list_prompt_versions,
+    delete_prompt_version,
+    update_agent_persona,
+    get_agent_persona,
     create_feedback,
     create_reminder,
     cleanup_non_opportunity_records,
@@ -111,7 +118,7 @@ from job_assistant.db import (
 from job_assistant.runtime import runtime_status, validate_startup_configuration
 from job_assistant.provider_registry import provider_registry
 from job_assistant.ai_orchestrator import ai_orchestrator
-from job_assistant.agent_chat import chat_reply, chat_reply_stream, classify_intent, run_job_search
+from job_assistant.agent_chat import chat_reply, chat_reply_stream, classify_intent, generate_suggestions, run_job_search
 from job_assistant.automation_engine import automation_engine
 from job_assistant.observability import acknowledge_alert, metrics_summary, prometheus_text
 from job_assistant.publishing_engine import approve_post, publish_post, validate_target
@@ -1370,7 +1377,7 @@ def _resolve_job_for_reference(user_id: int, reference: str, workspace_id: Optio
 def _run_agent_intent(intent: str, routing: dict[str, Any], profile: dict[str, Any], user_id: int, workspace_id: Optional[int], *, message: str = "", history: Optional[list[dict[str, str]]] = None) -> dict[str, Any]:
     """Execute a single agent intent and return its result section."""
     if intent == "job_search":
-        listings = run_job_search(profile, routing["search_query"], user_id=user_id)
+        listings = run_job_search(profile, routing["search_query"], user_id=user_id, history=history)
         return {"agent": "job_search", "type": "listings", "data": listings,
                 "message": f"Found {len(listings)} matching opportunity/opportunities." if listings
                 else "No matching listings found right now. Try refining your roles or skills."}
@@ -1461,6 +1468,14 @@ async def agent_chat_stream(payload: AgentChatIn, user: dict = Depends(current_u
                             full_reply += token
                             yield _sse("delta", {"text": token})
                         assistant_sections.append({"agent": "chat", "type": "message", "message": full_reply})
+
+                        # Generate follow-up suggestions (non-blocking, best-effort)
+                        try:
+                            suggestions = generate_suggestions(message, full_reply, history=history, user_id=user_id)
+                            if suggestions:
+                                yield _sse("suggestions", {"suggestions": suggestions})
+                        except Exception:
+                            pass
                         continue
 
                     section = _run_agent_intent(intent, routing, profile, user_id, workspace_id, message=message, history=history)
@@ -1479,8 +1494,8 @@ async def agent_chat_stream(payload: AgentChatIn, user: dict = Depends(current_u
 
             # Save assistant response
             content = next((s.get("message", "") for s in assistant_sections if s.get("type") == "message"), "")
-            add_conversation_message(conversation_id, "assistant", content, sections=assistant_sections)
-            yield _sse("done", {"conversation_id": conversation_id})
+            msg_id = add_conversation_message(conversation_id, "assistant", content, sections=assistant_sections)
+            yield _sse("done", {"conversation_id": conversation_id, "message_id": msg_id})
         except Exception:
             yield _sse("error", {"message": "The assistant could not complete your request."})
 
@@ -1521,6 +1536,57 @@ async def delete_conversation_endpoint(conversation_id: int, user: dict = Depend
     ok = delete_conversation(conversation_id, user["id"])
     if not ok:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"status": "ok"}
+
+
+class AgentFeedbackIn(BaseModel):
+    message_id: int
+    rating: str  # "thumbs_up" | "thumbs_down"
+    workspace_id: Optional[int] = None
+
+
+class PersonaIn(BaseModel):
+    tone: str = "friendly"  # professional | friendly | casual
+    detail_level: str = "balanced"  # concise | balanced | thorough
+    focus_area: str = "general"  # general | technical | managerial
+
+
+@router.post("/agent/conversations/{conversation_id}/feedback")
+async def post_agent_feedback(conversation_id: int, payload: AgentFeedbackIn, user: dict = Depends(current_user)):
+    try:
+        record_agent_feedback(user["id"], conversation_id, payload.message_id, payload.rating, workspace_id=payload.workspace_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "success"}
+
+
+@router.get("/agent/persona")
+async def get_persona(user: dict = Depends(current_user)):
+    return {"persona": get_agent_persona(user["id"])}
+
+
+@router.put("/agent/persona")
+async def put_persona(payload: PersonaIn, user: dict = Depends(current_user)):
+    update_agent_persona(user["id"], payload.dict())
+    return {"status": "success"}
+
+
+@router.get("/admin/prompts")
+async def admin_list_prompts(user: dict = Depends(current_user)):
+    return list_prompt_versions()
+
+
+@router.post("/admin/prompts")
+async def admin_upsert_prompt(payload: PromptVersionIn, user: dict = Depends(current_user)):
+    upsert_prompt_version(payload.name, payload.version, payload.template, description=payload.description, is_active=payload.is_active)
+    return {"status": "success"}
+
+
+@router.delete("/admin/prompts")
+async def admin_delete_prompt(name: str, version: str, user: dict = Depends(current_user)):
+    ok = delete_prompt_version(name, version)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Prompt version not found")
     return {"status": "ok"}
 
 
