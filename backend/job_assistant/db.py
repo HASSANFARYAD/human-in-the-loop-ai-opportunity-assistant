@@ -4,6 +4,7 @@ import json
 import hashlib
 import logging
 import os
+import re
 import secrets
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -410,8 +411,75 @@ def _content_hash(job: dict[str, Any]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+FUZZY_DUP_THRESHOLD = 0.85
+
+COMMON_ABBREVIATIONS = {
+    "sr": "senior",
+    "jr": "junior",
+    "eng": "engineer",
+    "dev": "developer",
+    "mgr": "manager",
+    "vp": "vicepresident",
+    "cto": "chieftechnologyofficer",
+    "ceo": "chiefexecutiveofficer",
+    "cfo": "chieffinancialofficer",
+    "cio": "chiefinformationofficer",
+    "cmo": "chiefmarketingofficer",
+    "coo": "chiefoperatingofficer",
+    "svp": "seniorvicepresident",
+    "evp": "executivevicepresident",
+    "dir": "director",
+    "dept": "department",
+    "assoc": "associate",
+    "asst": "assistant",
+    "admin": "administrator",
+    "sys": "system",
+    "temp": "temporary",
+}
+
+
+def _normalize_for_fuzzy(text: str) -> str:
+    text = text.lower().strip()
+    text = re.sub(r"[^a-z0-9\s]", "", text)
+    tokens = text.split()
+    tokens = [COMMON_ABBREVIATIONS.get(t, t) for t in tokens]
+    text = " ".join(tokens)
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _fuzzy_match_title_company(title: str, company: str, existing_pairs: list[tuple[str, str]], threshold: float = FUZZY_DUP_THRESHOLD) -> bool:
+    from difflib import SequenceMatcher
+    if not title or not company:
+        return False
+    norm_title = _normalize_for_fuzzy(title)
+    norm_company = _normalize_for_fuzzy(company)
+    title_tokens = norm_title.split()
+    for et, ec in existing_pairs:
+        if not et or not ec:
+            continue
+        et_norm = _normalize_for_fuzzy(et)
+        ec_norm = _normalize_for_fuzzy(ec)
+        title_ratio = SequenceMatcher(None, norm_title, et_norm).ratio()
+        company_ratio = SequenceMatcher(None, norm_company, ec_norm).ratio()
+        if title_ratio >= threshold and company_ratio >= threshold:
+            return True
+        if company_ratio < threshold:
+            continue
+        et_tokens = et_norm.split()
+        token_matches = 0
+        for t in title_tokens:
+            for et2 in et_tokens:
+                if SequenceMatcher(None, t, et2).ratio() >= 0.75:
+                    token_matches += 1
+                    break
+        if len(title_tokens) > 0 and token_matches / len(title_tokens) >= 0.8:
+            return True
+    return False
+
+
 def job_exists(job: dict[str, Any], user_id: int = 1, workspace_id: int | None = None) -> bool:
-    """Check if a job already exists by URL, content hash, or title+company combo."""
+    """Check if a job already exists by URL, content hash, title+company, or fuzzy title+company."""
     scoped_workspace_id, _ = _workspace_scope_for_user(user_id, workspace_id)
     query: list[dict[str, Any]] = []
     url = (job.get("url") or "").strip()
@@ -425,7 +493,22 @@ def job_exists(job: dict[str, Any], user_id: int = 1, workspace_id: int | None =
     query.append({"user_id": user_id, "workspace_id": scoped_workspace_id, "content_hash": ch})
     if not query:
         return False
-    return bool(get_collection("jobs").find_one({"$or": query}))
+    exact = bool(get_collection("jobs").find_one({"$or": query}))
+    if exact:
+        return True
+    if title and company:
+        existing = list(get_collection("jobs").find(
+            {"user_id": user_id, "workspace_id": scoped_workspace_id},
+            {"title": 1, "company": 1},
+        ))
+        existing_pairs = [
+            (str(e.get("title") or "").strip(), str(e.get("company") or "").strip())
+            for e in existing
+            if e.get("title") and e.get("company")
+        ]
+        if _fuzzy_match_title_company(title, company, existing_pairs):
+            return True
+    return False
 
 
 def job_url_exists(url: str, user_id: int = 1, workspace_id: int | None = None) -> bool:

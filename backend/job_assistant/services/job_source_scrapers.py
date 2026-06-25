@@ -324,9 +324,11 @@ def _content_hash(job: dict[str, Any]) -> str:
 
 
 def _dedupe_opportunities(opportunities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from job_assistant.db import _fuzzy_match_title_company
     seen_urls: set[str] = set()
     seen_hashes: set[str] = set()
     seen_tc: set[str] = set()
+    seen_fuzzy: list[tuple[str, str]] = []
     unique: list[dict[str, Any]] = []
     for opportunity in opportunities:
         url = opportunity.get("url") or ""
@@ -340,10 +342,14 @@ def _dedupe_opportunities(opportunities: list[dict[str, Any]]) -> list[dict[str,
             continue
         if tc_key and tc_key in seen_tc:
             continue
+        if title and company and _fuzzy_match_title_company(title, company, seen_fuzzy):
+            continue
         seen_urls.add(url) if url else None
         seen_hashes.add(ch)
         if tc_key:
             seen_tc.add(tc_key)
+        if title and company:
+            seen_fuzzy.append((title, company))
         unique.append(opportunity)
     return unique
 

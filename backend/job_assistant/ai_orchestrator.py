@@ -18,6 +18,7 @@ from job_assistant.services.ai_providers import ask_json as ask_json_direct
 from job_assistant.services.ai_providers import ask_text as ask_text_direct
 from job_assistant.services.ai_providers import ask_text_stream as ask_text_stream_direct
 from job_assistant.services.ai_providers import ask_tool_json as ask_tool_json_direct
+from job_assistant.services.prompt_protection import sanitize_user_input
 
 # Approximate cost per 1K tokens (input, output) in USD for common models.
 # Used to populate estimated_cost on AI generation logs.
@@ -112,6 +113,8 @@ class AIOrchestrator:
             )
 
     def ask_json(self, system: str, user: str, fallback: Dict[str, Any], *, user_id: Optional[int] = None, task_type: str = "general", prompt_version: str = "", workspace_id: Optional[int] = None) -> Dict[str, Any]:
+        system = sanitize_user_input(system)
+        user = sanitize_user_input(user)
         route = self.resolve_route(user_id, task_type, workspace_id=workspace_id)
         self._enforce_daily_budget(user_id, route)
         started = time.perf_counter()
@@ -139,6 +142,8 @@ class AIOrchestrator:
     def ask(self, system: str, user: str, *, user_id: Optional[int] = None, task_type: str = "general", prompt_version: str = "", workspace_id: Optional[int] = None) -> str:
         """Free-form conversational completion. Returns plain assistant text
         (empty string when no provider is configured or the call fails)."""
+        system = sanitize_user_input(system)
+        user = sanitize_user_input(user)
         route = self.resolve_route(user_id, task_type, workspace_id=workspace_id)
         self._enforce_daily_budget(user_id, route)
         started = time.perf_counter()
@@ -169,6 +174,8 @@ class AIOrchestrator:
         *, user_id: Optional[int] = None, task_type: str = "agent_routing", prompt_version: str = "",
         workspace_id: Optional[int] = None,
     ) -> Dict[str, Any]:
+        system = sanitize_user_input(system)
+        user = sanitize_user_input(user)
         route = self.resolve_route(user_id, task_type, workspace_id=workspace_id)
         self._enforce_daily_budget(user_id, route)
         started = time.perf_counter()
@@ -197,6 +204,8 @@ class AIOrchestrator:
         self, system: str, user: str, *, user_id: Optional[int] = None, task_type: str = "general", prompt_version: str = "", workspace_id: Optional[int] = None
     ):
         """Generator that yields tokens from the AI provider as they arrive."""
+        system = sanitize_user_input(system)
+        user = sanitize_user_input(user)
         route = self.resolve_route(user_id, task_type, workspace_id=workspace_id)
         self._enforce_daily_budget(user_id, route)
         started = time.perf_counter()
