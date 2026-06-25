@@ -1,16 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { Bot, ExternalLink, FileText, MessageSquare, Search, Send, Sparkles, User } from "lucide-react";
+import {
+  Bot, ExternalLink, FileText, MessageSquare, Plus, Search, Send, Sparkles, Trash2, User,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { DataFields } from "@/components/ui/data-display";
 import { agentService, type AgentChatTurn } from "@/services/agent.service";
 import { useAuthStore } from "@/stores/auth-store";
-import type { AgentJobListing, AgentSection } from "@/types/api";
+import type { AgentJobListing, AgentSection, Conversation } from "@/types/api";
+import { cn } from "@/lib/utils";
 
 type ChatMessage =
   | { role: "user"; content: string }
@@ -25,11 +29,47 @@ const SUGGESTIONS = [
 
 export function AgentChatView() {
   const activeWorkspace = useAuthStore((s) => s.activeWorkspace);
+  const queryClient = useQueryClient();
+  const [conversationId, setConversationId] = useState<number | undefined>(undefined);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const { data: conversations } = useQuery({
+    queryKey: ["conversations"],
+    queryFn: agentService.listConversations,
+  });
+
+  const loadConversation = useCallback(async (id: number) => {
+    const conv = await agentService.getConversation(id);
+    setConversationId(id);
+    const msgs: ChatMessage[] = conv.messages.map((m) =>
+      m.role === "user"
+        ? { role: "user", content: m.content }
+        : { role: "assistant", sections: (m.sections ?? []) as AgentSection[] },
+    );
+    setMessages(msgs);
+    setError("");
+  }, []);
+
+  const deleteMut = useMutation({
+    mutationFn: (id: number) => agentService.deleteConversation(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      if (conversationId) {
+        setConversationId(undefined);
+        setMessages([]);
+      }
+    },
+  });
+
+  const newConversation = () => {
+    setConversationId(undefined);
+    setMessages([]);
+    setError("");
+  };
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -43,7 +83,6 @@ export function AgentChatView() {
       m.role === "user" ? { role: "user", content: m.content } : { role: "assistant", content: summarize(m.sections) },
     );
 
-    // Append the user turn and an empty assistant turn we stream sections into.
     setMessages((prev) => [...prev, { role: "user", content: trimmed }, { role: "assistant", sections: [] }]);
     setInput("");
     setError("");
@@ -57,7 +96,6 @@ export function AgentChatView() {
         return next;
       });
 
-    // Token-style streaming: append delta text to the trailing message section.
     const appendDelta = (text: string) =>
       setMessages((prev) => {
         const next = [...prev];
@@ -73,7 +111,21 @@ export function AgentChatView() {
       });
 
     try {
-      await agentService.chatStream(trimmed, history, { onSection: appendSection, onDelta: appendDelta, onError: setError }, activeWorkspace?.id);
+      await agentService.chatStream(
+        trimmed, history,
+        {
+          onConversation: (id) => {
+            setConversationId(id);
+            queryClient.invalidateQueries({ queryKey: ["conversations"] });
+          },
+          onSection: appendSection,
+          onDelta: appendDelta,
+          onError: setError,
+        },
+        activeWorkspace?.id,
+        conversationId,
+      );
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
     } catch {
       setError("The assistant could not complete your request.");
     } finally {
@@ -82,85 +134,125 @@ export function AgentChatView() {
   }
 
   return (
-    <div className="flex h-[calc(100dvh-8rem)] flex-col gap-4">
-      <div>
-        <h1 className="text-2xl font-semibold">Career Assistant</h1>
-        <p className="text-sm text-muted-foreground">Ask in plain language — I&apos;ll find jobs, tailor your resume, or prep you for interviews.</p>
-      </div>
+    <div className="flex h-[calc(100dvh-8rem)] gap-4">
+      {/* Conversation sidebar */}
+      <aside className="hidden w-64 shrink-0 flex-col overflow-hidden rounded-xl border bg-card sm:flex">
+        <div className="flex items-center justify-between border-b px-3 py-2.5">
+          <span className="text-sm font-medium">Conversations</span>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={newConversation} title="New conversation">
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
+        <div className="flex-1 space-y-0.5 overflow-y-auto p-2">
+          {conversations?.map((conv) => (
+            <div key={conv.id} className="group flex items-center gap-1">
+              <button
+                onClick={() => loadConversation(conv.id)}
+                className={cn(
+                  "flex h-9 flex-1 items-center gap-2 truncate rounded-md px-2 text-left text-sm text-muted-foreground transition hover:bg-accent hover:text-accent-foreground",
+                  conv.id === conversationId && "bg-accent text-accent-foreground",
+                )}
+              >
+                <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{conv.title}</span>
+              </button>
+              <button
+                onClick={() => deleteMut.mutate(conv.id)}
+                className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive group-hover:flex"
+                title="Delete"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+          {conversations?.length === 0 && (
+            <p className="px-2 py-4 text-center text-xs text-muted-foreground">No conversations yet</p>
+          )}
+        </div>
+      </aside>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-        {messages.length === 0 ? (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ type: "spring", stiffness: 200, damping: 24 }}
-            className="flex h-full flex-col items-center justify-center gap-6 text-center"
-          >
-            <motion.span
-              animate={{ scale: [1, 1.08, 1] }}
-              transition={{ repeat: Infinity, duration: 3, ease: "easeInOut" }}
-              className="grid h-16 w-16 place-items-center rounded-2xl bg-primary/10 text-primary"
+      {/* Main chat area */}
+      <div className="flex min-w-0 flex-1 flex-col gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold">Career Assistant</h1>
+          <p className="text-sm text-muted-foreground">Ask in plain language — I&apos;ll find jobs, tailor your resume, or prep you for interviews.</p>
+        </div>
+
+        <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+          {messages.length === 0 && !conversationId ? (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ type: "spring", stiffness: 200, damping: 24 }}
+              className="flex h-full flex-col items-center justify-center gap-6 text-center"
             >
-              <Sparkles className="h-8 w-8" />
-            </motion.span>
-            <div className="max-w-sm">
-              <h2 className="text-lg font-semibold">How can I help you?</h2>
-              <p className="mt-1 text-sm text-muted-foreground">I can find jobs, tailor resumes, prep for interviews, and more.</p>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {SUGGESTIONS.map((s) => (
-                <motion.button
-                  key={s.query}
-                  whileHover={{ scale: 1.03, y: -2 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => submit(s.query)}
-                  className="glass-subtle flex flex-col items-start gap-1 rounded-xl border p-4 text-left transition hover:bg-white/40 dark:hover:bg-white/10"
-                >
-                  <span className="text-sm font-medium">{s.title}</span>
-                  <span className="text-xs text-muted-foreground">{s.desc}</span>
-                </motion.button>
-              ))}
-            </div>
-          </motion.div>
-        ) : (
-          <motion.div
-            variants={{
-              hidden: {},
-              visible: { transition: { staggerChildren: 0.06 } },
-            }}
-            initial="hidden"
-            animate="visible"
-          >
-            {messages.map((m, i) => <MessageBubble key={i} message={m} busy={busy && i === messages.length - 1} />)}
-          </motion.div>
-        )}
-        {error ? <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-sm text-destructive">{error}</motion.div> : null}
-      </div>
+              <motion.span
+                animate={{ scale: [1, 1.08, 1] }}
+                transition={{ repeat: Infinity, duration: 3, ease: "easeInOut" }}
+                className="grid h-16 w-16 place-items-center rounded-2xl bg-primary/10 text-primary"
+              >
+                <Sparkles className="h-8 w-8" />
+              </motion.span>
+              <div className="max-w-sm">
+                <h2 className="text-lg font-semibold">How can I help you?</h2>
+                <p className="mt-1 text-sm text-muted-foreground">I can find jobs, tailor resumes, prep for interviews, and more.</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {SUGGESTIONS.map((s) => (
+                  <motion.button
+                    key={s.query}
+                    whileHover={{ scale: 1.03, y: -2 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => submit(s.query)}
+                    className="glass-subtle flex flex-col items-start gap-1 rounded-xl border p-4 text-left transition hover:bg-white/40 dark:hover:bg-white/10"
+                  >
+                    <span className="text-sm font-medium">{s.title}</span>
+                    <span className="text-xs text-muted-foreground">{s.desc}</span>
+                  </motion.button>
+                ))}
+              </div>
+            </motion.div>
+          ) : null}
+          {messages.length > 0 ? (
+            <motion.div
+              variants={{
+                hidden: {},
+                visible: { transition: { staggerChildren: 0.06 } },
+              }}
+              initial="hidden"
+              animate="visible"
+            >
+              {messages.map((m, i) => <MessageBubble key={i} message={m} busy={busy && i === messages.length - 1} />)}
+            </motion.div>
+          ) : null}
+          {error ? <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-sm text-destructive">{error}</motion.div> : null}
+        </div>
 
-      <form
-        className="flex items-end gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          submit(input);
-        }}
-      >
-        <Textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              submit(input);
-            }
+        <form
+          className="flex items-end gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit(input);
           }}
-          placeholder="Message your career assistant…"
-          rows={1}
-          className="max-h-32 min-h-[44px] flex-1 resize-none"
-        />
-        <Button type="submit" disabled={!input.trim() || busy} size="icon" className="h-11 w-11 shrink-0">
-          <Send className="h-4 w-4" />
-        </Button>
-      </form>
+        >
+          <Textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submit(input);
+              }
+            }}
+            placeholder="Message your career assistant…"
+            rows={1}
+            className="max-h-32 min-h-[44px] flex-1 resize-none"
+          />
+          <Button type="submit" disabled={!input.trim() || busy} size="icon" className="h-11 w-11 shrink-0">
+            <Send className="h-4 w-4" />
+          </Button>
+        </form>
+      </div>
     </div>
   );
 }

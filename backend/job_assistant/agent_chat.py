@@ -103,6 +103,50 @@ def _opportunities_context(opportunities: Optional[List[Dict[str, Any]]]) -> str
     return "\n".join(lines)
 
 
+def chat_reply_stream(
+    message: str,
+    history: Optional[List[Dict[str, str]]] = None,
+    profile: Optional[Dict[str, Any]] = None,
+    opportunities: Optional[List[Dict[str, Any]]] = None,
+    user_id: Optional[int] = None,
+):
+    """Generator that yields tokens from the LLM for a grounded chat response."""
+    transcript = ""
+    for turn in (history or [])[-10:]:
+        role = "User" if turn.get("role") == "user" else "Assistant"
+        content = str(turn.get("content", "")).strip()
+        if content:
+            transcript += f"{role}: {content[:800]}\n"
+
+    system = (
+        "You are a warm, sharp career assistant inside a job-application app. "
+        "Hold a natural, multi-turn conversation: answer follow-ups, remember "
+        "what was said, ask a clarifying question when it helps. Be concise and "
+        "practical, use the user's own data when relevant, and never invent jobs "
+        "or facts that aren't in the context. You can also act on the user's "
+        "behalf — if they want it, tell them you can search for jobs, tailor "
+        "their resume to a saved opportunity, or run interview prep, and that "
+        "they just need to ask.\n\n"
+        f"User profile:\n{_profile_context(profile or {})}\n\n"
+        f"Saved opportunities:\n{_opportunities_context(opportunities)}"
+    )
+    user = (
+        (f"Conversation so far:\n{transcript}\n" if transcript else "")
+        + f"User: {message}\n\nReply as the assistant."
+    )
+
+    replied = False
+    for token in ai_orchestrator.ask_stream(system, user, user_id=user_id, task_type="agent_chat"):
+        replied = True
+        yield token
+
+    if not replied:
+        yield (
+            "I can help you find jobs, tailor your resume to a specific opportunity, "
+            "or prep you for interviews — what would you like to start with?"
+        )
+
+
 def chat_reply(
     message: str,
     history: Optional[List[Dict[str, str]]] = None,

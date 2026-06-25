@@ -117,6 +117,8 @@ def _ensure_indexes() -> None:
     coll.posts.create_index([("user_id", pymongo.ASCENDING), ("workspace_id", pymongo.ASCENDING)])
     coll.post_targets.create_index("post_id")
     coll.compliance_exports.create_index("user_id")
+    coll.conversations.create_index([("user_id", pymongo.ASCENDING), ("updated_at", pymongo.DESCENDING)])
+    coll.conversation_messages.create_index([("conversation_id", pymongo.ASCENDING), ("created_at", pymongo.ASCENDING)])
 
 
 def _ensure_default_user() -> dict[str, Any]:
@@ -1191,6 +1193,82 @@ def save_automation_preferences(user_id: int, prefs: Dict[str, Any]) -> None:
         {"$set": values},
         upsert=True,
     )
+
+
+def create_conversation(user_id: int, title: str, workspace_id: int | None = None) -> int:
+    cid = _next_id("conversation_id")
+    now = utc_now()
+    get_collection("conversations").insert_one({
+        "conversation_id": cid, "user_id": user_id, "workspace_id": workspace_id,
+        "title": title, "created_at": now, "updated_at": now,
+    })
+    return cid
+
+
+def list_conversations(user_id: int, limit: int = 50) -> list[dict[str, Any]]:
+    docs = get_collection("conversations").find({"user_id": user_id}).sort("updated_at", pymongo.DESCENDING).limit(max(1, min(int(limit), 200)))
+    return [_conversation_with_id_alias(d) for d in docs]
+
+
+def get_conversation(conversation_id: int, user_id: int) -> dict[str, Any]:
+    doc = get_collection("conversations").find_one({"conversation_id": conversation_id, "user_id": user_id})
+    return _conversation_with_id_alias(doc) if doc else {}
+
+
+def update_conversation(conversation_id: int, user_id: int, data: dict[str, Any]) -> bool:
+    data["updated_at"] = utc_now()
+    result = get_collection("conversations").update_one(
+        {"conversation_id": conversation_id, "user_id": user_id},
+        {"$set": data},
+    )
+    return result.modified_count > 0
+
+
+def delete_conversation(conversation_id: int, user_id: int) -> bool:
+    result = get_collection("conversations").delete_one({"conversation_id": conversation_id, "user_id": user_id})
+    get_collection("conversation_messages").delete_many({"conversation_id": conversation_id})
+    return result.deleted_count > 0
+
+
+def add_conversation_message(conversation_id: int, role: str, content: str, sections: list[dict[str, Any]] | None = None) -> int:
+    mid = _next_id("conversation_message_id")
+    now = utc_now()
+    get_collection("conversation_messages").insert_one({
+        "message_id": mid, "conversation_id": conversation_id,
+        "role": role, "content": content,
+        "sections_json": json.dumps(sections or []),
+        "created_at": now,
+    })
+    get_collection("conversations").update_one(
+        {"conversation_id": conversation_id},
+        {"$set": {"updated_at": now}},
+    )
+    return mid
+
+
+def get_conversation_messages(conversation_id: int, limit: int = 100) -> list[dict[str, Any]]:
+    docs = get_collection("conversation_messages").find(
+        {"conversation_id": conversation_id}
+    ).sort("created_at", pymongo.ASCENDING).limit(max(1, min(int(limit), 500)))
+    result = []
+    for doc in docs:
+        item = {
+            "id": doc["message_id"],
+            "conversation_id": doc["conversation_id"],
+            "role": doc["role"],
+            "content": doc["content"],
+            "sections": json.loads(doc.get("sections_json") or "[]"),
+            "created_at": doc.get("created_at"),
+        }
+        result.append(item)
+    return result
+
+
+def _conversation_with_id_alias(doc: dict) -> dict:
+    item = _strip_id(doc)
+    if item and "conversation_id" in item:
+        item["id"] = item["conversation_id"]
+    return item
 
 
 def add_activity_event(user_id: int, title: str, message: str = "", level: str = "info", metadata: Dict[str, Any] | None = None) -> None:

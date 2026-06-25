@@ -55,6 +55,41 @@ def _openai_compatible(api_key: str, model: str, system: str, user: str, base_ur
     return response.choices[0].message.content or ""
 
 
+def _openai_compatible_stream(api_key: str, model: str, system: str, user: str, base_url: str | None = None):
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key, base_url=base_url or None)
+    stream = client.chat.completions.create(
+        model=model, messages=_messages(system, user), temperature=0.2, max_tokens=MAX_TOKENS, stream=True,
+    )
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content if chunk.choices else ""
+        if delta:
+            yield delta
+
+
+def _langchain_openai_stream(api_key: str, model: str, system: str, user: str, config: dict[str, Any]):
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_openai import ChatOpenAI
+
+    base_url = (config.get("base_url") or "").strip() or None
+    resolved_api_key = api_key or ("ollama" if _is_local_ollama_base_url(base_url) else "")
+    if not resolved_api_key:
+        raise ValueError("Missing API key for LangChain OpenAI-compatible provider")
+
+    client = ChatOpenAI(api_key=resolved_api_key, base_url=base_url, model=model, temperature=0.2, max_tokens=MAX_TOKENS)
+    for chunk in client.stream([SystemMessage(content=system), HumanMessage(content=user)]):
+        content = getattr(chunk, "content", "")
+        if isinstance(content, str) and content:
+            yield content
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    text = str(part.get("text") or part.get("content") or "")
+                    if text:
+                        yield text
+
+
 def _langchain_openai(api_key: str, model: str, system: str, user: str, config: dict[str, Any]) -> str:
     from langchain_core.messages import HumanMessage, SystemMessage
     from langchain_openai import ChatOpenAI
@@ -123,6 +158,22 @@ def _huggingface_local(model: str, system: str, user: str) -> str:
     return tokenizer.decode(generated, skip_special_tokens=True).strip()
 
 
+def _azure_openai_stream(api_key: str, model: str, system: str, user: str, config: dict[str, Any]):
+    from openai import AzureOpenAI
+
+    endpoint = config.get("endpoint") or ""
+    api_version = config.get("api_version") or "2024-10-21"
+    deployment = config.get("deployment") or model
+    client = AzureOpenAI(api_key=api_key, azure_endpoint=endpoint, api_version=api_version)
+    stream = client.chat.completions.create(
+        model=deployment, messages=_messages(system, user), temperature=0.2, max_tokens=MAX_TOKENS, stream=True,
+    )
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content if chunk.choices else ""
+        if delta:
+            yield delta
+
+
 def _azure_openai(api_key: str, model: str, system: str, user: str, config: dict[str, Any]) -> str:
     from openai import AzureOpenAI
 
@@ -144,8 +195,42 @@ def _azure_openai(api_key: str, model: str, system: str, user: str, config: dict
     return response.choices[0].message.content or ""
 
 
+def _claude_stream(api_key: str, model: str, system: str, user: str):
+    import json as _json
+
+    response = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        json={
+            "model": model,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+            "max_tokens": MAX_TOKENS,
+            "temperature": 0.2,
+            "stream": True,
+        },
+        stream=True,
+        timeout=120,
+    )
+    response.raise_for_status()
+    for line in response.iter_lines():
+        if not line:
+            continue
+        decoded = line.decode("utf-8")
+        if decoded.startswith("data: "):
+            data = _json.loads(decoded[6:])
+            if data.get("type") == "content_block_delta":
+                delta = data.get("delta", {})
+                text = delta.get("text", "")
+                if text:
+                    yield text
+
+
 def _claude(api_key: str, model: str, system: str, user: str) -> str:
-    # Uses Anthropic's HTTP API directly to keep the dependency optional.
     response = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
@@ -165,6 +250,39 @@ def _claude(api_key: str, model: str, system: str, user: str) -> str:
     response.raise_for_status()
     data = response.json()
     return "\n".join(part.get("text", "") for part in data.get("content", []) if part.get("type") == "text")
+
+
+def _gemini_stream(api_key: str, model: str, system: str, user: str):
+    import json as _json
+
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse&key={api_key}"
+    response = requests.post(
+        endpoint,
+        json={
+            "systemInstruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": [{"text": user}]}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": MAX_TOKENS},
+        },
+        stream=True,
+        timeout=120,
+    )
+    response.raise_for_status()
+    for line in response.iter_lines():
+        if not line:
+            continue
+        decoded = line.decode("utf-8")
+        if decoded.startswith("data: "):
+            try:
+                data = _json.loads(decoded[6:])
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    for part in parts:
+                        text = part.get("text", "")
+                        if text:
+                            yield text
+            except _json.JSONDecodeError:
+                continue
 
 
 def _gemini(api_key: str, model: str, system: str, user: str) -> str:
@@ -247,6 +365,73 @@ def _generate_text(system: str, user: str, settings: dict[str, Any]) -> str:
     if provider == "huggingface":
         return _huggingface(api_key, model, system, user, config)
     return _openai_compatible(api_key, model, system, user, config.get("base_url"))
+
+
+def _generate_text_stream(system: str, user: str, settings: dict[str, Any]):
+    """Generator that yields text tokens from the configured provider."""
+    config = settings.get("config", {}) or {}
+    provider = (config.get("provider") or DEFAULT_PROVIDER).strip().lower()
+    api_key = (settings.get("api_key") or "").strip()
+    model = (config.get("model") or "gpt-4o-mini").strip()
+    base_url = config.get("base_url") or ""
+    if provider in {"huggingface_local"}:
+        api_key = ""
+    elif provider != "langchain_openai" and not api_key:
+        raise ValueError(f"Missing API key for provider '{provider}'")
+    if provider == "langchain_openai" and not api_key and not _is_local_ollama_base_url(base_url):
+        raise ValueError("Missing API key for LangChain OpenAI-compatible provider")
+
+    if provider == "huggingface_local":
+        yield _huggingface_local(model or DEFAULT_LOCAL_MODEL, system, user)
+        return
+    if provider == "langchain_openai":
+        yield from _langchain_openai_stream(api_key, model or "llama3.1", system, user, config)
+        return
+    if provider == "azure_openai":
+        yield from _azure_openai_stream(api_key, model, system, user, config)
+        return
+    if provider == "grok":
+        yield from _openai_compatible_stream(api_key, model or "grok-3-mini", system, user, config.get("base_url") or "https://api.x.ai/v1")
+        return
+    if provider == "groq":
+        yield from _openai_compatible_stream(api_key, model, system, user, config.get("base_url") or "https://api.groq.com/openai/v1")
+        return
+    if provider == "claude":
+        yield from _claude_stream(api_key, model or "claude-3-5-sonnet-latest", system, user)
+        return
+    if provider == "gemini":
+        yield from _gemini_stream(api_key, model or "gemini-1.5-pro", system, user)
+        return
+    if provider == "huggingface":
+        yield _huggingface(api_key, model, system, user, config)
+        return
+    yield from _openai_compatible_stream(api_key, model, system, user, config.get("base_url"))
+
+
+def ask_text_stream(
+    system: str,
+    user: str,
+    *,
+    user_id: Optional[int] = None,
+    provider_settings: Optional[dict[str, Any]] = None,
+):
+    """Generator that yields text tokens from the configured provider."""
+    settings = provider_settings or get_user_ai_settings(user_id)
+    config = settings.get("config", {}) or {}
+    provider = (config.get("provider") or DEFAULT_PROVIDER).strip().lower()
+    api_key = (settings.get("api_key") or "").strip()
+    base_url = config.get("base_url") or ""
+    if provider not in {"huggingface_local"} and provider != "langchain_openai" and not api_key:
+        logger.warning("ask_text_stream: %s has no API key — returning empty (user_id=%s)", provider, user_id)
+        return
+    if provider == "langchain_openai" and not api_key and not _is_local_ollama_base_url(base_url):
+        logger.warning("ask_text_stream: langchain_openai has no API key and no local Ollama base URL — returning empty (user_id=%s)", user_id)
+        return
+
+    try:
+        yield from _generate_text_stream(system, user, settings)
+    except Exception as exc:
+        logger.warning("ask_text_stream failed for %s (user_id=%s): %s", provider, user_id, exc)
 
 
 logger = logging.getLogger(__name__)

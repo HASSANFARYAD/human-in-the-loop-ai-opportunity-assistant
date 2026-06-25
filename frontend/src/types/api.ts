@@ -177,6 +177,29 @@ export interface ProviderConfig {
   updated_at?: string;
 }
 
+export interface Conversation {
+  id: number;
+  conversation_id: number;
+  user_id: number;
+  workspace_id?: number | null;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationMessage {
+  id: number;
+  conversation_id: number;
+  role: "user" | "assistant";
+  content: string;
+  sections: AgentSection[];
+  created_at: string;
+}
+
+export interface ConversationDetail extends Conversation {
+  messages: ConversationMessage[];
+}
+
 export interface AgentJobListing {
   title: string;
   company: string;
