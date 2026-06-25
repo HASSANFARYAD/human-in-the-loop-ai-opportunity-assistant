@@ -17,6 +17,7 @@ from job_assistant.db import (
 from job_assistant.services.ai_providers import ask_json as ask_json_direct
 from job_assistant.services.ai_providers import ask_text as ask_text_direct
 from job_assistant.services.ai_providers import ask_text_stream as ask_text_stream_direct
+from job_assistant.services.ai_providers import ask_tool_json as ask_tool_json_direct
 
 
 @dataclass
@@ -112,6 +113,34 @@ class AIOrchestrator:
             if user_id:
                 log_ai_generation(user_id, provider=route.provider, model=route.model, task_type=task_type, prompt_version=prompt_version, prompt_hash=prompt_hash, input_tokens=input_tokens, output_tokens=output_tokens, latency_ms=int((time.perf_counter() - started) * 1000), status=status, error_message=error, workspace_id=workspace_id)
 
+
+    def ask_tool_json(
+        self, system: str, user: str, tools: list[dict[str, Any]], fallback: Dict[str, Any],
+        *, user_id: Optional[int] = None, task_type: str = "agent_routing", prompt_version: str = "",
+        workspace_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        route = self.resolve_route(user_id, task_type, workspace_id=workspace_id)
+        self._enforce_daily_budget(user_id, route)
+        started = time.perf_counter()
+        status = "success"
+        error = ""
+        prompt_hash = hashlib.sha256((system + "\n" + user).encode("utf-8")).hexdigest()
+        input_tokens = len((system + "\n" + user).split())
+        output_tokens = 0
+        try:
+            data = ask_tool_json_direct(system, user, tools, fallback, user_id=user_id, provider_settings=route.settings)
+            if isinstance(data, dict) and data.get("_ai_error"):
+                status = "fallback"
+                error = str(data.get("_ai_error"))[:1000]
+            output_tokens = len(str(data).split())
+            return data or dict(fallback)
+        except Exception as exc:
+            status = "failed"
+            error = str(exc)[:1000]
+            return dict(fallback)
+        finally:
+            if user_id:
+                log_ai_generation(user_id, provider=route.provider, model=route.model, task_type=task_type, prompt_version=prompt_version, prompt_hash=prompt_hash, input_tokens=input_tokens, output_tokens=output_tokens, latency_ms=int((time.perf_counter() - started) * 1000), status=status, error_message=error, workspace_id=workspace_id)
 
     def ask_stream(
         self, system: str, user: str, *, user_id: Optional[int] = None, task_type: str = "general", prompt_version: str = "", workspace_id: Optional[int] = None
