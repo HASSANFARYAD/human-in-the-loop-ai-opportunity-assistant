@@ -1,3 +1,16 @@
+"""
+Job-source scrapers — per-user, URL-driven discovery.
+
+Each scraper subclass of ``JobSourceScraper`` requires an explicit URL
+or source hint to begin (e.g. an Indeed search-result page).  They are
+configured per-user and run on demand.  This is unlike
+``public_discovery.py``, which polls public job-board APIs without user
+configuration.
+
+All scrapers converge with auto-discovered and manually-entered jobs
+in ``import_opportunities()``, which runs the same dedup pipeline.
+"""
+
 from __future__ import annotations
 
 import json
@@ -300,14 +313,37 @@ def _extract_job_type(text: str) -> str:
     return ""
 
 
+def _content_hash(job: dict[str, Any]) -> str:
+    import hashlib
+    raw = "|".join([
+        str(job.get("title") or "").strip().lower(),
+        str(job.get("company") or "").strip().lower(),
+        str(job.get("description") or job.get("raw_text") or "").strip().lower(),
+    ])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _dedupe_opportunities(opportunities: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[str] = set()
+    seen_urls: set[str] = set()
+    seen_hashes: set[str] = set()
+    seen_tc: set[str] = set()
     unique: list[dict[str, Any]] = []
     for opportunity in opportunities:
-        key = opportunity.get("url") or f"{opportunity.get('title')}|{opportunity.get('company')}"
-        if key in seen:
+        url = opportunity.get("url") or ""
+        title = str(opportunity.get("title") or "").strip()
+        company = str(opportunity.get("company") or "").strip()
+        ch = _content_hash(opportunity)
+        tc_key = f"{title}|{company}" if title and company else ""
+        if url and url in seen_urls:
             continue
-        seen.add(key)
+        if ch in seen_hashes:
+            continue
+        if tc_key and tc_key in seen_tc:
+            continue
+        seen_urls.add(url) if url else None
+        seen_hashes.add(ch)
+        if tc_key:
+            seen_tc.add(tc_key)
         unique.append(opportunity)
     return unique
 

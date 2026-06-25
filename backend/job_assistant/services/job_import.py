@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from job_assistant.db import insert_job, job_url_exists
+from job_assistant.db import _content_hash, insert_job, job_exists
 from job_assistant.services.opportunity_classifier import (
     JOB_LIKE_CATEGORIES,
     VALID_OPPORTUNITY_CATEGORIES,
@@ -43,6 +43,8 @@ def import_opportunities(
 ) -> ImportResult:
     result = ImportResult(found=len(opportunities))
     seen_urls: set[str] = set()
+    seen_content_hashes: set[str] = set()
+    seen_title_companies: set[str] = set()
     expanded: list[dict[str, Any]] = []
     for item in opportunities:
         annotated = annotate_opportunity(item)
@@ -74,11 +76,26 @@ def import_opportunities(
             )
             continue
         url = str(item.get("url") or "").strip()
-        if url:
-            if url in seen_urls or job_url_exists(url, user_id=user_id, workspace_id=workspace_id):
-                result.skipped_duplicates += 1
-                continue
-            seen_urls.add(url)
+        title = str(item.get("title") or "").strip()
+        company = str(item.get("company") or "").strip()
+        ch = _content_hash(item)
+        tc_key = f"{title}|{company}" if title and company else None
+        if url and url in seen_urls:
+            result.skipped_duplicates += 1
+            continue
+        if ch in seen_content_hashes:
+            result.skipped_duplicates += 1
+            continue
+        if tc_key and tc_key in seen_title_companies:
+            result.skipped_duplicates += 1
+            continue
+        if job_exists(item, user_id=user_id, workspace_id=workspace_id):
+            result.skipped_duplicates += 1
+            continue
+        seen_urls.add(url) if url else None
+        seen_content_hashes.add(ch)
+        if tc_key:
+            seen_title_companies.add(tc_key)
         try:
             result.ids.append(insert_job(item, user_id, workspace_id=workspace_id))
             result.imported += 1
