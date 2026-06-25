@@ -227,6 +227,15 @@ export interface AgentPersona {
   focus_area: "general" | "technical" | "managerial";
 }
 
+export interface AgentMemory {
+  id: number;
+  key: string;
+  value: string;
+  source: "manual" | "extracted";
+  created_at: string;
+  updated_at: string;
+}
+
 export interface PromptVersion {
   id?: number;
   name: string;
@@ -241,6 +250,64 @@ export interface PromptVersion {
 export interface AgentChatResponse {
   intents: string[];
   sections: AgentSection[];
+}
+
+export interface AIUsageBudget {
+  used: number;
+  limit: number;
+  remaining: number | null;
+  unlimited: boolean;
+}
+
+export interface UsageTaskType {
+  task_type: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost: number;
+  avg_latency_ms: number;
+}
+
+export interface UsagePeriodTotal {
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost: number;
+}
+
+export interface UsagePeriod {
+  total: UsagePeriodTotal;
+  by_task_type: UsageTaskType[];
+}
+
+export interface UsageDailyEntry {
+  date: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost: number;
+  failed: number;
+}
+
+export interface DetailedUsage {
+  budget: AIUsageBudget;
+  today: UsagePeriod;
+  this_week: UsagePeriod;
+  this_month: UsagePeriod;
+  daily_history: UsageDailyEntry[];
+}
+
+export interface RateLimitEntry {
+  resource_type: string;
+  limit: number;
+  used: number;
+  remaining: number;
+  window_start: string;
+  window_end: string;
+}
+
+export interface RateLimitStatus {
+  rate_limits: RateLimitEntry[];
 }
 
 export interface AIUsage {

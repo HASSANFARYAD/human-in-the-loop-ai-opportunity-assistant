@@ -44,10 +44,16 @@ from job_assistant.db import (
     delete_prompt_version,
     update_agent_persona,
     get_agent_persona,
+    create_memory,
+    list_memories,
+    update_memory,
+    delete_memory,
     create_feedback,
     create_reminder,
     cleanup_non_opportunity_records,
     count_ai_generations_today,
+    ai_usage_detailed,
+    get_rate_limit_status,
     record_score_feedback,
     db_health,
     delete_job,
@@ -118,7 +124,7 @@ from job_assistant.db import (
 from job_assistant.runtime import runtime_status, validate_startup_configuration
 from job_assistant.provider_registry import provider_registry
 from job_assistant.ai_orchestrator import ai_orchestrator
-from job_assistant.agent_chat import chat_reply, chat_reply_stream, classify_intent, generate_suggestions, run_job_search
+from job_assistant.agent_chat import chat_reply, chat_reply_stream, classify_intent, generate_suggestions, run_job_search, extract_memories_from_conversation
 from job_assistant.automation_engine import automation_engine
 from job_assistant.observability import acknowledge_alert, metrics_summary, prometheus_text
 from job_assistant.publishing_engine import approve_post, publish_post, validate_target
@@ -1340,12 +1346,21 @@ async def ask_ai_json(payload: AIAskIn, user: dict = Depends(current_user)):
 async def ai_usage(user: dict = Depends(current_user)):
     limit = settings.ai_daily_generation_limit
     used = count_ai_generations_today(user["id"])
+    detailed = ai_usage_detailed(user["id"])
     return {
-        "used": used,
-        "limit": limit,
-        "remaining": max(0, limit - used) if limit > 0 else None,
-        "unlimited": limit <= 0,
+        "budget": {
+            "used": used,
+            "limit": limit,
+            "remaining": max(0, limit - used) if limit > 0 else None,
+            "unlimited": limit <= 0,
+        },
+        **detailed,
     }
+
+
+@router.get("/rate-limits")
+async def rate_limits(user: dict = Depends(current_user)):
+    return {"rate_limits": get_rate_limit_status()}
 
 
 @router.post("/jobs/{job_id}/score-feedback")
@@ -1496,6 +1511,14 @@ async def agent_chat_stream(payload: AgentChatIn, user: dict = Depends(current_u
             content = next((s.get("message", "") for s in assistant_sections if s.get("type") == "message"), "")
             msg_id = add_conversation_message(conversation_id, "assistant", content, sections=assistant_sections)
             yield _sse("done", {"conversation_id": conversation_id, "message_id": msg_id})
+
+            # Fire-and-forget memory extraction (best-effort, after done so client is unblocked)
+            try:
+                extract_memories_from_conversation(
+                    message, content, history=history, user_id=user_id,
+                )
+            except Exception:
+                pass
         except Exception:
             yield _sse("error", {"message": "The assistant could not complete your request."})
 
@@ -1569,6 +1592,70 @@ async def get_persona(user: dict = Depends(current_user)):
 async def put_persona(payload: PersonaIn, user: dict = Depends(current_user)):
     update_agent_persona(user["id"], payload.dict())
     return {"status": "success"}
+
+
+class MemoryIn(BaseModel):
+    key: str
+    value: str
+    source: str = "manual"
+
+
+class MemoryUpdateIn(BaseModel):
+    key: str
+    value: str
+
+
+class MemoryOut(BaseModel):
+    id: int
+    key: str
+    value: str
+    source: str
+    created_at: str
+    updated_at: str
+
+
+@router.get("/agent/memories")
+async def list_agent_memories(user: dict = Depends(current_user)):
+    memories = list_memories(user["id"])
+    return [
+        {
+            "id": m["memory_id"],
+            "key": m["key"],
+            "value": m["value"],
+            "source": m.get("source", "manual"),
+            "created_at": m.get("created_at", ""),
+            "updated_at": m.get("updated_at", ""),
+        }
+        for m in memories
+    ]
+
+
+@router.post("/agent/memories")
+async def create_agent_memory(payload: MemoryIn, user: dict = Depends(current_user)):
+    try:
+        mid = create_memory(user["id"], payload.key, payload.value, source=payload.source)
+        return {"id": mid, "status": "success"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.put("/agent/memories/{memory_id}")
+async def update_agent_memory(memory_id: int, payload: MemoryUpdateIn, user: dict = Depends(current_user)):
+    try:
+        ok = update_memory(memory_id, user["id"], payload.key, payload.value)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Memory not found")
+        return {"status": "success"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.delete("/agent/memories/{memory_id}")
+async def delete_agent_memory(memory_id: int, user: dict = Depends(current_user)):
+    ok = delete_memory(memory_id, user["id"])
+    if not ok:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return {"status": "ok"}
 
 
 @router.get("/admin/prompts")

@@ -19,6 +19,54 @@ from job_assistant.services.ai_providers import ask_text as ask_text_direct
 from job_assistant.services.ai_providers import ask_text_stream as ask_text_stream_direct
 from job_assistant.services.ai_providers import ask_tool_json as ask_tool_json_direct
 
+# Approximate cost per 1K tokens (input, output) in USD for common models.
+# Used to populate estimated_cost on AI generation logs.
+_MODEL_PRICING: dict[str, tuple[float, float]] = {
+    # OpenAI
+    "gpt-4o": (0.0025, 0.01),
+    "gpt-4o-mini": (0.00015, 0.0006),
+    "gpt-4o-mini-2024-07-18": (0.00015, 0.0006),
+    "gpt-4-turbo": (0.01, 0.03),
+    "gpt-4": (0.03, 0.06),
+    "gpt-3.5-turbo": (0.0005, 0.0015),
+    "o1": (0.015, 0.06),
+    "o1-mini": (0.003, 0.012),
+    "o3-mini": (0.0011, 0.0044),
+    # Anthropic
+    "claude-3-opus": (0.015, 0.075),
+    "claude-3-sonnet": (0.003, 0.015),
+    "claude-3-haiku": (0.00025, 0.00125),
+    "claude-3-5-sonnet": (0.003, 0.015),
+    "claude-3-5-haiku": (0.0008, 0.004),
+    # Google
+    "gemini-1.5-pro": (0.0035, 0.0105),
+    "gemini-1.5-flash": (0.000075, 0.0003),
+    "gemini-2.0-flash": (0.0001, 0.0004),
+    "gemini-2.0-flash-lite": (0.000075, 0.0003),
+    # xAI
+    "grok-2": (0.002, 0.01),
+    "grok-2-latest": (0.002, 0.01),
+    "grok-3": (0.003, 0.015),
+    # Groq
+    "llama-3.3-70b": (0.00059, 0.00079),
+    "llama-3.1-8b": (0.00005, 0.00008),
+    "mixtral-8x7b": (0.00024, 0.00024),
+}
+
+
+def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Estimate USD cost for an AI generation using the pricing table."""
+    model_lower = model.lower().strip()
+    prices = _MODEL_PRICING.get(model_lower)
+    if prices:
+        return round((input_tokens / 1000) * prices[0] + (output_tokens / 1000) * prices[1], 6)
+    # Fallback: try prefix match
+    for m, (in_price, out_price) in _MODEL_PRICING.items():
+        if model_lower.startswith(m):
+            return round((input_tokens / 1000) * in_price + (output_tokens / 1000) * out_price, 6)
+    # Unknown model — return 0
+    return 0.0
+
 
 @dataclass
 class AIRoute:
@@ -85,7 +133,8 @@ class AIOrchestrator:
             return dict(fallback)
         finally:
             if user_id:
-                log_ai_generation(user_id, provider=route.provider, model=route.model, task_type=task_type, prompt_version=prompt_version, prompt_hash=prompt_hash, input_tokens=input_tokens, output_tokens=output_tokens, latency_ms=int((time.perf_counter() - started) * 1000), status=status, error_message=error, workspace_id=workspace_id)
+                cost = _estimate_cost(route.model, input_tokens, output_tokens)
+                log_ai_generation(user_id, provider=route.provider, model=route.model, task_type=task_type, prompt_version=prompt_version, prompt_hash=prompt_hash, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=cost, latency_ms=int((time.perf_counter() - started) * 1000), status=status, error_message=error, workspace_id=workspace_id)
 
     def ask(self, system: str, user: str, *, user_id: Optional[int] = None, task_type: str = "general", prompt_version: str = "", workspace_id: Optional[int] = None) -> str:
         """Free-form conversational completion. Returns plain assistant text
@@ -111,7 +160,8 @@ class AIOrchestrator:
             return ""
         finally:
             if user_id:
-                log_ai_generation(user_id, provider=route.provider, model=route.model, task_type=task_type, prompt_version=prompt_version, prompt_hash=prompt_hash, input_tokens=input_tokens, output_tokens=output_tokens, latency_ms=int((time.perf_counter() - started) * 1000), status=status, error_message=error, workspace_id=workspace_id)
+                cost = _estimate_cost(route.model, input_tokens, output_tokens)
+                log_ai_generation(user_id, provider=route.provider, model=route.model, task_type=task_type, prompt_version=prompt_version, prompt_hash=prompt_hash, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=cost, latency_ms=int((time.perf_counter() - started) * 1000), status=status, error_message=error, workspace_id=workspace_id)
 
 
     def ask_tool_json(
@@ -140,7 +190,8 @@ class AIOrchestrator:
             return dict(fallback)
         finally:
             if user_id:
-                log_ai_generation(user_id, provider=route.provider, model=route.model, task_type=task_type, prompt_version=prompt_version, prompt_hash=prompt_hash, input_tokens=input_tokens, output_tokens=output_tokens, latency_ms=int((time.perf_counter() - started) * 1000), status=status, error_message=error, workspace_id=workspace_id)
+                cost = _estimate_cost(route.model, input_tokens, output_tokens)
+                log_ai_generation(user_id, provider=route.provider, model=route.model, task_type=task_type, prompt_version=prompt_version, prompt_hash=prompt_hash, input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=cost, latency_ms=int((time.perf_counter() - started) * 1000), status=status, error_message=error, workspace_id=workspace_id)
 
     def ask_stream(
         self, system: str, user: str, *, user_id: Optional[int] = None, task_type: str = "general", prompt_version: str = "", workspace_id: Optional[int] = None
@@ -167,10 +218,12 @@ class AIOrchestrator:
             error = str(exc)[:1000]
         finally:
             if user_id:
+                cost = _estimate_cost(route.model, input_tokens, output_tokens)
                 log_ai_generation(
                     user_id, provider=route.provider, model=route.model, task_type=task_type,
                     prompt_version=prompt_version, prompt_hash=prompt_hash,
                     input_tokens=input_tokens, output_tokens=output_tokens,
+                    estimated_cost=cost,
                     latency_ms=int((time.perf_counter() - started) * 1000),
                     status=status, error_message=error, workspace_id=workspace_id,
                 )

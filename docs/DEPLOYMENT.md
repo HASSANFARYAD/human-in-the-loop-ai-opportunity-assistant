@@ -1,5 +1,13 @@
 # Deployment
 
+## Prerequisites
+
+A **MongoDB** instance is required for agent memory, AI generation logs, rate-limit counters, and conversation data. Options:
+
+- **MongoDB Atlas** (free M0 tier is sufficient for small deployments)
+- **Render MongoDB** (add via Render dashboard)
+- **Self-hosted** on the same instance or a nearby VM
+
 ## Backend On Render
 
 Use `deploy/render.yaml` as the Render blueprint. It deploys the `backend` Dockerfile and starts Uvicorn with Render's `$PORT`.
@@ -20,6 +28,10 @@ SESSION_COOKIE_SECURE=true
 SESSION_COOKIE_SAMESITE=none
 JWT_SECRET_KEY=<long-random-secret>
 APP_ENCRYPTION_KEY=<fernet-key>
+
+# MongoDB (required)
+MONGODB_URL=mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority
+MONGODB_DB_NAME=job_assistant
 ```
 
 Health checks:
@@ -28,7 +40,7 @@ Health checks:
 - `/api/v1/health/db`
 - `/api/v1/health/storage`
 
-SQLite is the default database. On Render, mount a persistent disk and keep `APP_DB_PATH` on that disk. Without the disk, database contents can be lost when the service restarts or redeploys. SQLite is acceptable for small or single-user MVP deployments, but it is not a strong fit for multi-user production concurrency.
+SQLite stores core business data (users, profiles, jobs). On Render, mount a persistent disk and keep `APP_DB_PATH` on that disk. Without the disk, database contents can be lost when the service restarts or redeploys. SQLite is acceptable for small or single-user MVP deployments, but it is not a strong fit for multi-user production concurrency.
 
 ## Frontend On Vercel
 
