@@ -1,6 +1,6 @@
 # Job Assistant — Product & Architecture Guide
 
-_Last updated: 2026-06-22_
+_Last updated: 2026-06-25_
 
 ---
 
@@ -81,7 +81,13 @@ Concrete value: less context-switching, higher-signal targeting (scoring + learn
 - **Reminders & auto follow-ups** — manual reminders plus automatic follow-up reminders for stale "Applied" jobs.
 
 ### AI assistant
-- **Conversational agent** (`/agent`) that classifies intent and routes to job search, resume tailoring, or interview prep — with **streaming (Server-Sent Events)** responses.
+- **Conversational agent** (`/agent`) that classifies intent (chat, job search, resume tailoring, interview prep) using tool/function calling and routes to the appropriate handler — with **streaming (Server-Sent Events)** responses.
+- **Conversation state machine** — tracks idle, searching, tailoring, interviewing, chatting states on the conversation document.
+- **Follow-up suggestions** — AI-generated next-step prompts delivered as SSE events after each reply.
+- **Cross-session agent memory** — key-value store (`agent_memory` collection) where facts the agent learns are persisted across conversations; auto-extracted from chat or managed manually via `?tab=memories`.
+- **Feedback loop** — thumbs up/down on individual messages with persisted ratings.
+- **Agent persona** — customizable assistant role, tone, and behavior via `?tab=persona`.
+- **Prompt versioning** — system prompt templates stored with semantic versioning and active-version rollback via `?tab=prompts`.
 
 ### Automation & publishing
 - **Automation rules** — if/then workflows (trigger event → action) with run history and error logs.
@@ -93,7 +99,8 @@ Concrete value: less context-switching, higher-signal targeting (scoring + learn
 - **Resource sharing** across a workspace.
 - **Audit logs** of user actions (with IP/user-agent), **activity feed**, and **feedback/bug submission**.
 - **Compliance** — GDPR-style data export, deletion request/approval, retention policies.
-- **Observability** — Prometheus metrics, latency tracking, alerts; **automated SQLite backups** (with optional S3); **per-IP rate limiting**; **daily AI generation budget**.
+- **Observability** — Prometheus metrics, latency tracking, alerts; **automated SQLite backups** (with optional S3); **per-resource-type rate limiting** with sliding-window counters (Redis or MongoDB); **daily AI generation budget** with per-task-type cost breakdown.
+- **Usage monitoring** — `GET /ai/usage` returns daily budget, today/week/month totals by task type, and 30-day daily history; rate-limit status endpoint `GET /rate-limits` with color-coded thresholds in the settings dashboard (`?tab=usage`).
 
 ---
 
@@ -210,15 +217,25 @@ Every AI feature (scoring, extraction, tailoring, resume building, interview pre
 
 ---
 
-## 8. Data model (SQLite)
+## 8. Data model (SQLite + MongoDB)
 
-Core entities and their relationships:
+**SQLite** stores core business data. **MongoDB** stores high-volume/transient data for the AI assistant, usage monitoring, and rate limiting.
+
+### SQLite tables
 
 - **Identity & tenancy**: `users`, `user_sessions`, `password_reset_tokens`, `organizations`, `workspaces`, `workspace_members`, `roles`, `permissions`, `role_permissions`, `shared_resources`.
 - **Career data**: `profile` (multiple per user, one default), `jobs` (workspace-scoped, unique per user+workspace+url), `evaluations` (scores), `application_materials`, `applications` (status), `reminders`, `resume_reviews`, `interview_prep_sessions`, `recordings`.
-- **Integrations & AI**: `integration_settings` (encrypted), `provider_configs`, `gmail_messages`, `ai_generations`, `prompt_versions`.
+- **Integrations & AI**: `integration_settings` (encrypted), `provider_configs`, `gmail_messages`, `prompt_versions`.
 - **Automation & publishing**: `automation_rules`, `automation_runs`, `automation_errors`, `automation_preferences`, `posts`, `post_targets`.
-- **Governance & ops**: `audit_logs`, `activity_events`, `feedback`, `usage_counters`, `system_metrics`, `alert_events`, `worker_jobs`, `compliance_exports`, `schema_migrations`.
+- **Governance & ops**: `audit_logs`, `activity_events`, `feedback`, `system_metrics`, `alert_events`, `worker_jobs`, `compliance_exports`, `schema_migrations`.
+
+### MongoDB collections
+
+- `ai_generations` — every AI call logged with provider, model, tokens, latency, status, estimated cost, and task type.
+- `agent_memory` — per-user key-value facts that the agent remembers across sessions; unique index on `(user_id, key)`, max 50 per user.
+- `usage_counters` — sliding-window counters for per-resource-type rate limiting.
+- `conversations` — chat conversation metadata (title, state, timestamps).
+- `conversation_messages` — individual chat turns with role, content, sections, feedback.
 
 > The data layer ships with **incremental, idempotent migrations** (e.g. the single-profile → multi-profile migration preserves existing data and marks it the default).
 
@@ -236,7 +253,7 @@ Core entities and their relationships:
 
 ## 10. Technology stack
 
-**Backend**: Python · FastAPI · SQLite · APScheduler · python-jose (JWT) · pypdf + python-docx · OpenAI/Azure/Anthropic/Gemini/Hugging Face/LangChain SDKs · Prometheus client · Sentry · (optional Redis, S3).
+**Backend**: Python · FastAPI · SQLite · MongoDB (PyMongo) · APScheduler · python-jose (JWT) · pypdf + python-docx · OpenAI/Azure/Anthropic/Gemini/Hugging Face/LangChain SDKs · Prometheus client · Sentry · (optional Redis, S3).
 
 **Frontend**: Next.js 15 (App Router) · React 19 · TypeScript 5 · TanStack Query 5 · Zustand 5 · Axios · Tailwind CSS 3 · Recharts · React Hook Form + Zod · Radix UI · lucide-react · sonner · next-themes.
 

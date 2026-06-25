@@ -1,6 +1,6 @@
 # Job Application Assistant
 
-Local-first Next.js + FastAPI + SQLite assistant for collecting, scoring, reviewing, and tracking job opportunities. The app is human-in-the-loop: it helps organize and draft, but it does not submit applications, bypass platform rules, or scrape private pages.
+Local-first Next.js + FastAPI + MongoDB + SQLite assistant for collecting, scoring, reviewing, and tracking job opportunities. The app is human-in-the-loop: it helps organize and draft, but it does not submit applications, bypass platform rules, or scrape private pages.
 
 ## What It Does
 
@@ -8,20 +8,35 @@ Local-first Next.js + FastAPI + SQLite assistant for collecting, scoring, review
 - Imports opportunities from pasted text, CSV, configured Gmail alerts, public no-login sources, and user-configured Apify actors.
 - Scores job-like opportunities against a saved profile and can draft editable materials, resume reviews, and interview prep.
 - Tracks application status, notes, reminders, recordings metadata, and generated artifacts.
+- **Conversational AI agent** with streaming chat, tool-calling intent classification, follow-up suggestions, and **cross-session agent memory** that recalls user facts across conversations.
+- **Usage monitoring dashboard** with per-task-type AI cost breakdown, daily budget enforcement, and rate-limit status.
 
 ## Local Setup
 
-Backend:
+Requires **MongoDB** (agent memory, rate-limit counters, AI generation logs) and optionally **Redis** (rate-limit backend). SQLite stores core business data (users, profiles, jobs).
+
+### MongoDB
+
+```bash
+# macOS
+brew install mongodb-community
+brew services start mongodb-community
+
+# Or use Docker
+docker run -d -p 27017:27017 --name mongodb mongo:7
+```
+
+### Backend
 
 ```bash
 cd backend
 python -m venv .venv
-.venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 python -m uvicorn api_server:app --host 0.0.0.0 --port 8000
 ```
 
-Frontend:
+### Frontend
 
 ```bash
 cd frontend
@@ -46,6 +61,10 @@ CORS_ORIGINS=http://localhost:3000,http://localhost:3001
 CORS_ALLOW_CREDENTIALS=true
 SESSION_COOKIE_SECURE=false
 SESSION_COOKIE_SAMESITE=lax
+
+# MongoDB (required)
+MONGODB_URL=mongodb://localhost:27017
+MONGODB_DB_NAME=job_assistant
 ```
 
 Frontend essentials:
@@ -86,6 +105,44 @@ It deletes evaluations, application materials, applications/statuses, reminders,
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Render backend and Vercel frontend setup.
 
 SQLite remains the default. On Render, SQLite requires a persistent disk and is suitable only for small or single-user deployments. Do not enable PostgreSQL unless the backend has been verified end-to-end for it.
+
+## Key Features
+
+### Conversational AI Agent (`/agent`)
+- **Streaming chat** — token-by-token SSE responses with markdown rendering.
+- **Intent classification** — tool-calling extracts intents (chat, job search, resume tailoring, interview prep).
+- **Conversation state machine** — tracks idle, searching, tailoring, interviewing, chatting states.
+- **Follow-up suggestions** — AI-generated next-step prompts after each reply.
+- **Cross-session agent memory** — the agent remembers user facts across conversations (key-value store with auto-extraction and manual management).
+- **System prompt versioning** — prompt templates stored in DB with active version rollback.
+- **Agent persona** — customizable assistant behavior and tone.
+- **Feedback** — thumbs up/down on individual messages to tune agent quality.
+
+### Usage & Rate-Limit Monitoring
+- **Per-provider cost tracking** — pricing table for 25+ models across OpenAI, Claude, Gemini, Grok, and Groq.
+- **Usage dashboard** (`/settings?tab=usage`) — daily budget bar, today/week/month breakdown by task type, 30-day daily history, AI generation log.
+- **Rate-limit status** — per-resource-type sliding-window counters with color-coded thresholds.
+- **Daily AI budget cap** — configurable limit; soft-blocked once exhausted.
+
+### Human-in-the-Loop Design
+- Scores are prioritization hints, not decisions — the user always reviews before acting.
+- Manual import and status controls complement automated discovery.
+- AI never invents employers, dates, degrees, or metrics — grounded in the user's profile.
+
+---
+
+## Future Goals
+
+- **Voice input** — record audio questions in the chat UI and transcribe via Whisper or the configured AI provider.
+- **Multi-branch conversations** — fork a chat at any point to explore alternative approaches without losing context.
+- **Export / share conversations** — download chat transcripts as PDF or Markdown; share via link.
+- **Conversation search** — full-text search across all past conversations and messages.
+- **Agent tool plugins** — allow the assistant to invoke external APIs (calendar, email drafts, job board APIs) via a plugin system.
+- **Automated job applications** — supervised one-click apply where the assistant fills forms and the user reviews before submission.
+- **Mobile app** — React Native or Expo wrapper for the existing API surface with offline resume storage.
+- **Multi-language resume generation** — produce CVs in additional languages beyond English with per-country conventions.
+
+---
 
 ## Premortem
 
