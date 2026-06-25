@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
-import { Activity, Bot, Brain, Database, HeartPulse, Mail, Save, ShieldCheck, TestTube2, UserRound } from "lucide-react";
+import { Activity, Bot, Brain, BrainCircuit, Database, Gauge, HeartPulse, Mail, Save, ShieldCheck, TestTube2, Timer, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,11 +14,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { DataFields, DataTable } from "@/components/ui/data-display";
 import { Skeleton } from "@/components/ui/skeleton";
 import { agentService } from "@/services/agent.service";
+import type { AgentMemory } from "@/types/api";
 import { auditService } from "@/services/audit.service";
 import { feedbackService } from "@/services/feedback.service";
 import { opportunityService } from "@/services/opportunity.service";
 import { providerService } from "@/services/provider.service";
-import type { AdminConfig, AgentPersona, Profile, PromptVersion } from "@/types/api";
+import type { AdminConfig, AgentPersona, DetailedUsage, Profile, PromptVersion, RateLimitEntry } from "@/types/api";
 
 export function SettingsView() {
   const tab = useSearchParams().get("tab") ?? "settings";
@@ -39,6 +40,8 @@ export function SettingsView() {
         <ProfileManager />
       ) : tab === "persona" ? (
         <AgentPersonaPanel />
+      ) : tab === "memories" ? (
+        <AgentMemoryPanel />
       ) : tab === "prompts" ? (
         <PromptAdminPanel />
       ) : tab === "feedback" ? (
@@ -46,7 +49,7 @@ export function SettingsView() {
       ) : tab === "audit" ? (
         <Card><CardHeader><CardTitle>Audit Logs</CardTitle></CardHeader><CardContent><DataTable rows={(audit.data ?? []) as unknown as Record<string, unknown>[]} columns={["created_at", "action", "resource_type", "resource_id"]} /></CardContent></Card>
       ) : tab === "usage" ? (
-        <Card><CardHeader><CardTitle>Usage</CardTitle></CardHeader><CardContent><DataFields data={usage.data ?? {}} /></CardContent></Card>
+        <UsageDashboard />
       ) : tab === "health" ? (
         <Card><CardHeader><CardTitle>Health</CardTitle></CardHeader><CardContent><DataFields data={health.data ?? {}} /></CardContent></Card>
       ) : (
@@ -617,6 +620,347 @@ function PromptAdminPanel() {
     </Card>
   );
 }
+
+function AgentMemoryPanel() {
+  const { data: memories, isLoading } = useQuery({
+    queryKey: ["agent-memories"],
+    queryFn: agentService.listMemories,
+  });
+  const queryClient = useQueryClient();
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editKey, setEditKey] = useState("");
+  const [editValue, setEditValue] = useState("");
+  const [newKey, setNewKey] = useState("");
+  const [newValue, setNewValue] = useState("");
+
+  const create = useMutation({
+    mutationFn: () => agentService.createMemory(newKey, newValue),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agent-memories"] });
+      toast.success("Memory saved");
+      setNewKey("");
+      setNewValue("");
+    },
+    onError: () => toast.error("Failed to save memory"),
+  });
+
+  const update = useMutation({
+    mutationFn: ({ id, key, value }: { id: number; key: string; value: string }) =>
+      agentService.updateMemory(id, key, value),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agent-memories"] });
+      toast.success("Memory updated");
+      setEditingId(null);
+    },
+    onError: () => toast.error("Failed to update memory"),
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: number) => agentService.deleteMemory(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agent-memories"] });
+      toast.success("Memory deleted");
+    },
+    onError: () => toast.error("Failed to delete memory"),
+  });
+
+  const startEdit = (m: AgentMemory) => {
+    setEditingId(m.id);
+    setEditKey(m.key);
+    setEditValue(m.value);
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <BrainCircuit className="h-5 w-5 text-primary" />
+          Agent Memory
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Facts the assistant remembers across conversations. Add, edit, or remove them manually.
+          The agent also learns new facts automatically from your chats.
+        </p>
+
+        {/* Add new memory */}
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border p-3">
+          <div className="min-w-0 flex-1 space-y-1">
+            <label className="text-xs font-medium">Key</label>
+            <Input value={newKey} onChange={(e) => setNewKey(e.target.value)} placeholder="e.g. current role" />
+          </div>
+          <div className="min-w-0 flex-[2] space-y-1">
+            <label className="text-xs font-medium">Value</label>
+            <Input value={newValue} onChange={(e) => setNewValue(e.target.value)} placeholder="e.g. senior software engineer" />
+          </div>
+          <Button size="sm" disabled={!newKey.trim() || !newValue.trim() || create.isPending} onClick={() => create.mutate()}>
+            Add
+          </Button>
+        </div>
+
+        {/* Memory list */}
+        {isLoading ? (
+          <Skeleton className="h-32" />
+        ) : !memories || memories.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No memories stored yet. The agent will learn facts as you chat, or you can add them here.</p>
+        ) : (
+          <div className="space-y-2">
+            {memories.map((m) => (
+              <div key={m.id} className="rounded-lg border p-3">
+                {editingId === m.id ? (
+                  <div className="space-y-2">
+                    <Input value={editKey} onChange={(e) => setEditKey(e.target.value)} />
+                    <Input value={editValue} onChange={(e) => setEditValue(e.target.value)} />
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => update.mutate({ id: m.id, key: editKey, value: editValue })}>Save</Button>
+                      <Button variant="ghost" size="sm" onClick={() => setEditingId(null)}>Cancel</Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-sm font-medium">{m.key}</span>
+                        {m.source === "extracted" ? (
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">auto</span>
+                        ) : null}
+                      </div>
+                      <p className="mt-0.5 text-sm text-muted-foreground">{m.value}</p>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => startEdit(m)}>Edit</Button>
+                      <Button variant="ghost" size="sm" className="h-7 text-xs text-destructive" onClick={() => remove.mutate(m.id)}>Delete</Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+
+function UsageDashboard() {
+  const usage = useQuery({
+    queryKey: ["usage"],
+    queryFn: auditService.usage,
+  });
+  const rateLimits = useQuery({
+    queryKey: ["rate-limits"],
+    queryFn: auditService.rateLimits,
+  });
+  const data = usage.data;
+
+  const formatTokens = (n: number) =>
+    n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` :
+    n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` :
+    String(n);
+
+  const formatCost = (n: number | undefined | null) =>
+    n != null && n > 0 ? `$${n.toFixed(4)}` : "$0.00";
+
+  const barWidth = (val: number, max: number) =>
+    max > 0 ? `${Math.min(100, (val / max) * 100)}%` : "0%";
+
+  return (
+    <div className="space-y-5">
+      <h2 className="text-xl font-semibold">Usage & Rate Limits</h2>
+
+      {/* Daily Budget */}
+      {data?.budget && !data.budget.unlimited ? (
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Gauge className="h-4 w-4 text-primary" />Daily AI Budget</CardTitle></CardHeader>
+          <CardContent>
+            <div className="mb-2 flex items-center justify-between text-sm">
+              <span>{data.budget.used} / {data.budget.limit} generations used</span>
+              <span className={data.budget.remaining !== null && data.budget.remaining < 5 ? "text-destructive font-medium" : "text-muted-foreground"}>
+                {data.budget.remaining != null ? `${data.budget.remaining} remaining` : "No limit"}
+              </span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+              <div
+                className={`h-full rounded-full transition-all ${
+                  data.budget.remaining !== null && data.budget.remaining < 5
+                    ? "bg-destructive" : data.budget.remaining !== null && data.budget.remaining < data.budget.limit * 0.2
+                    ? "bg-warning" : "bg-primary"
+                }`}
+                style={{ width: barWidth(data.budget.used, data.budget.limit) }}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      ) : data?.budget?.unlimited ? (
+        <Card>
+          <CardContent className="p-5 text-sm text-muted-foreground">Daily AI budget: unlimited</CardContent>
+        </Card>
+      ) : null}
+
+      {/* Period Stats */}
+      <div className="grid gap-4 sm:grid-cols-3">
+        {(["today", "this_week", "this_month"] as const).map((period) => {
+          const p = data?.[period];
+          if (!p) return null;
+          return (
+            <Card key={period}>
+              <CardContent className="p-5">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{period.replace("_", " ")}</div>
+                <div className="mt-2 space-y-1 text-sm">
+                  <div className="flex justify-between"><span>Calls</span><span className="font-semibold">{p.total.calls}</span></div>
+                  <div className="flex justify-between"><span>Input tokens</span><span className="font-semibold">{formatTokens(p.total.input_tokens)}</span></div>
+                  <div className="flex justify-between"><span>Output tokens</span><span className="font-semibold">{formatTokens(p.total.output_tokens)}</span></div>
+                  <div className="flex justify-between"><span>Est. cost</span><span className="font-semibold">{formatCost(p.total.estimated_cost)}</span></div>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      {/* Per Task Type */}
+      {data?.today?.by_task_type?.length ? (
+        <Card>
+          <CardHeader><CardTitle className="text-base">Today by Task Type</CardTitle></CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {data.today.by_task_type.map((t) => (
+                <div key={t.task_type} className="flex items-center justify-between rounded-lg border p-3 text-sm">
+                  <div>
+                    <span className="font-medium">{t.task_type}</span>
+                    <span className="ml-2 text-muted-foreground">{t.calls} call{t.calls !== 1 ? "s" : ""}</span>
+                  </div>
+                  <div className="flex gap-4 text-xs text-muted-foreground">
+                    <span>{formatTokens(t.input_tokens)} in</span>
+                    <span>{formatTokens(t.output_tokens)} out</span>
+                    <span>{formatCost(t.estimated_cost)}</span>
+                    <span className="flex items-center gap-1"><Timer className="h-3 w-3" />{t.avg_latency_ms}ms</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {/* Daily History */}
+      {data?.daily_history?.length ? (
+        <Card>
+          <CardHeader><CardTitle className="text-base">Daily History (last 30 days)</CardTitle></CardHeader>
+          <CardContent>
+            <div className="space-y-1">
+              {data.daily_history.slice(0, 14).map((d) => {
+                const maxTokens = Math.max(...data.daily_history.slice(0, 14).map((x) => x.input_tokens + x.output_tokens), 1);
+                const totalTokens = d.input_tokens + d.output_tokens;
+                return (
+                  <div key={d.date} className="flex items-center gap-3 text-sm">
+                    <span className="w-24 shrink-0 text-muted-foreground">{d.date}</span>
+                    <div className="flex h-5 flex-1 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-l-full bg-blue-500/60 transition-all"
+                        style={{ width: barWidth(d.input_tokens, maxTokens) }}
+                        title={`Input: ${formatTokens(d.input_tokens)}`}
+                      />
+                      <div
+                        className="h-full rounded-r-full bg-green-500/60 transition-all"
+                        style={{ width: barWidth(d.output_tokens, maxTokens) }}
+                        title={`Output: ${formatTokens(d.output_tokens)}`}
+                      />
+                    </div>
+                    <span className="w-20 shrink-0 text-right text-muted-foreground">{formatTokens(totalTokens)}</span>
+                    <span className="w-16 shrink-0 text-right text-muted-foreground">{formatCost(d.estimated_cost)}</span>
+                    {d.failed > 0 ? <span className="w-12 shrink-0 text-right text-xs text-destructive">{d.failed} err</span> : null}
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {/* Rate Limits */}
+      {rateLimits.data?.rate_limits?.length ? (
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Timer className="h-4 w-4 text-primary" />Rate Limits</CardTitle></CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {rateLimits.data.rate_limits.map((rl: RateLimitEntry) => {
+                const pct = rl.limit > 0 ? (rl.used / rl.limit) * 100 : 0;
+                return (
+                  <div key={rl.resource_type} className="rounded-lg border p-3">
+                    <div className="mb-1 flex items-center justify-between text-sm">
+                      <span className="font-medium">{rl.resource_type}</span>
+                      <span className="text-muted-foreground">
+                        {rl.used} / {rl.limit} used · {rl.remaining} remaining
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          pct > 80 ? "bg-destructive" : pct > 50 ? "bg-warning" : "bg-primary"
+                        }`}
+                        style={{ width: `${Math.min(100, pct)}%` }}
+                      />
+                    </div>
+                    <div className="mt-1 text-[10px] text-muted-foreground">
+                      Window: {rl.window_start} — {rl.window_end}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {/* Generations Table */}
+      <AIGenerationsTable />
+    </div>
+  );
+}
+
+function AIGenerationsTable() {
+  const { data: gens, isLoading } = useQuery({
+    queryKey: ["ai-generations"],
+    queryFn: () => auditService.usage(),
+  });
+
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">AI Generations</CardTitle></CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-32" />
+        ) : (
+          <div className="max-h-80 overflow-y-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b text-xs text-muted-foreground">
+                  <th className="pb-2 pr-2 font-medium">Time</th>
+                  <th className="pb-2 pr-2 font-medium">Provider</th>
+                  <th className="pb-2 pr-2 font-medium">Model</th>
+                  <th className="pb-2 pr-2 font-medium">Task</th>
+                  <th className="pb-2 pr-2 font-medium">Tokens</th>
+                  <th className="pb-2 pr-2 font-medium">Cost</th>
+                  <th className="pb-2 pr-2 font-medium">Latency</th>
+                  <th className="pb-2 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {([...(gens?.today?.by_task_type ?? [])]).length === 0 ? (
+                  <tr><td colSpan={8} className="pt-4 text-center text-muted-foreground">No AI generations yet today.</td></tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 
 function PromptEditForm({ prompt, onSave, onCancel }: { prompt: PromptVersion; onSave: (p: PromptVersion) => void; onCancel: () => void }) {
   const [form, setForm] = useState(prompt);

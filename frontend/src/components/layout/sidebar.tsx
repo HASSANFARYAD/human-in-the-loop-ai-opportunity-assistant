@@ -9,6 +9,7 @@ import {
   BarChart3,
   Bot,
   Brain,
+  BrainCircuit,
   Briefcase,
   ChevronDown,
   ClipboardList,
@@ -41,6 +42,7 @@ const groups = [
     items: [
       { href: "/settings?tab=profile", label: "Resume Profile", icon: UserRound },
       { href: "/settings?tab=persona", label: "Agent Persona", icon: Bot },
+      { href: "/settings?tab=memories", label: "Agent Memory", icon: BrainCircuit },
       { href: "/integrations?service=ai_provider", label: "AI Provider", icon: Bot },
       { href: "/integrations?service=gmail", label: "Gmail Import", icon: Mail },
       { href: "/settings?tab=prompts", label: "Prompt Admin", icon: Brain },

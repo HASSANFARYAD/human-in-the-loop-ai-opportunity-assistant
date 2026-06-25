@@ -17,7 +17,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from job_assistant.ai_orchestrator import ai_orchestrator
-from job_assistant.db import get_active_prompt, get_agent_persona
+from job_assistant.db import get_active_prompt, get_agent_persona, get_memories_context, create_memory, list_memories
 from job_assistant.services.public_discovery import discover_public_opportunities
 from job_assistant.services.scoring import score_job
 
@@ -151,11 +151,15 @@ def _build_chat_system(profile: Optional[Dict[str, Any]], opportunities: Optiona
         if parts:
             persona_notes = "User preferences:\n" + "\n".join(parts) + "\n\n"
 
+    memory_context = get_memories_context(user_id) if user_id else ""
+    memory_section = f"\n\n{memory_context}" if memory_context else ""
+
     return (
         f"{template}\n\n"
         f"{persona_notes}"
         f"User profile:\n{_profile_context(profile or {})}\n\n"
         f"Saved opportunities:\n{_opportunities_context(opportunities)}"
+        f"{memory_section}"
     )
 
 
@@ -352,3 +356,60 @@ def run_job_search(
 
     results.sort(key=lambda r: r["match_score"], reverse=True)
     return results[: max(1, limit)]
+
+
+def extract_memories_from_conversation(
+    user_message: str,
+    reply: str,
+    history: Optional[List[Dict[str, str]]] = None,
+    user_id: Optional[int] = None,
+) -> None:
+    """Extract user-specific facts from the conversation and persist them as memories.
+
+    Fire-and-forget: runs after each assistant reply to learn things like
+    the user's role, location, preferences, etc. that should persist across
+    conversations.
+    """
+    if not user_id:
+        return
+    transcript = ""
+    for turn in (history or [])[-4:]:
+        role = "User" if turn.get("role") == "user" else "Assistant"
+        content = str(turn.get("content", ""))[:300]
+        if content:
+            transcript += f"{role}: {content}\n"
+
+    system = (
+        "Extract key facts about the user from this career-assistant conversation. "
+        "Return ONLY a JSON object with a 'facts' key containing an array of objects, "
+        'each with "key" (short label, lowercase, 1-3 words) and "value" (the fact itself). '
+        "Only extract facts that are likely to be long-term useful (role, skills, location, "
+        "preferences, experience, background). Skip ephemeral or trivial statements. "
+        "Maximum 3 facts per extraction. Example: "
+        '[{"key": "current role", "value": "senior software engineer focused on AI/ML"}, '
+        '{"key": "location", "value": "San Francisco"}]'
+    )
+    user = (
+        f"Conversation so far:\n{transcript}\n"
+        f"User: {user_message}\n"
+        f"Assistant: {reply[:600]}\n\n"
+        "Extracted facts:"
+    )
+
+    try:
+        data = ai_orchestrator.ask_json(system, user, {"facts": []}, user_id=user_id, task_type="agent_memory_extraction")
+        facts = data.get("facts") or []
+        existing_keys = {m.get("key", "").lower() for m in list_memories(user_id)}
+        for fact in facts[:3]:
+            key = str(fact.get("key", "")).strip().lower()
+            value = str(fact.get("value", "")).strip()
+            if key and value and len(key) <= 50 and len(value) <= 500:
+                if key in existing_keys:
+                    continue
+                try:
+                    create_memory(user_id, key, value, source="extracted")
+                    existing_keys.add(key)
+                except Exception:
+                    logger.warning("Failed to save extracted memory key=%s", key)
+    except Exception:
+        logger.debug("Memory extraction skipped (best-effort)", exc_info=True)

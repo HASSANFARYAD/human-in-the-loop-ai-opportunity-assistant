@@ -1,5 +1,5 @@
 import { API_ORIGIN, apiClient, ensureAccessToken } from "@/services/client";
-import type { AgentChatResponse, AgentPersona, AgentSection, Conversation, ConversationDetail, PromptVersion } from "@/types/api";
+import type { AgentChatResponse, AgentMemory, AgentPersona, AgentSection, Conversation, ConversationDetail, PromptVersion } from "@/types/api";
 
 export interface AgentChatTurn {
   role: "user" | "assistant";
@@ -120,4 +120,16 @@ export const agentService = {
 
   deletePrompt: async (name: string, version: string) =>
     (await apiClient.delete(`/admin/prompts?name=${encodeURIComponent(name)}&version=${encodeURIComponent(version)}`)).data,
+
+  listMemories: async () =>
+    (await apiClient.get<AgentMemory[]>("/agent/memories")).data,
+
+  createMemory: async (key: string, value: string) =>
+    (await apiClient.post<{ id: number; status: string }>("/agent/memories", { key, value })).data,
+
+  updateMemory: async (id: number, key: string, value: string) =>
+    (await apiClient.put(`/agent/memories/${id}`, { key, value })).data,
+
+  deleteMemory: async (id: number) =>
+    (await apiClient.delete(`/agent/memories/${id}`)).data,
 };

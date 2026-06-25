@@ -121,6 +121,8 @@ def _ensure_indexes() -> None:
     coll.conversation_messages.create_index([("conversation_id", pymongo.ASCENDING), ("created_at", pymongo.ASCENDING)])
     coll.agent_feedback.create_index([("user_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
     coll.agent_personas.create_index("user_id", unique=True)
+    coll.agent_memory.create_index([("user_id", pymongo.ASCENDING), ("key", pymongo.ASCENDING)], unique=True)
+    coll.agent_memory.create_index([("user_id", pymongo.ASCENDING), ("updated_at", pymongo.DESCENDING)])
 
 
 def _ensure_default_user() -> dict[str, Any]:
@@ -1539,6 +1541,119 @@ def list_ai_generations(user_id: int, limit: int = 100, workspace_id: int | None
     return [_strip_id(d) for d in docs]
 
 
+def ai_usage_detailed(user_id: int) -> dict[str, Any]:
+    """Aggregated usage breakdown: today, this week, this month, and daily history."""
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
+    thirty_days_ago = (now - timedelta(days=30)).isoformat(timespec="seconds")
+
+    def _agg(start: str) -> list[dict[str, Any]]:
+        pipeline = [
+            {"$match": {"user_id": user_id, "created_at": {"$gte": start}}},
+            {"$group": {
+                "_id": "$task_type",
+                "calls": {"$sum": 1},
+                "input_tokens": {"$sum": "$input_tokens"},
+                "output_tokens": {"$sum": "$output_tokens"},
+                "estimated_cost": {"$sum": "$estimated_cost"},
+                "latency_ms": {"$avg": "$latency_ms"},
+            }},
+            {"$sort": {"calls": pymongo.DESCENDING}},
+        ]
+        results = []
+        for doc in get_collection("ai_generations").aggregate(pipeline):
+            results.append({
+                "task_type": doc["_id"] or "unknown",
+                "calls": doc["calls"],
+                "input_tokens": doc["input_tokens"],
+                "output_tokens": doc["output_tokens"],
+                "estimated_cost": round(doc["estimated_cost"], 6),
+                "avg_latency_ms": int(doc["latency_ms"] or 0),
+            })
+        return results
+
+    def _daily() -> list[dict[str, Any]]:
+        pipeline = [
+            {"$match": {"user_id": user_id, "created_at": {"$gte": thirty_days_ago}}},
+            {"$project": {"day": {"$substr": ["$created_at", 0, 10]}, "input_tokens": 1, "output_tokens": 1, "estimated_cost": 1, "status": 1}},
+            {"$group": {
+                "_id": "$day",
+                "calls": {"$sum": 1},
+                "input_tokens": {"$sum": "$input_tokens"},
+                "output_tokens": {"$sum": "$output_tokens"},
+                "estimated_cost": {"$sum": "$estimated_cost"},
+                "failed": {"$sum": {"$cond": [{"$eq": ["$status", "failed"]}, 1, 0]}},
+            }},
+            {"$sort": {"_id": pymongo.DESCENDING}},
+        ]
+        results = []
+        for doc in get_collection("ai_generations").aggregate(pipeline):
+            results.append({
+                "date": doc["_id"],
+                "calls": doc["calls"],
+                "input_tokens": doc["input_tokens"],
+                "output_tokens": doc["output_tokens"],
+                "estimated_cost": round(doc["estimated_cost"], 6),
+                "failed": doc["failed"],
+            })
+        return results
+
+    today_agg = _agg(today_start)
+    total_today = {"calls": sum(r["calls"] for r in today_agg), "input_tokens": sum(r["input_tokens"] for r in today_agg), "output_tokens": sum(r["output_tokens"] for r in today_agg), "estimated_cost": round(sum(r["estimated_cost"] for r in today_agg), 6)}
+    week_agg = _agg(week_start)
+    total_week = {"calls": sum(r["calls"] for r in week_agg), "input_tokens": sum(r["input_tokens"] for r in week_agg), "output_tokens": sum(r["output_tokens"] for r in week_agg), "estimated_cost": round(sum(r["estimated_cost"] for r in week_agg), 6)}
+    month_agg = _agg(month_start)
+    total_month = {"calls": sum(r["calls"] for r in month_agg), "input_tokens": sum(r["input_tokens"] for r in month_agg), "output_tokens": sum(r["output_tokens"] for r in month_agg), "estimated_cost": round(sum(r["estimated_cost"] for r in month_agg), 6)}
+
+    return {
+        "today": {"total": total_today, "by_task_type": today_agg},
+        "this_week": {"total": total_week, "by_task_type": week_agg},
+        "this_month": {"total": total_month, "by_task_type": month_agg},
+        "daily_history": _daily(),
+    }
+
+
+def get_rate_limit_status() -> list[dict[str, Any]]:
+    """Return current usage vs limits for all rate-limited resource types."""
+    now = utc_now()
+    from datetime import datetime, timezone, timedelta
+    from job_assistant.config import settings
+    limits = [
+        ("ai_generation", settings.rate_limit_ai_per_hour, 60),
+        ("sse_chat", settings.rate_limit_sse_per_minute, 1),
+        ("feedback", settings.rate_limit_feedback_per_hour, 60),
+        ("publishing", settings.rate_limit_publish_per_hour, 60),
+        ("api_request", settings.rate_limit_per_minute, 1),
+    ]
+    results = []
+    for resource_type, limit, window_minutes in limits:
+        if limit <= 0:
+            continue
+        if window_minutes >= 60:
+            hours = window_minutes // 60
+            start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+            window_start = start.isoformat(timespec="seconds")
+            window_end = (start + timedelta(hours=hours)).isoformat(timespec="seconds")
+        else:
+            start = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+            window_start = start.isoformat(timespec="seconds")
+            window_end = (start + timedelta(minutes=window_minutes)).isoformat(timespec="seconds")
+        docs = get_collection("usage_counters").find({"resource_type": resource_type, "window_start": window_start})
+        count = sum(int(d.get("count", 0)) for d in docs)
+        results.append({
+            "resource_type": resource_type,
+            "limit": limit,
+            "used": count,
+            "remaining": max(0, limit - count),
+            "window_start": window_start,
+            "window_end": window_end,
+        })
+    return results
+
+
 def upsert_prompt_version(name: str, version: str, template: str, description: str = "", is_active: bool = True) -> None:
     now = utc_now()
     get_collection("prompt_versions").update_one(
@@ -1601,6 +1716,72 @@ def get_agent_persona(user_id: int) -> dict[str, Any]:
     if doc:
         return {k: v for k, v in doc.items() if k in ("tone", "detail_level", "focus_area")}
     return {}
+
+
+# ---------------------------------------------------------------------------
+# Agent memory – persistent key-value facts remembered across conversations
+# ---------------------------------------------------------------------------
+MAX_MEMORIES_PER_USER = 50
+
+
+def create_memory(user_id: int, key: str, value: str, source: str = "manual") -> int:
+    key = (key or "").strip().lower()
+    value = (value or "").strip()
+    if not key or not value:
+        raise ValueError("Key and value are required")
+    if source not in ("manual", "extracted"):
+        source = "manual"
+    now = utc_now()
+    col = get_collection("agent_memory")
+    existing = col.find_one({"user_id": user_id, "key": key})
+    if existing:
+        col.update_one({"user_id": user_id, "key": key}, {"$set": {"value": value, "source": source, "updated_at": now}})
+        return int(existing["memory_id"])
+    count = col.count_documents({"user_id": user_id})
+    if count >= MAX_MEMORIES_PER_USER:
+        oldest = col.find_one({"user_id": user_id}, sort=[("updated_at", pymongo.ASCENDING)])
+        if oldest:
+            col.delete_one({"_id": oldest["_id"]})
+    mid = _next_id("agent_memory_id")
+    col.insert_one({"memory_id": mid, "user_id": user_id, "key": key, "value": value, "source": source, "created_at": now, "updated_at": now})
+    return mid
+
+
+def list_memories(user_id: int) -> list[dict[str, Any]]:
+    docs = get_collection("agent_memory").find({"user_id": user_id}).sort("updated_at", pymongo.DESCENDING)
+    return [_strip_id(d) for d in docs]
+
+
+def update_memory(memory_id: int, user_id: int, key: str, value: str) -> bool:
+    key = (key or "").strip().lower()
+    value = (value or "").strip()
+    if not key or not value:
+        raise ValueError("Key and value are required")
+    now = utc_now()
+    result = get_collection("agent_memory").update_one(
+        {"memory_id": memory_id, "user_id": user_id},
+        {"$set": {"key": key, "value": value, "updated_at": now}},
+    )
+    return result.modified_count > 0
+
+
+def delete_memory(memory_id: int, user_id: int) -> bool:
+    result = get_collection("agent_memory").delete_one({"memory_id": memory_id, "user_id": user_id})
+    return result.deleted_count > 0
+
+
+def get_memories_context(user_id: int) -> str:
+    """Return a compact string of memory facts for injection into system prompts."""
+    docs = get_collection("agent_memory").find({"user_id": user_id}).sort("updated_at", pymongo.DESCENDING).limit(30)
+    lines = []
+    for doc in docs:
+        key = doc.get("key", "")
+        value = str(doc.get("value", ""))[:300]
+        if key and value:
+            lines.append(f"  - {key}: {value}")
+    if not lines:
+        return ""
+    return "Things I know about this user:\n" + "\n".join(lines)
 
 
 def create_automation_rule(user_id: int, payload: Dict[str, Any], workspace_id: int | None = None) -> int:
