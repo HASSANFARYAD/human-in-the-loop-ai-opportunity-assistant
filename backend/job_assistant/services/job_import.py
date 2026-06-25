@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from job_assistant.db import _content_hash, insert_job, job_exists
+from job_assistant.db import _content_hash, _fuzzy_match_title_company, insert_job, job_exists
 from job_assistant.services.opportunity_classifier import (
     JOB_LIKE_CATEGORIES,
     VALID_OPPORTUNITY_CATEGORIES,
@@ -45,6 +45,7 @@ def import_opportunities(
     seen_urls: set[str] = set()
     seen_content_hashes: set[str] = set()
     seen_title_companies: set[str] = set()
+    seen_fuzzy: list[tuple[str, str]] = []
     expanded: list[dict[str, Any]] = []
     for item in opportunities:
         annotated = annotate_opportunity(item)
@@ -89,6 +90,9 @@ def import_opportunities(
         if tc_key and tc_key in seen_title_companies:
             result.skipped_duplicates += 1
             continue
+        if title and company and _fuzzy_match_title_company(title, company, seen_fuzzy):
+            result.skipped_duplicates += 1
+            continue
         if job_exists(item, user_id=user_id, workspace_id=workspace_id):
             result.skipped_duplicates += 1
             continue
@@ -96,6 +100,8 @@ def import_opportunities(
         seen_content_hashes.add(ch)
         if tc_key:
             seen_title_companies.add(tc_key)
+        if title and company:
+            seen_fuzzy.append((title, company))
         try:
             result.ids.append(insert_job(item, user_id, workspace_id=workspace_id))
             result.imported += 1

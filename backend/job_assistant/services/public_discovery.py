@@ -3,7 +3,7 @@ Auto-discovery source adapters.
 
 Each ``fetch_*`` function polls a public, no-login job board API
 (RemoteJobs.org, Arbeitnow, Remotive, Jobicy, Hacker News "Who is
-hiring?") and returns normalised opportunity dicts.
+hiring?", RemoteOK, The Muse) and returns normalised opportunity dicts.
 ``discover_public_opportunities`` aggregates selected sources and
 deduplicates the combined pool.
 
@@ -72,9 +72,11 @@ def _content_hash(job: Dict[str, Any]) -> str:
 
 
 def _dedupe(opportunities: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    from job_assistant.db import _fuzzy_match_title_company
     seen_urls: set[str] = set()
     seen_hashes: set[str] = set()
     seen_tc: set[str] = set()
+    seen_fuzzy: list[tuple[str, str]] = []
     unique: list[dict[str, Any]] = []
     for opportunity in opportunities:
         url = opportunity.get("url") or ""
@@ -88,10 +90,14 @@ def _dedupe(opportunities: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
             continue
         if tc_key and tc_key in seen_tc:
             continue
+        if title and company and _fuzzy_match_title_company(title, company, seen_fuzzy):
+            continue
         seen_urls.add(url) if url else None
         seen_hashes.add(ch)
         if tc_key:
             seen_tc.add(tc_key)
+        if title and company:
+            seen_fuzzy.append((title, company))
         unique.append(opportunity)
     return unique
 
@@ -222,6 +228,78 @@ def fetch_jobicy(query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
     return opportunities
 
 
+def fetch_remoteok(query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
+    params: dict[str, Any] = {}
+    if query.strip():
+        params["search"] = query.strip()
+    url = f"https://remoteok.com/api?{urlencode(params)}" if params else "https://remoteok.com/api"
+    response = requests.get(url, timeout=DEFAULT_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    data = response.json()
+
+    opportunities: list[dict[str, Any]] = []
+    for row in data:
+        if not isinstance(row, dict) or not row.get("id") or not row.get("position"):
+            continue
+        slug = row.get("slug", "")
+        opportunities.append(
+            {
+                "title": row.get("position") or "Untitled remote job",
+                "company": row.get("company", ""),
+                "location": row.get("location", "Remote"),
+                "remote_type": "Remote",
+                "url": f"https://remoteok.com/remote-jobs/{slug}" if slug else "",
+                "source": "RemoteOK",
+                "date_received": _text(row.get("date"))[:10],
+                "description": _clean_html(row.get("description", "")),
+                "salary_min": None,
+                "salary_max": None,
+                "deadline": "",
+                "opportunity_type": "job",
+                "raw_text": ", ".join(row.get("tags", [])),
+            }
+        )
+        if len(opportunities) >= limit:
+            break
+    return opportunities
+
+
+def fetch_muse(query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
+    params: dict[str, Any] = {"page": 1, "descending": "true"}
+    if query.strip():
+        params["query"] = query.strip()
+    url = f"https://www.themuse.com/api/public/jobs?{urlencode(params)}"
+    response = requests.get(url, timeout=DEFAULT_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    data = response.json()
+
+    opportunities: list[dict[str, Any]] = []
+    for row in data.get("results", []):
+        company = row.get("company") or {}
+        locations = row.get("locations") or []
+        location = locations[0].get("name", "") if locations else ""
+        opportunities.append(
+            {
+                "title": row.get("name") or "Untitled job",
+                "company": company.get("name", "") if isinstance(company, dict) else str(company),
+                "location": location,
+                "remote_type": "",
+                "url": (row.get("refs") or {}).get("landing_page", ""),
+                "source": "The Muse",
+                "date_received": _text(row.get("publication_date"))[:10],
+                "description": _clean_html(row.get("contents", "")),
+                "salary_min": None,
+                "salary_max": None,
+                "deadline": "",
+                "opportunity_type": "job",
+                "raw_text": _text(row),
+            }
+        )
+        if len(opportunities) >= limit:
+            break
+    return opportunities
+
+
 def fetch_hackernews_who_is_hiring(query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
     thread_params = {
         "query": "Ask HN: Who is hiring?",
@@ -280,7 +358,7 @@ def discover_public_opportunities(
     sources: Iterable[str] | None = None,
     limit_per_source: int = 20,
 ) -> List[Dict[str, Any]]:
-    selected = set(sources or ["RemoteJobs.org", "Arbeitnow", "Remotive", "Jobicy", "Hacker News Who is hiring"])
+    selected = set(sources or ["RemoteJobs.org", "Arbeitnow", "Remotive", "Jobicy", "Hacker News Who is hiring", "RemoteOK", "The Muse"])
     found: list[dict[str, Any]] = []
     if "RemoteJobs.org" in selected:
         found.extend(fetch_remotejobs(query=query, limit=limit_per_source))
@@ -292,4 +370,8 @@ def discover_public_opportunities(
         found.extend(fetch_jobicy(query=query, limit=limit_per_source))
     if "Hacker News Who is hiring" in selected:
         found.extend(fetch_hackernews_who_is_hiring(query=query, limit=limit_per_source))
+    if "RemoteOK" in selected:
+        found.extend(fetch_remoteok(query=query, limit=limit_per_source))
+    if "The Muse" in selected:
+        found.extend(fetch_muse(query=query, limit=limit_per_source))
     return _dedupe(found)

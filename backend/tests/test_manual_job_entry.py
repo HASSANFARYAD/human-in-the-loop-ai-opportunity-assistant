@@ -1,5 +1,40 @@
 from __future__ import annotations
 
+from job_assistant.db import _fuzzy_match_title_company, _normalize_for_fuzzy, FUZZY_DUP_THRESHOLD
+
+
+class TestFuzzyMatching:
+    def test_normalize_strips_punctuation_and_case(self):
+        assert _normalize_for_fuzzy("Senior Frontend Engineer!") == "senior frontend engineer"
+        assert _normalize_for_fuzzy("  Sr. DevOps  ") == "senior devops"
+
+    def test_fuzzy_match_catches_sr_vs_senior(self):
+        assert _fuzzy_match_title_company("Sr Frontend Engineer", "Acme Corp", [("Senior Frontend Engineer", "Acme Corp")])
+        assert _fuzzy_match_title_company("Sr Frontend Engineer", "Acme Corp", [("senior frontend engineer", "acme corp")])
+
+    def test_fuzzy_match_rejects_different_roles(self):
+        assert not _fuzzy_match_title_company("Frontend Engineer", "Acme Corp", [("Backend Engineer", "Acme Corp")])
+
+    def test_fuzzy_match_rejects_different_companies(self):
+        assert not _fuzzy_match_title_company("Software Engineer", "Google", [("Software Engineer", "Facebook")])
+
+    def test_fuzzy_match_empty_title_or_company(self):
+        assert not _fuzzy_match_title_company("", "Acme", [("Engineer", "Acme")])
+        assert not _fuzzy_match_title_company("Engineer", "", [("Engineer", "Acme")])
+        assert not _fuzzy_match_title_company("Engineer", "Acme", [("", "Acme")])
+
+    def test_fuzzy_match_empty_existing_list(self):
+        assert not _fuzzy_match_title_company("Engineer", "Acme", [])
+
+    def test_fuzzy_match_catches_abbreviation_vs_full(self):
+        assert _fuzzy_match_title_company("Sr. Software Eng", "IBM", [("Senior Software Engineer", "IBM")])
+
+    def test_fuzzy_match_preserves_distinct(self):
+        assert not _fuzzy_match_title_company("DevOps Engineer", "Co A", [("Data Scientist", "Co B")])
+
+    def test_normalize_removes_extra_whitespace(self):
+        assert _normalize_for_fuzzy("  Senior   Engineer  ") == "senior engineer"
+
 
 def _sample_entry() -> dict:
     return {
@@ -284,6 +319,86 @@ def test_near_duplicate_title_not_caught(monkeypatch):
     result2 = job_import.import_opportunities([job_b], user_id=1)
     assert result2.imported == 1
     assert result2.skipped_duplicates == 0
+
+
+def test_fuzzy_dedup_catches_near_duplicate_in_same_batch(monkeypatch):
+    """Near-duplicate titles in the same import batch are caught by fuzzy matching."""
+    from job_assistant.services import job_import
+
+    inserted: list[dict] = []
+
+    def fake_insert_job(job, user_id, workspace_id=None):
+        inserted.append(dict(job))
+        return len(inserted)
+
+    def fake_job_exists(job, user_id=1, workspace_id=None):
+        return False
+
+    monkeypatch.setattr(job_import, "insert_job", fake_insert_job)
+    monkeypatch.setattr(job_import, "job_exists", fake_job_exists)
+
+    from job_assistant.services.opportunity_classifier import annotate_opportunity
+
+    job_a = annotate_opportunity({
+        "title": "Sr Frontend Engineer",
+        "company": "Acme Corp",
+        "description": "We are hiring a Senior Frontend Engineer with React experience. Requirements: 3+ years React. Apply now.",
+        "raw_text": "We are hiring a Senior Frontend Engineer with React experience. Requirements: 3+ years React. Apply now.",
+        "url": "https://example.com/job-a",
+        "opportunity_type": "job",
+    })
+    job_b = annotate_opportunity({
+        "title": "Senior Frontend Engineer",
+        "company": "Acme Corp",
+        "description": "Senior Frontend role with strong React and TypeScript skills. Requirements: 5+ years React. Apply now.",
+        "raw_text": "Senior Frontend role with strong React and TypeScript skills. Requirements: 5+ years React. Apply now.",
+        "url": "https://example.com/job-b",
+        "opportunity_type": "job",
+    })
+
+    result = job_import.import_opportunities([job_a, job_b], user_id=1)
+    assert result.imported == 1
+    assert result.skipped_duplicates == 1
+
+
+def test_fuzzy_dedup_preserves_distinct_in_same_batch(monkeypatch):
+    """Distinct titles in the same batch are not caught by fuzzy matching."""
+    from job_assistant.services import job_import
+
+    inserted: list[dict] = []
+
+    def fake_insert_job(job, user_id, workspace_id=None):
+        inserted.append(dict(job))
+        return len(inserted)
+
+    def fake_job_exists(job, user_id=1, workspace_id=None):
+        return False
+
+    monkeypatch.setattr(job_import, "insert_job", fake_insert_job)
+    monkeypatch.setattr(job_import, "job_exists", fake_job_exists)
+
+    from job_assistant.services.opportunity_classifier import annotate_opportunity
+
+    job_a = annotate_opportunity({
+        "title": "Frontend Engineer",
+        "company": "Acme Corp",
+        "description": "We are hiring a Frontend Engineer. Requirements: React, TypeScript. Apply now.",
+        "raw_text": "We are hiring a Frontend Engineer. Requirements: React, TypeScript. Apply now.",
+        "url": "https://example.com/job-a",
+        "opportunity_type": "job",
+    })
+    job_b = annotate_opportunity({
+        "title": "Backend Engineer",
+        "company": "Acme Corp",
+        "description": "We are hiring a Backend Engineer. Requirements: Python, SQL. Apply now.",
+        "raw_text": "We are hiring a Backend Engineer. Requirements: Python, SQL. Apply now.",
+        "url": "https://example.com/job-b",
+        "opportunity_type": "job",
+    })
+
+    result = job_import.import_opportunities([job_a, job_b], user_id=1)
+    assert result.imported == 2
+    assert result.skipped_duplicates == 0
 
 
 def test_content_hash_differs_for_distinct_jobs():
