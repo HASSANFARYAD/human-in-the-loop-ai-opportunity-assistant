@@ -1,3 +1,26 @@
+"""
+Auto-discovery source adapters.
+
+Each ``fetch_*`` function polls a public, no-login job board API
+(RemoteJobs.org, Arbeitnow, Remotive, Jobicy, Hacker News "Who is
+hiring?") and returns normalised opportunity dicts.
+``discover_public_opportunities`` aggregates selected sources and
+deduplicates the combined pool.
+
+These are *auto-discovered* sources — they run on a schedule or on
+demand via the discovery endpoint.  They are distinct from:
+
+* **Manual import** (``job_import.py``) — CSV uploads, URL paste-in,
+  and the structured form entry (title + company + description, no
+  URL required).
+* **Scraper sources** (``job_source_scrapers.py``) — per-user scrapers
+  that need an explicit URL to start from (e.g. an Indeed search page).
+
+All three paths converge on ``import_opportunities()`` in
+``job_import.py``, which runs the same dedup pipeline and inserts into
+the database.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List

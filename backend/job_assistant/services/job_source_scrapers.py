@@ -1,3 +1,16 @@
+"""
+Job-source scrapers — per-user, URL-driven discovery.
+
+Each scraper subclass of ``JobSourceScraper`` requires an explicit URL
+or source hint to begin (e.g. an Indeed search-result page).  They are
+configured per-user and run on demand.  This is unlike
+``public_discovery.py``, which polls public job-board APIs without user
+configuration.
+
+All scrapers converge with auto-discovered and manually-entered jobs
+in ``import_opportunities()``, which runs the same dedup pipeline.
+"""
+
 from __future__ import annotations
 
 import json

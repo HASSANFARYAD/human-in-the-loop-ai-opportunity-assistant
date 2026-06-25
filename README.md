@@ -124,6 +124,16 @@ SQLite remains the default. On Render, SQLite requires a persistent disk and is 
 - **Rate-limit status** — per-resource-type sliding-window counters with color-coded thresholds.
 - **Daily AI budget cap** — configurable limit; soft-blocked once exhausted.
 
+### Deduplication
+
+Every job entry point (auto-discovery, manual import, scraper sources) runs a three-key dedup pipeline before inserting:
+
+1. **URL** — exact match on `job_url` catches the same listing revisited.
+2. **Content hash** — SHA-256 of `lowercase(strip(title|company|description))` catches the same job posted on different boards with different URLs.
+3. **Title + company** — exact match on the normalized pair catches re-posted jobs with new URLs and dates.
+
+A match on any key rejects insertion. Within a single batch, the same in-memory checks prevent importing the same item twice. *Near-duplicate fuzzy matching (e.g. "Sr. Engineer" vs "Senior Engineer") is a known gap.*
+
 ### Human-in-the-Loop Design
 - Scores are prioritization hints, not decisions — the user always reviews before acting.
 - Manual import and status controls complement automated discovery.
