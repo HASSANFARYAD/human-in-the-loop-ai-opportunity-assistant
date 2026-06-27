@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { DataFields } from "@/components/ui/data-display";
 import { agentService, type AgentChatTurn } from "@/services/agent.service";
 import { useAuthStore } from "@/stores/auth-store";
-import type { AgentJobListing, AgentSection, Conversation } from "@/types/api";
+import type { AgentJobListing, AgentSection } from "@/types/api";
 import { cn } from "@/lib/utils";
 
 type ChatMessage =
