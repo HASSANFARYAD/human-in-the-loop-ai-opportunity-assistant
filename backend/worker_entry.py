@@ -42,9 +42,13 @@ signal.signal(signal.SIGINT, _handle_signal)
 
 
 JOB_HANDLERS: dict[str, Callable[[dict[str, Any]], None]] = {
-    # Examples:
+    # Register job type handlers here. Jobs are enqueued via enqueue_job().
+    # Example:
     # "email_digest": handle_email_digest,
     # "scrape_opportunity": handle_scrape_opportunity,
+    #
+    # The API endpoint POST /api/v1/worker/enqueue accepts arbitrary job_type
+    # strings from authenticated users. Unrecognized types are marked as failed.
 }
 
 

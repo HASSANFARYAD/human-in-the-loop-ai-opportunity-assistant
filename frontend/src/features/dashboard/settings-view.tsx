@@ -19,13 +19,12 @@ import { auditService } from "@/services/audit.service";
 import { feedbackService } from "@/services/feedback.service";
 import { opportunityService } from "@/services/opportunity.service";
 import { providerService } from "@/services/provider.service";
-import type { AdminConfig, AgentPersona, DetailedUsage, Profile, PromptVersion, RateLimitEntry } from "@/types/api";
+import type { AdminConfig, AgentPersona, Profile, PromptVersion, RateLimitEntry } from "@/types/api";
 
 export function SettingsView() {
   const tab = useSearchParams().get("tab") ?? "settings";
   const audit = useQuery({ queryKey: ["audit"], queryFn: () => auditService.logs() });
   const health = useQuery({ queryKey: ["health"], queryFn: auditService.health });
-  const usage = useQuery({ queryKey: ["usage"], queryFn: auditService.usage });
   const feedback = useQuery({ queryKey: ["feedback"], queryFn: () => feedbackService.list() });
   const adminConfigs = useQuery({ queryKey: ["admin-configs"], queryFn: providerService.adminConfigs });
   return (

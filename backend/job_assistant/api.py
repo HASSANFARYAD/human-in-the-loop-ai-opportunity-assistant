@@ -11,7 +11,7 @@ from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Cookie, Depends, File, Form, HTTPException, Request, UploadFile, Response, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from starlette.responses import FileResponse, RedirectResponse
 
 from job_assistant.auth import (
@@ -287,7 +287,8 @@ class DiscoveryExtractIn(BaseModel):
     opportunity_type: str = "auto"
     work_location_filter: str = "all"
 
-    @validator("work_location_filter", pre=True, always=True)
+    @field_validator("work_location_filter", mode="before")
+    @classmethod
     def validate_work_location_filter(cls, value: Any) -> str:
         return _normalize_work_location_filter(value)
 
@@ -322,7 +323,8 @@ class DiscoveryImportUrlIn(BaseModel):
     page_limit: int = 2
     work_location_filter: str = "all"
 
-    @validator("work_location_filter", pre=True, always=True)
+    @field_validator("work_location_filter", mode="before")
+    @classmethod
     def validate_work_location_filter(cls, value: Any) -> str:
         return _normalize_work_location_filter(value)
 
