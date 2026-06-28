@@ -360,7 +360,7 @@
   <section class="wrap section">
     <p class="eyebrow"><span class="num">§06</span> How it's built</p>
     <h2>System architecture</h2>
-    <p class="muted" style="max-width:62ch;">A typed Next.js client talks to a FastAPI backend over JSON (with SSE for the streaming agent). Routers delegate to a services layer; everything is workspace-scoped and persisted to SQLite + MongoDB.</p>
+    <p class="muted" style="max-width:62ch;">A typed Next.js client talks to a FastAPI backend over JSON (with SSE for the streaming agent). Routers delegate to a services layer; everything is workspace-scoped and persisted to MongoDB.</p>
     <div class="arch" style="margin-top:24px;">
       <div class="arch-inner">
         <div class="layer"><div class="lh">Frontend — Next.js 15 · React 19 · TypeScript</div><div class="blocks">
@@ -371,7 +371,7 @@
         <div class="layer"><div class="lh">Services &amp; engines</div><div class="blocks">
           <span class="blk hot">AI orchestrator</span><span class="blk">scoring</span><span class="blk">generation</span><span class="blk">parsing (PDF/DOCX)</span><span class="blk">classifier</span><span class="blk">scrapers · Gmail ingest</span><span class="blk">scheduler · worker queue</span><span class="blk">followups</span></div></div>
         <div class="layer"><div class="lh">Data &amp; platform</div><div class="blocks">
-          <span class="blk">SQLite (business data)</span><span class="blk">MongoDB (agent + logs)</span><span class="blk">encrypted secrets</span><span class="blk">observability + alerts</span><span class="blk">backups</span><span class="blk">rate limits</span></div></div>
+          <span class="blk">MongoDB (all data)</span><span class="blk">encrypted secrets</span><span class="blk">observability + alerts</span><span class="blk">backups</span><span class="blk">rate limits</span></div></div>
         <div class="layer"><div class="lh">External</div><div class="blocks">
           <span class="blk hot">OpenAI</span><span class="blk hot">Azure OpenAI</span><span class="blk hot">Claude</span><span class="blk hot">Gemini</span><span class="blk">Hugging Face · Ollama</span><span class="blk warm">local fallback</span></div></div>
       </div>
@@ -394,7 +394,7 @@
   <!-- DATA MODEL -->
   <section class="wrap section">
     <p class="eyebrow"><span class="num">§08</span> Data model</p>
-    <h2 style="font-size:18px; margin-bottom:8px;">SQLite — business data</h2>
+    <h2 style="font-size:18px; margin-bottom:8px;">MongoDB — all data</h2>
     <div class="dm">
       <div class="grp"><div class="gh">Identity &amp; tenancy</div><div class="pills">
         <span class="pill">users</span><span class="pill">user_sessions</span><span class="pill">organizations</span><span class="pill">workspaces</span><span class="pill">workspace_members</span><span class="pill">roles</span><span class="pill">permissions</span><span class="pill">role_permissions</span><span class="pill">shared_resources</span></div></div>
@@ -402,17 +402,14 @@
         <span class="pill">profile*</span><span class="pill">jobs</span><span class="pill">evaluations</span><span class="pill">application_materials</span><span class="pill">applications</span><span class="pill">reminders</span><span class="pill">resume_reviews</span><span class="pill">interview_prep_sessions</span><span class="pill">recordings</span></div></div>
       <div class="grp"><div class="gh">Integrations &amp; AI</div><div class="pills">
         <span class="pill">integration_settings</span><span class="pill">provider_configs</span><span class="pill">gmail_messages</span><span class="pill">prompt_versions</span></div></div>
+      <div class="grp"><div class="gh">Agent &amp; chat</div><div class="pills">
+        <span class="pill">ai_generations</span><span class="pill">agent_memory</span><span class="pill">conversations</span><span class="pill">conversation_messages</span><span class="pill">usage_counters</span></div></div>
       <div class="grp"><div class="gh">Automation &amp; publishing</div><div class="pills">
         <span class="pill">automation_rules</span><span class="pill">automation_runs</span><span class="pill">automation_errors</span><span class="pill">posts</span><span class="pill">post_targets</span></div></div>
       <div class="grp"><div class="gh">Governance &amp; ops</div><div class="pills">
         <span class="pill">audit_logs</span><span class="pill">activity_events</span><span class="pill">feedback</span><span class="pill">system_metrics</span><span class="pill">alert_events</span><span class="pill">worker_jobs</span><span class="pill">compliance_exports</span></div></div>
     </div>
-    <h2 style="font-size:18px; margin:22px 0 8px;">MongoDB — high-volume / transient</h2>
-    <div class="dm">
-      <div class="grp"><div class="gh">AI &amp; agent</div><div class="pills">
-        <span class="pill">ai_generations</span><span class="pill">agent_memory</span><span class="pill">conversations</span><span class="pill">conversation_messages</span><span class="pill">usage_counters</span></div></div>
-    </div>
-    <p class="muted" style="margin-top:14px; font-size:13px;">* <code>profile</code> supports multiple rows per user with one default; migrations are incremental and idempotent. MongoDB stores AI logs (with estimated cost), agent memory (key-value facts), chat conversations, and sliding-window rate-limit counters.</p>
+    <p class="muted" style="margin-top:14px; font-size:13px;">* <code>profile</code> supports multiple documents per user with one default; migrations are incremental and idempotent. All data — business, AI logs, chat, rate-limit counters — lives in MongoDB.</p>
   </section>
 
   <!-- HOW TO USE -->
@@ -437,7 +434,7 @@
   <section class="wrap section">
     <p class="eyebrow"><span class="num">§10</span> Technology stack</p>
     <div class="stackrow"><div class="k">Backend</div><div class="v">
-      <span class="pill">Python</span><span class="pill">FastAPI</span><span class="pill">SQLite</span><span class="pill">MongoDB (PyMongo)</span><span class="pill">APScheduler</span><span class="pill">JWT (jose)</span><span class="pill">pypdf</span><span class="pill">python-docx</span><span class="pill">Prometheus</span><span class="pill">Sentry</span></div></div>
+      <span class="pill">Python</span><span class="pill">FastAPI</span><span class="pill">MongoDB (PyMongo)</span><span class="pill">APScheduler</span><span class="pill">JWT (jose)</span><span class="pill">pypdf</span><span class="pill">python-docx</span><span class="pill">Prometheus</span><span class="pill">Sentry</span></div></div>
     <div class="stackrow"><div class="k">AI SDKs</div><div class="v">
       <span class="pill">OpenAI / Azure</span><span class="pill">Anthropic</span><span class="pill">Gemini</span><span class="pill">Hugging Face</span><span class="pill">LangChain</span></div></div>
     <div class="stackrow"><div class="k">Frontend</div><div class="v">
@@ -448,7 +445,7 @@
   <section class="wrap section">
     <p class="eyebrow"><span class="num">§11</span> Notes &amp; current limits</p>
     <div class="note">
-      <p style="margin:0 0 8px;"><b>Datastores</b>: SQLite for core business data (a Postgres migration path exists via <code>scripts/sqlite_to_postgres.py</code>); MongoDB for AI logs, agent memory, conversations, and rate-limit counters.</p>
+      <p style="margin:0 0 8px;"><b>Datastore</b>: MongoDB is the sole datastore (no SQLite in the stack).</p>
       <p style="margin:0 0 8px;"><b>LinkedIn</b> discovery currently runs through RapidAPI / Apify; the native SDK module is a placeholder.</p>
       <p style="margin:0;"><b>Azure reasoning/codex deployments</b> (gpt-5.x, *-codex, o-series) require the Responses API — auto-detected by deployment name. AI quality tracks the configured provider; with none, features fall back to local heuristics.</p>
     </div>
