@@ -1,0 +1,44 @@
+# Known Limitations
+
+## Missing Features
+
+- **Company Research-backed Interview Prep**: No dedicated company research module exists. Interview questions may include general company-specific questions but lack automated web research, company profile caching, or a dedicated company brief UI. Marked as high priority in PENDING_FEATURES.md.
+- **Freshness Filter on Discovery**: Public job sources return results without date-based filtering. No env config or UI for filtering opportunities by recency. Marked as high priority in PENDING_FEATURES.md.
+- **Publishing Engine (Live)**: The publishing engine operates in dry-run mode by default (`PUBLISHING_DRY_RUN=true`). Actual posting to external platforms (LinkedIn, Twitter) is not implemented.
+
+## Partial Implementations
+
+- **Indeed/Seek/LinkedIn Scrapers**: URL-based scrapers depend on external website structure. They may break if the target site changes its HTML. Limited error handling. Indeed often returns 403 (blocked).
+- **Apify Integration**: Supports running actors and normalizing results but has limited error handling and no retry logic.
+- **Redis Rate Limiting Backend**: Redis backend is implemented (`rate_limits.py:56-70`) but MongoDB is the default. Redis support depends on `redis-py` and a running Redis instance.
+- **Company-specific Interview Questions**: Generated via AI without a dedicated company research pipeline. Quality depends on the AI provider's training data.
+
+## Technical Debt
+
+- **`api.py` is too large**: At ~3200 lines, it mixes Pydantic model definitions, helper functions, and route handlers. Should be split into multiple router modules.
+- **`db.py` is too large**: At ~2600 lines, it contains all data access logic. Should be split by domain.
+- **No API versioning beyond v1**: All endpoints are under `/api/v1/`. No deprecation or migration strategy for breaking changes.
+- **Inconsistent test coverage**: Tests exist for specific areas (prompt injection, CSV sanitization, discovery adapters) but no integration tests, E2E tests, or frontend tests.
+
+## Performance Limitations
+
+- **Single MongoDB instance**: No connection pooling optimization, no read replicas, no sharding. Suitable for small to medium deployments.
+- **No caching layer**: Opportunities and profiles are fetched from MongoDB on every request. No Redis/memcached for frequently accessed data.
+- **Synchronous HTTP for AI calls**: AI provider calls block the request thread. For high concurrency, this could exhaust the server's thread pool.
+- **Scraper latency**: URL-based scrapers wait for external HTTP responses (15s default timeout). Batch operations may take significant time.
+
+## Security Limitations
+
+- **No CSRF protection**: API endpoints accept cookies without CSRF tokens. Session cookies are scoped to `/api/v1/auth` to mitigate.
+- **No security headers in response**: No `Content-Security-Policy`, `X-Frame-Options`, or `Strict-Transport-Security` headers.
+- **No brute-force protection on login**: Rate limiting applies per-IP but no exponential backoff or account lockout on failed login attempts.
+- **No audit of admin actions**: Admin configuration changes are not separately audited.
+- **No role elevation validation**: No MFA or additional verification for role changes.
+
+## Third-Party Limitations
+
+- **Public job board APIs**: May change or deprecate without notice. Rate limits are unenforced but may result in IP blocks.
+- **LinkedIn (RapidAPI)**: Requires a RapidAPI subscription. The API may change or require different authentication.
+- **Gmail OAuth**: Requires user to complete OAuth flow. Token refresh is not automated for expired credentials.
+- **AI Provider Dependencies**: Each provider has its own rate limits, pricing, and availability. The fallback scoring is simpler than AI-assisted scoring.
+- **Apify**: Requires an Apify account and API credits. Actor availability varies.
