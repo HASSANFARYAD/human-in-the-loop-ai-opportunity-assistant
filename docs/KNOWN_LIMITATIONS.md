@@ -15,8 +15,8 @@
 
 ## Technical Debt
 
-- **`api.py` is too large**: At ~3200 lines, it mixes Pydantic model definitions, helper functions, and route handlers. Should be split into multiple router modules.
-- **`db.py` is too large**: At ~2600 lines, it contains all data access logic. Should be split by domain.
+- **`api.py`** was split into 16 domain route modules (`routes/` package). `api.py` is now a 14-line aggregator.
+- **`db.py`** was split into 13 domain sub-modules (`db/` package). Each module is under 650 lines.
 - **No API versioning beyond v1**: All endpoints are under `/api/v1/`. No deprecation or migration strategy for breaking changes.
 - **Inconsistent test coverage**: Tests exist for specific areas (prompt injection, CSV sanitization, discovery adapters) but no integration tests, E2E tests, or frontend tests.
 
