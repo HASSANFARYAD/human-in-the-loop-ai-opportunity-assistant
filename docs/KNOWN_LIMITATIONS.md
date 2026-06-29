@@ -15,8 +15,8 @@
 
 ## Technical Debt
 
-- **`api.py`** was split into 16 domain route modules (`routes/` package). `api.py` is now a 14-line aggregator.
-- **`db.py`** was split into 13 domain sub-modules (`db/` package). Each module is under 650 lines.
+- ~~**`api.py`** was split into 16 domain route modules (`routes/` package). `api.py` is now a 14-line aggregator.~~ ✅ Fixed in PR #24 (53cfbe8)
+- ~~**`db.py`** was split into 13 domain sub-modules (`db/` package). Each module is under 650 lines.~~ ✅ Fixed in PR #24 (53cfbe8)
 - **No API versioning beyond v1**: All endpoints are under `/api/v1/`. No deprecation or migration strategy for breaking changes.
 - **Inconsistent test coverage**: Tests exist for specific areas (prompt injection, CSV sanitization, discovery adapters) but no integration tests, E2E tests, or frontend tests.
 
