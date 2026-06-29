@@ -180,22 +180,25 @@ def _llm_tailored_resume(profile: dict[str, Any], job: dict[str, Any], user_id: 
         "the supplied resume/profile and job description. Do not invent employers, degrees, certifications, metrics, or credentials."
     )
     context = {
-        "resume_text": profile.get("cv_text") or "",
-        "profile": profile,
+        "resume_text": (profile.get("cv_text") or "")[:4000],
+        "profile": {k: v for k, v in (profile or {}).items() if k != "cv_text"},
         "job": {
             "title": job.get("title"), "company": job.get("company"),
-            "description": job.get("description") or job.get("raw_text") or "",
+            "description": (job.get("description") or job.get("raw_text") or "")[:4000],
             "location": job.get("location"), "remote_type": job.get("remote_type"),
-            "keywords": job_context["keywords"], "focus_areas": job_context["focus_areas"],
-            "highlights": job_context["highlights"],
+            "keywords": job_context["keywords"][:20], "focus_areas": job_context["focus_areas"][:10],
+            "highlights": job_context["highlights"][:5],
         },
         "required_output_keys": [
             "tailored_summary", "tailored_experience_bullets", "skills_to_emphasize",
             "keywords_to_include", "optional_cover_note", "application_guidance", "resume_draft",
         ],
     }
+    context_json = json.dumps(context, default=str)
+    if len(context_json) > 15000:
+        context_json = context_json[:15000]
     tailored = ai_orchestrator.ask_json(
-        system, json.dumps(context), fallback,
+        system, context_json, fallback,
         user_id=user_id, task_type="resume_tailoring", workspace_id=job.get("workspace_id"),
     )
     for key, value in fallback.items():
