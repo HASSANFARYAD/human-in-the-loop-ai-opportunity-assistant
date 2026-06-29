@@ -4,7 +4,7 @@
 
 - ~~**Company Research-backed Interview Prep**: No dedicated company research module exists. Interview questions may include general company-specific questions but lack automated web research, company profile caching, or a dedicated company brief UI.~~ ✅ Fixed — added `services/company_research.py` with AI-powered research and MongoDB-backed 7-day cache; integrated into both LLM and fallback interview prep paths.
 - ~~**Freshness Filter on Discovery**: Public job sources return results without date-based filtering. No env config or UI for filtering opportunities by recency. Marked as high priority in PENDING_FEATURES.md.~~ ✅ Fixed — added `_freshness_filter()` to `public_discovery.py`, `max_age_days` query param and dropdown UI in Find Jobs, `DISCOVERY_FRESHNESS_DAYS` env config (default 30 days).
-- **Publishing Engine (Live)**: The publishing engine operates in dry-run mode by default (`PUBLISHING_DRY_RUN=true`). Actual posting to external platforms (LinkedIn, Twitter) is not implemented.
+- ~~**Publishing Engine (Live)**: The publishing engine operates in dry-run mode by default (`PUBLISHING_DRY_RUN=true`). Actual posting to external platforms (LinkedIn, Twitter) is not implemented.~~ ✅ Fixed — `PUBLISHING_DRY_RUN` now defaults to `false`. A `LinkedInProvider` adapter class registered with the provider registry calls the real LinkedIn API (`linkedin_integration.publish_text_post`) using user-configured credentials and author URN.
 
 ## Partial Implementations
 
@@ -29,8 +29,8 @@
 
 ## Security Limitations
 
-- **No CSRF protection**: API endpoints accept cookies without CSRF tokens. Session cookies are scoped to `/api/v1/auth` to mitigate.
-- **No security headers in response**: No `Content-Security-Policy`, `X-Frame-Options`, or `Strict-Transport-Security` headers.
+- ~~**No CSRF protection**: API endpoints accept cookies without CSRF tokens. Session cookies are scoped to `/api/v1/auth` to mitigate.~~ ✅ Fixed — added Origin/Referer header validation via `setup_csrf_protection()` in `security.py`, with configurable exempt paths (`CSRF_EXEMPT_PATHS`), toggled by `CSRF_ENABLED`.
+- ~~**No security headers in response**: No `Content-Security-Policy`, `X-Frame-Options`, or `Strict-Transport-Security` headers.~~ ✅ Fixed — `SecurityHeadersMiddleware` in `security.py` sets `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `Strict-Transport-Security` (HSTS), and `Content-Security-Policy`, toggled by `SECURITY_HEADERS_ENABLED`.
 - **No brute-force protection on login**: Rate limiting applies per-IP but no exponential backoff or account lockout on failed login attempts.
 - **No audit of admin actions**: Admin configuration changes are not separately audited.
 - **No role elevation validation**: No MFA or additional verification for role changes.

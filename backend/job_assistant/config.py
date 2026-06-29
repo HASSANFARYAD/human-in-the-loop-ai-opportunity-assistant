@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     worker_max_attempts: int = int(os.getenv("WORKER_MAX_ATTEMPTS", "3"))
 
     publishing_require_approval: bool = _bool_env("PUBLISHING_REQUIRE_APPROVAL", True)
-    publishing_dry_run: bool = _bool_env("PUBLISHING_DRY_RUN", True)
+    publishing_dry_run: bool = _bool_env("PUBLISHING_DRY_RUN", False)
 
     audit_retention_days: int = int(os.getenv("AUDIT_RETENTION_DAYS", "365"))
     export_retention_days: int = int(os.getenv("EXPORT_RETENTION_DAYS", "7"))
@@ -131,6 +131,18 @@ class Settings(BaseSettings):
 
     cors_origins: str = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001")
     cors_allow_credentials: bool = _bool_env("CORS_ALLOW_CREDENTIALS", True)
+
+    # Security headers
+    security_headers_enabled: bool = _bool_env("SECURITY_HEADERS_ENABLED", True)
+    hsts_max_age: int = int(os.getenv("HSTS_MAX_AGE", "31536000" if os.getenv("ENVIRONMENT") == "prod" else "0"))
+    content_security_policy: str = os.getenv(
+        "CONTENT_SECURITY_POLICY",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+    )
+
+    # CSRF protection
+    csrf_enabled: bool = _bool_env("CSRF_ENABLED", True)
+    csrf_exempt_paths: str = os.getenv("CSRF_EXEMPT_PATHS", "/api/v1/auth/login,/api/v1/auth/register,/api/v1/auth/refresh,/api/v1/health")
 
     model_config = ConfigDict(
         case_sensitive=False,

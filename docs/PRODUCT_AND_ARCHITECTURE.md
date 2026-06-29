@@ -72,7 +72,7 @@ Concrete value: less context-switching, higher-signal targeting (scoring + learn
   1. **URL** — exact match on `job_url` (handles the same source listing revisited).
   2. **Content hash** — SHA-256 of `lowercase(strip(title + "|" + company + "|" + description))` — catches the same job posted on different boards with different URLs.
   3. **Title + company** — exact match on the normalized pair — catches re-posted jobs (same role, same employer, new URL and date).
-  All three checks are evaluated; a match on any one rejects the insertion. In-memory dedup within a single batch prevents importing the same item twice in one run. *Near-duplicate fuzzy matching (e.g. "Sr. Software Engineer" vs "Senior Software Engineer") is a known gap and is not yet implemented.*
+  All three checks are evaluated; a match on any one rejects the insertion. In-memory dedup within a single batch prevents importing the same item twice in one run. Fuzzy matching catches near-duplicates (e.g. "Sr. Software Engineer" vs "Senior Software Engineer") using `difflib.SequenceMatcher` with abbreviation expansion, token-level scoring, and a configurable threshold of 0.85.
 
 ### Scoring & matching
 - **Match scoring** of each opportunity against the selected profile — overall score plus component breakdown (skills, title, seniority, location, salary, industry, work authorization, deal-breakers).

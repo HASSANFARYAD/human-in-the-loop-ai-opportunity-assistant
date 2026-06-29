@@ -14,6 +14,7 @@ from job_assistant.logging_config import setup_logging
 from job_assistant.observability import observability_middleware
 from job_assistant.rate_limits import rate_limit_middleware
 from job_assistant.runtime import validate_startup_configuration
+from job_assistant.security import SecurityHeadersMiddleware, setup_csrf_protection
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -54,8 +55,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(SecurityHeadersMiddleware)
     app.middleware("http")(rate_limit_middleware)
     app.middleware("http")(observability_middleware)
+    setup_csrf_protection(app)
 
     app.include_router(api.router)
 
