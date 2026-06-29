@@ -144,6 +144,12 @@ class Settings(BaseSettings):
     csrf_enabled: bool = _bool_env("CSRF_ENABLED", True)
     csrf_exempt_paths: str = os.getenv("CSRF_EXEMPT_PATHS", "/api/v1/auth/login,/api/v1/auth/register,/api/v1/auth/refresh,/api/v1/health")
 
+    # Browser automation (Playwright)
+    browser_headless: bool = _bool_env("BROWSER_HEADLESS", True)
+    browser_screenshot_dir: str = os.getenv("BROWSER_SCREENSHOT_DIR", str(Path(os.getenv("APP_DATA_DIR", "data")) / "screenshots"))
+    easy_apply_dry_run: bool = _bool_env("EASY_APPLY_DRY_RUN", True)
+    easy_apply_max_per_session: int = int(os.getenv("EASY_APPLY_MAX_PER_SESSION", "10"))
+
     model_config = ConfigDict(
         case_sensitive=False,
         env_file=".env",

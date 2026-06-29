@@ -109,6 +109,13 @@ export const opportunityService = {
   linkedinDisconnect: async () => (await apiClient.post("/linkedin/disconnect")).data,
   linkedinSearchJobs: async (payload: { title_filter: string; location_filter?: string; offset?: number; count?: number; workspace_id?: number }) =>
     (await apiClient.post<{ status: string; opportunities: Opportunity[]; raw_count: number }>("/linkedin/jobs/search", payload)).data,
+  linkedinCookiesStatus: () => getJson<{ has_cookies: boolean }>("/linkedin/cookies-status"),
+  linkedinSaveCookies: async (payload: { li_at: string; jsessionid?: string }) =>
+    (await apiClient.post<{ status: string; has_cookies: boolean }>("/linkedin/cookies", payload)).data,
+  linkedinEasyApply: async (payload: { job_url: string; dry_run?: boolean }) =>
+    (await apiClient.post<{ status: string; result: Record<string, unknown> }>("/linkedin/easy-apply", payload)).data,
+  linkedinBulkEasyApply: async (payload: { job_ids: number[]; dry_run?: boolean }) =>
+    (await apiClient.post<{ status: string; results: Record<string, unknown>[]; dry_run: boolean }>("/linkedin/bulk-easy-apply", payload)).data,
   updateStatus: async (id: number, status: string, notes = "") =>
     (await apiClient.patch(`/jobs/${id}/status`, undefined, { params: { status, notes } })).data,
   reminders: () => getJson<Reminder[]>("/reminders"),

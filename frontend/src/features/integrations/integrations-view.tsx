@@ -283,6 +283,14 @@ function LinkedinForm({ selected, form, onSave, saving }: { selected?: Integrati
     onSuccess: () => { toast.success("LinkedIn disconnected"); status.refetch(); },
     onError: (error) => toast.error(error.message),
   });
+  const [liAt, setLiAt] = useState("");
+  const [jsessionId, setJsessionId] = useState("");
+  const cookiesStatus = useQuery({ queryKey: ["linkedin-cookies"], queryFn: () => opportunityService.linkedinCookiesStatus() });
+  const saveCookies = useMutation({
+    mutationFn: () => opportunityService.linkedinSaveCookies({ li_at: liAt, jsessionid: jsessionId }),
+    onSuccess: () => { toast.success("LinkedIn browser cookies saved"); cookiesStatus.refetch(); setLiAt(""); setJsessionId(""); },
+    onError: (error) => toast.error(error.message),
+  });
   return (
     <div className="space-y-6">
       <div className="rounded-lg border p-4 space-y-4">
@@ -307,6 +315,20 @@ function LinkedinForm({ selected, form, onSave, saving }: { selected?: Integrati
           <Field label="Access token"><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={selected?.has_api_key ? "Leave blank to keep saved token" : "Paste LinkedIn token"} /></Field>
           <Field label="Author URN"><Input value={config.author_urn ?? ""} onChange={(event) => update("author_urn", event.target.value)} placeholder="urn:li:person:... or urn:li:organization:..." /></Field>
           <SaveButton disabled={saving || (!apiKey && !selected?.has_api_key)} onClick={() => onSave({ author_urn: config.author_urn || "" })} />
+        </div>
+      </div>
+      <div className="rounded-lg border p-4 space-y-4">
+        <h3 className="font-medium text-sm text-muted-foreground uppercase tracking-wide">Browser Automation — Easy Apply</h3>
+        <p className="text-xs text-muted-foreground">Paste your LinkedIn <code className="text-xs bg-muted px-1 py-0.5 rounded">li_at</code> and <code className="text-xs bg-muted px-1 py-0.5 rounded">JSESSIONID</code> cookies so the system can auto-fill and submit Easy Apply forms. Extract them from your browser's developer tools (Application → Cookies → linkedin.com).</p>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="li_at cookie"><Input type="password" value={liAt} onChange={(event) => setLiAt(event.target.value)} placeholder="Paste li_at cookie value" /></Field>
+          <Field label="JSESSIONID (optional)"><Input value={jsessionId} onChange={(event) => setJsessionId(event.target.value)} placeholder="Paste JSESSIONID value" /></Field>
+          <div className="flex flex-wrap items-end gap-3">
+            <Badge>{cookiesStatus.data?.has_cookies ? "cookies saved" : "no cookies"}</Badge>
+            <Button variant="outline" disabled={saveCookies.isPending || !liAt} onClick={() => saveCookies.mutate()}>
+              <KeyRound className="h-4 w-4" /> Save Cookies
+            </Button>
+          </div>
         </div>
       </div>
     </div>
