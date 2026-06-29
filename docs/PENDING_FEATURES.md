@@ -2,7 +2,7 @@
 
 ## High Priority
 
-1. **Company research-backed interview prep** — currently generates generic behavioral/technical questions; lacks live company context (financials, recent news, product launches, culture). Would require web scraping or an external API per job.
+1. ~~**Company research-backed interview prep** — currently generates generic behavioral/technical questions; lacks live company context (financials, recent news, product launches, culture). Would require web scraping or an external API per job.~~ ✅ Fixed — `services/company_research.py` provides AI-powered company briefs with MongoDB caching (7-day TTL), integrated into both LLM and fallback interview prep paths.
 2. **Freshness filter on discovery** — public job feeds return all listings regardless of posting date. No configurable cutoff (e.g. "last 7 days") before import.
 
 ## Medium Priority

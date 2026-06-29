@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from job_assistant.services.job_source_scrapers import (
     IndeedScraper,
+    SeekScraper,
+    LinkedInScraper,
     UnsupportedSourceUrl,
     _dedupe_opportunities,
     get_scraper_for_url,
@@ -122,8 +124,14 @@ class TestIsJobListingUrl:
     def test_valid_indeed_collections(self):
         assert is_job_listing_url("https://www.indeed.com/jobs/collections/remote")
 
-    def test_invalid_non_indeed(self):
-        assert is_job_listing_url("https://linkedin.com/jobs") is False
+    def test_valid_seek_url(self):
+        assert is_job_listing_url("https://www.seek.com.au/jobs")
+
+    def test_valid_seek_search(self):
+        assert is_job_listing_url("https://www.seek.com.au/python-jobs")
+
+    def test_valid_linkedin_url(self):
+        assert is_job_listing_url("https://www.linkedin.com/jobs/search/?keywords=python")
 
     def test_invalid_empty(self):
         assert is_job_listing_url("") is False
@@ -139,10 +147,18 @@ class TestGetScraperForUrl:
         scraper = get_scraper_for_url("https://www.indeed.com/jobs?q=python")
         assert isinstance(scraper, IndeedScraper)
 
+    def test_returns_seek_scraper(self):
+        scraper = get_scraper_for_url("https://www.seek.com.au/jobs")
+        assert isinstance(scraper, SeekScraper)
+
+    def test_returns_linkedin_scraper(self):
+        scraper = get_scraper_for_url("https://www.linkedin.com/jobs/search/?keywords=python")
+        assert isinstance(scraper, LinkedInScraper)
+
     def test_unsupported_url_raises(self):
         import pytest
         with pytest.raises(UnsupportedSourceUrl):
-            get_scraper_for_url("https://linkedin.com/jobs")
+            get_scraper_for_url("https://example.com/jobs")
 
 
 # ── IndeedScraper.supports() ────────────────────────────────────────────
@@ -163,6 +179,56 @@ class TestIndeedScraperSupports:
 
     def test_does_not_support_linkedin_source(self):
         assert self.scraper.supports("https://www.indeed.com/jobs", source="linkedin") is False
+
+
+# ── SeekScraper.supports() ──────────────────────────────────────────────
+
+class TestSeekScraperSupports:
+    def setup_method(self):
+        self.scraper = SeekScraper()
+
+    def test_supports_seek_url(self):
+        assert self.scraper.supports("https://www.seek.com.au/jobs")
+        assert self.scraper.supports("https://www.seek.com.au/python-jobs")
+
+    def test_supports_manual_source(self):
+        assert self.scraper.supports("https://www.seek.com.au/jobs", source="manual")
+
+    def test_does_not_support_indeed(self):
+        assert self.scraper.supports("https://www.indeed.com/jobs") is False
+
+
+# ── LinkedInScraper.supports() ──────────────────────────────────────────
+
+class TestLinkedInScraperSupports:
+    def setup_method(self):
+        self.scraper = LinkedInScraper()
+
+    def test_supports_linkedin_url(self):
+        assert self.scraper.supports("https://www.linkedin.com/jobs/search/?keywords=python")
+        assert self.scraper.supports("https://www.linkedin.com/jobs/")
+
+    def test_supports_manual_source(self):
+        assert self.scraper.supports("https://www.linkedin.com/jobs/", source="manual")
+
+    def test_does_not_support_indeed(self):
+        assert self.scraper.supports("https://www.indeed.com/jobs") is False
+
+
+# ── seek_page_urls() ────────────────────────────────────────────────────
+
+class TestSeekPageUrls:
+    def test_generates_single_page(self):
+        from job_assistant.services.job_source_scrapers import seek_page_urls
+        urls = seek_page_urls("https://www.seek.com.au/jobs", page_limit=1)
+        assert len(urls) == 1
+        assert "page" not in urls[0]
+
+    def test_generates_multi_page(self):
+        from job_assistant.services.job_source_scrapers import seek_page_urls
+        urls = seek_page_urls("https://www.seek.com.au/python-jobs", page_limit=2)
+        assert len(urls) == 2
+        assert "page=2" in urls[1]
 
 
 # ── _dedupe_opportunities() (job_source_scrapers) ───────────────────────

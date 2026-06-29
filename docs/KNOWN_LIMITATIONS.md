@@ -2,16 +2,16 @@
 
 ## Missing Features
 
-- **Company Research-backed Interview Prep**: No dedicated company research module exists. Interview questions may include general company-specific questions but lack automated web research, company profile caching, or a dedicated company brief UI. Marked as high priority in PENDING_FEATURES.md.
+- ~~**Company Research-backed Interview Prep**: No dedicated company research module exists. Interview questions may include general company-specific questions but lack automated web research, company profile caching, or a dedicated company brief UI.~~ ✅ Fixed — added `services/company_research.py` with AI-powered research and MongoDB-backed 7-day cache; integrated into both LLM and fallback interview prep paths.
 - **Freshness Filter on Discovery**: Public job sources return results without date-based filtering. No env config or UI for filtering opportunities by recency. Marked as high priority in PENDING_FEATURES.md.
 - **Publishing Engine (Live)**: The publishing engine operates in dry-run mode by default (`PUBLISHING_DRY_RUN=true`). Actual posting to external platforms (LinkedIn, Twitter) is not implemented.
 
 ## Partial Implementations
 
-- **Indeed/Seek/LinkedIn Scrapers**: URL-based scrapers depend on external website structure. They may break if the target site changes its HTML. Limited error handling. Indeed often returns 403 (blocked).
+- ~~**Indeed/Seek/LinkedIn Scrapers**: URL-based scrapers depend on external website structure. They may break if the target site changes its HTML. Limited error handling. Indeed often returns 403 (blocked).~~ ✅ Fixed — added `SeekScraper` (seek.com.au), `LinkedInScraper` (backed by RapidAPI), retry logic with exponential backoff, user-agent rotation, and anti-block detection.
 - **Apify Integration**: Supports running actors and normalizing results but has limited error handling and no retry logic.
 - **Redis Rate Limiting Backend**: Redis backend is implemented (`rate_limits.py:56-70`) but MongoDB is the default. Redis support depends on `redis-py` and a running Redis instance.
-- **Company-specific Interview Questions**: Generated via AI without a dedicated company research pipeline. Quality depends on the AI provider's training data.
+- ~~**Company-specific Interview Questions**: Generated via AI without a dedicated company research pipeline. Quality depends on the AI provider's training data.~~ ✅ Fixed — now uses `services/company_research.py` to enrich both fallback and LLM interview prep with live company context (description, industry, news, culture, products).
 
 ## Technical Debt
 
