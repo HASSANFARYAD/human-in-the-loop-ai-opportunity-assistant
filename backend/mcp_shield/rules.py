@@ -2,6 +2,7 @@ import json
 import re
 from typing import Any, Optional
 
+from mcp_shield.config import settings
 from mcp_shield.events import ActionTaken, ScanResult, ThreatType
 from mcp_shield.database import get_user_call_count
 

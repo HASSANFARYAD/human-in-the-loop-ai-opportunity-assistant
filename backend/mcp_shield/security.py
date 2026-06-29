@@ -22,7 +22,7 @@ _ROLE_HIJACKING_PATTERNS: list[tuple[str, float]] = [
 
 _SYSTEM_PROMPT_EXTRACTION_PATTERNS: list[tuple[str, float]] = [
     (r"\boutput\s+(your\s+)?(system\s+)?prompt\b", 85),
-    (r"\bprint\s+(your\s+)?(system\s+)?(prompt|instructions)\b", 85),
+    (r"\bprint\s+(your\s+)?(system\s+)?(prompt|instructions|directives)\b", 85),
     (r"\breveal\s+(your\s+)?(system\s+)?(prompt|instructions|directives)\b", 90),
     (r"\bshow\s+(me\s+)?(your\s+)?(system\s+)?(prompt|instructions)\b", 80),
     (r"\bwhat\s+(are|is)\s+(your\s+)?(system\s+)?(prompt|instructions)\b", 75),
@@ -37,7 +37,7 @@ _JAILBREAK_PATTERNS: list[tuple[str, float]] = [
     (r"\byou\s+(don\'t|do\s+not)\s+have\s+(to\s+)?(follow|obey)\b", 75),
     (r"\bunfiltered\b", 65),
     (r"\buncensored\b", 65),
-    (r"\bbypass\s+(restrictions|safety|filters|guardrails)\b", 85),
+    (r"\bbypass\s+(all\s+)?(restrictions|safety|filters|guardrails)\b", 85),
     (r"\bjailbreak\b", 90),
     (r"\bevil\s+(mode|personality)\b", 80),
 ]

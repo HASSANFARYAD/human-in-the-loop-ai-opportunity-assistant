@@ -1,5 +1,7 @@
 import axios, { AxiosError, AxiosRequestConfig, InternalAxiosRequestConfig } from "axios";
 
+import type { AuthResponse } from "@/types/api";
+
 type ApiErrorDetail =
   | string
   | {
@@ -38,7 +40,7 @@ export const tokenStorage = {
 
 export const apiClient = axios.create({
   baseURL: `${API_BASE_URL}${API_PREFIX}`,
-  timeout: 60000,
+  timeout: 15000,
   withCredentials: true,
   headers: { "Content-Type": "application/json" },
 });
@@ -64,6 +66,17 @@ async function refreshAccessToken(): Promise<string | null> {
 
 export async function ensureAccessToken(): Promise<string | null> {
   return tokenStorage.get() ?? refreshAccessToken();
+}
+
+export async function refreshSession(): Promise<AuthResponse | null> {
+  try {
+    const response = await apiClient.post<AuthResponse>("/auth/refresh", undefined, { skipAuthRefresh: true } as RefreshRequestConfig);
+    tokenStorage.set(response.data.access_token);
+    return response.data;
+  } catch {
+    tokenStorage.clear();
+    return null;
+  }
 }
 
 apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
