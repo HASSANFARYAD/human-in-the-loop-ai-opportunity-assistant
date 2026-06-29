@@ -226,16 +226,24 @@ def _llm_interview_prep(profile: dict[str, Any], job: dict[str, Any], evaluation
         "weakness_improvement_prompts, candidate_questions, final_preparation_checklist."
     )
     context = {
-        "user_profile": profile, "resume_text": profile.get("cv_text") or "",
-        "selected_opportunity": job, "company_name": job.get("company"),
-        "role_title": job.get("title"), "job_description": job.get("description"),
-        "required_skills": job.get("raw_text") or job.get("description"),
-        "job_keywords": job_context["keywords"], "job_focus_areas": job_context["focus_areas"],
-        "job_highlights": job_context["highlights"], "ai_score": evaluation,
+        "user_profile": {k: v for k, v in (profile or {}).items() if k != "cv_text"},
+        "resume_text": (profile.get("cv_text") or "")[:4000],
+        "selected_opportunity": {k: v for k, v in (job or {}).items() if k not in ("raw_text", "description")},
+        "company_name": job.get("company"),
+        "role_title": job.get("title"),
+        "job_description": (job.get("description") or "")[:4000],
+        "required_skills": ((job.get("raw_text") or job.get("description") or "")[:3000]),
+        "job_keywords": job_context["keywords"][:20],
+        "job_focus_areas": job_context["focus_areas"][:10],
+        "job_highlights": job_context["highlights"][:5],
+        "ai_score": evaluation,
         "resume_review_findings": latest_reviews[0] if latest_reviews else {},
     }
+    context_json = json.dumps(context, default=str)
+    if len(context_json) > 15000:
+        context_json = context_json[:15000]
     prep = ai_orchestrator.ask_json(
-        system, json.dumps(context), fallback,
+        system, context_json, fallback,
         user_id=user_id, task_type="interview_prep", workspace_id=job.get("workspace_id"),
     )
     if prep.get("_ai_error"):

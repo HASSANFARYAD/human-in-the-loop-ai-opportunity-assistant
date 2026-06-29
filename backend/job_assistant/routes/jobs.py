@@ -293,17 +293,20 @@ def _llm_resume_review(profile: dict[str, Any], job: dict[str, Any] | None, resu
         "recommended_bullet_rewrites, summary_rewrite_suggestion, priority_action_list, final_improved_resume_guidance."
     )
     context = {
-        "user_profile": profile,
+        "user_profile": {k: v for k, v in (profile or {}).items() if k != "cv_text"},
         "target_role": target_role or (job or {}).get("title") or profile.get("preferred_role") or profile.get("target_roles"),
         "selected_opportunity": job or {},
-        "resume_text": resume_text or profile.get("cv_text") or "",
+        "resume_text": (resume_text or profile.get("cv_text") or "")[:4000],
         "user_preferences": {
             "country": profile.get("country"), "role": profile.get("preferred_role") or profile.get("target_roles"),
             "job_type": profile.get("job_preferences"), "remote_preference": profile.get("remote_preference"),
             "platforms": profile.get("platforms"),
         },
     }
-    review = ai_orchestrator.ask_json(system, json.dumps(context), fallback, user_id=user_id, task_type="resume_review", workspace_id=job.get("workspace_id") if job else None)
+    context_json = json.dumps(context, default=str)
+    if len(context_json) > 15000:
+        context_json = context_json[:15000]
+    review = ai_orchestrator.ask_json(system, context_json, fallback, user_id=user_id, task_type="resume_review", workspace_id=job.get("workspace_id") if job else None)
     if review.get("_ai_error"):
         raise HTTPException(status_code=502, detail=f"LLM resume review failed: {review.get('_ai_error')}")
     review.setdefault("generation_source", "llm")
@@ -323,16 +326,24 @@ def _llm_interview_prep(profile: dict[str, Any], job: dict[str, Any], evaluation
         "weakness_improvement_prompts, candidate_questions, final_preparation_checklist, company_research_brief."
     )
     context = {
-        "user_profile": profile, "resume_text": profile.get("cv_text") or "",
-        "selected_opportunity": job, "company_name": company_name,
+        "user_profile": {k: v for k, v in (profile or {}).items() if k != "cv_text"},
+        "resume_text": (profile.get("cv_text") or "")[:4000],
+        "selected_opportunity": {k: v for k, v in (job or {}).items() if k not in ("raw_text", "description")},
+        "job_description": (job.get("description") or "")[:4000],
+        "required_skills": ((job.get("raw_text") or job.get("description") or "")[:3000]),
+        "company_name": company_name,
         "company_research": company_context,
-        "role_title": job.get("title"), "job_description": job.get("description"),
-        "required_skills": job.get("raw_text") or job.get("description"),
-        "job_keywords": job_context["keywords"], "job_focus_areas": job_context["focus_areas"],
-        "job_highlights": job_context["highlights"], "ai_score": evaluation,
+        "role_title": job.get("title"),
+        "job_keywords": job_context["keywords"][:20],
+        "job_focus_areas": job_context["focus_areas"][:10],
+        "job_highlights": job_context["highlights"][:5],
+        "ai_score": evaluation,
         "resume_review_findings": latest_reviews[0] if latest_reviews else {},
     }
-    prep = ai_orchestrator.ask_json(system, json.dumps(context), fallback, user_id=user_id, task_type="interview_prep", workspace_id=job.get("workspace_id"))
+    context_json = json.dumps(context, default=str)
+    if len(context_json) > 15000:
+        context_json = context_json[:15000]
+    prep = ai_orchestrator.ask_json(system, context_json, fallback, user_id=user_id, task_type="interview_prep", workspace_id=job.get("workspace_id"))
     if prep.get("_ai_error"):
         raise HTTPException(status_code=502, detail=f"LLM interview preparation failed: {prep.get('_ai_error')}")
     prep.setdefault("generation_source", "llm")
