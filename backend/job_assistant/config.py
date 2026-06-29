@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = _bool_env("SCHEDULER_ENABLED", True)
     rate_limits_enabled: bool = _bool_env("RATE_LIMITS_ENABLED", True)
 
+    discovery_freshness_days: int = int(os.getenv("DISCOVERY_FRESHNESS_DAYS", "30"))
+
     # Automated database backups (runs on its own scheduler, independent of SCHEDULER_ENABLED).
     backup_enabled: bool = _bool_env("BACKUP_ENABLED", False)
     backup_dir: str = os.getenv("BACKUP_DIR", str(Path(os.getenv("APP_DATA_DIR", "data")) / "backups"))

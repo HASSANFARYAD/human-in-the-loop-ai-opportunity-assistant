@@ -118,8 +118,9 @@ export const opportunityService = {
     location: string;
     keywords: string;
     country?: string;
+    max_age_days?: number;
   }) => (await apiClient.post<{ status: string; opportunities: Opportunity[] }>("/discovery/public", payload)).data,
-  discoverFromProfile: async (payload: { sources?: string[]; limit_per_source?: number; save_results?: boolean; score_results?: boolean } = {}) =>
+  discoverFromProfile: async (payload: { sources?: string[]; limit_per_source?: number; save_results?: boolean; score_results?: boolean; max_age_days?: number } = {}) =>
     (await apiClient.post<ProfileJobDiscoveryResult>("/discovery/from-profile", payload)).data,
   discoverRapidApiLinkedIn: async (payload: { title_filter: string; location_filter: string; offset: number; workspace_id?: number }) =>
     (await apiClient.post<{ status: string; opportunities: Opportunity[]; raw_count: number }>("/discovery/rapidapi-linkedin", payload)).data,

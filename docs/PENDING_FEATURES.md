@@ -3,7 +3,7 @@
 ## High Priority
 
 1. ~~**Company research-backed interview prep** — currently generates generic behavioral/technical questions; lacks live company context (financials, recent news, product launches, culture). Would require web scraping or an external API per job.~~ ✅ Fixed — `services/company_research.py` provides AI-powered company briefs with MongoDB caching (7-day TTL), integrated into both LLM and fallback interview prep paths.
-2. **Freshness filter on discovery** — public job feeds return all listings regardless of posting date. No configurable cutoff (e.g. "last 7 days") before import.
+2. ~~**Freshness filter on discovery** — public job feeds return all listings regardless of posting date. No configurable cutoff (e.g. "last 7 days") before import.~~ ✅ Fixed — added `_freshness_filter()` to `public_discovery.py`, `max_age_days` query param and dropdown UI in Find Jobs, `DISCOVERY_FRESHNESS_DAYS` env config (default 30 days).
 
 ## Medium Priority
 
