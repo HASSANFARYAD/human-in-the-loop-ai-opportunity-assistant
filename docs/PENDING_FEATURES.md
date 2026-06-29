@@ -1,21 +1,14 @@
 # Pending Features
 
-## High Priority
-
-1. ~~**Company research-backed interview prep** — currently generates generic behavioral/technical questions; lacks live company context (financials, recent news, product launches, culture). Would require web scraping or an external API per job.~~ ✅ Fixed — `services/company_research.py` provides AI-powered company briefs with MongoDB caching (7-day TTL), integrated into both LLM and fallback interview prep paths.
-2. ~~**Freshness filter on discovery** — public job feeds return all listings regardless of posting date. No configurable cutoff (e.g. "last 7 days") before import.~~ ✅ Fixed — added `_freshness_filter()` to `public_discovery.py`, `max_age_days` query param and dropdown UI in Find Jobs, `DISCOVERY_FRESHNESS_DAYS` env config (default 30 days).
-
 ## Medium Priority
 
-3. ~~**Publishing engine live execution** — draft, approval, and target validation work but `publish` is dry-run by default (`PUBLISHING_DRY_RUN=true`). No live social platform publishing.~~ ✅ Fixed — `PUBLISHING_DRY_RUN` defaults to `false`. `LinkedInProvider` registered with provider registry calls the real LinkedIn API using user-configured credentials. Other platforms return `"routed"` until their adapters are added.
-4. ~~**Fuzzy dedup for near-duplicate job titles** — exact title+company matching misses "Sr. Software Engineer" vs "Senior Software Engineer". No Levenshtein/similarity scoring in the dedup pipeline.~~ ✅ Fixed — `_fuzzy_match_title_company` uses `difflib.SequenceMatcher` with abbreviation expansion, token-level matching, and configurable threshold (0.85). Expanded `COMMON_ABBREVIATIONS` with 40+ tech/role shorthands. Added `normalized_title`/`normalized_company` fields to DB, compound index, and token-pruned lookup in `job_exists` to avoid loading all records.
-5. **Rate limiter Redis backend** — MongoDB-based rate limiting works for single-instance deploys but lacks atomicity guarantees under high concurrency. Redis backend is optional and untested.
+1. **Rate limiter Redis backend** — MongoDB-based rate limiting works for single-instance deploys but lacks atomicity guarantees under high concurrency. Redis backend is optional and untested.
 
 ## Low Priority
 
-6. **LinkedIn official SDK integration** — `linkedin_integration.py` is a placeholder. LinkedIn discovery goes through RapidAPI / Apify instead.
-7. **Schema migrations CLI** — migration functions exist in `db.py` but there's no CLI command to run/rollback migrations independently of app startup.
-8. **Notification system** — no real-time push (email/SMS/in-app) for score drops, follow-up reminders, or interview deadlines beyond app-internal reminders.
+2. **LinkedIn official SDK integration** — `linkedin_integration.py` is a placeholder. LinkedIn discovery goes through RapidAPI / Apify instead.
+3. **Schema migrations CLI** — migration functions exist in `db.py` but there's no CLI command to run/rollback migrations independently of app startup.
+4. **Notification system** — no real-time push (email/SMS/in-app) for score drops, follow-up reminders, or interview deadlines beyond app-internal reminders.
 
 ## Reference
 
