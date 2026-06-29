@@ -140,7 +140,7 @@ All configuration is via environment variables loaded through `config.py` (Pydan
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PUBLISHING_REQUIRE_APPROVAL` | `true` | Require approval before publish |
-| `PUBLISHING_DRY_RUN` | `true` | Dry-run mode (no actual publishing) |
+| `PUBLISHING_DRY_RUN` | `false` | Dry-run mode (no actual publishing) — set `true` to prevent live posting |
 
 ### Logging
 
