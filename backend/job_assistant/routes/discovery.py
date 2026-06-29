@@ -172,6 +172,7 @@ class DiscoveryPublicIn(BaseModel):
     location: str = ""
     keywords: str = ""
     country: str = ""
+    max_age_days: Optional[int] = None
 
 
 class DiscoveryFromProfileIn(BaseModel):
@@ -179,6 +180,7 @@ class DiscoveryFromProfileIn(BaseModel):
     limit_per_source: int = 10
     save_results: bool = False
     score_results: bool = True
+    max_age_days: Optional[int] = None
 
 
 class DiscoveryImportIn(BaseModel):
@@ -296,7 +298,7 @@ async def discovery_extract(payload: DiscoveryExtractIn, user: dict = Depends(cu
 async def discovery_public(payload: DiscoveryPublicIn, user: dict = Depends(current_user)):
     try:
         sources = payload.sources or ["RemoteJobs.org", "Arbeitnow", "Remotive", "Jobicy", "Hacker News Who is hiring"]
-        opportunities = [annotate_opportunity(item) for item in discover_public_opportunities(payload.query, sources, payload.limit_per_source)]
+        opportunities = [annotate_opportunity(item) for item in discover_public_opportunities(payload.query, sources, payload.limit_per_source, max_age_days=payload.max_age_days)]
         if payload.opportunity_type in {"auto", "job"}:
             opportunities = [item for item in opportunities if is_job_like(item)]
         return {"status": "success", "opportunities": _filter_discovered_opportunities(opportunities, payload)}
@@ -317,7 +319,7 @@ async def discovery_from_profile(payload: DiscoveryFromProfileIn, user: dict = D
 
     sources = payload.sources or ["RemoteJobs.org", "Arbeitnow", "Remotive", "Jobicy", "Hacker News Who is hiring"]
     try:
-        raw = discover_public_opportunities(query, sources, payload.limit_per_source)
+        raw = discover_public_opportunities(query, sources, payload.limit_per_source, max_age_days=payload.max_age_days)
     except Exception as exc:
         logger.error("Profile-based job discovery failed for user %s: %s", user["id"], exc)
         raise HTTPException(status_code=502, detail=f"Public discovery failed: {exc}")
