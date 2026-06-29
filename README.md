@@ -1,19 +1,20 @@
 # Job Application Assistant
 
-Local-first Next.js + FastAPI + MongoDB + SQLite assistant for collecting, scoring, reviewing, and tracking job opportunities. The app is human-in-the-loop: it helps organize and draft, but it does not submit applications, bypass platform rules, or scrape private pages.
+Next.js + FastAPI + MongoDB assistant for collecting, scoring, reviewing, and tracking job opportunities. The app is human-in-the-loop: it helps organize and draft, but it does not submit applications, bypass platform rules, or scrape private pages.
 
 ## What It Does
 
-- Stores user accounts, sessions, profile/resume context, provider settings, and opportunity data in SQLite.
+- Stores user accounts, sessions, profile/resume context, provider settings, and opportunity data in **MongoDB**.
 - Imports opportunities from pasted text, CSV, configured Gmail alerts, public no-login sources, user-configured Apify actors, and a structured manual-entry form (title + company + description).
 - Scores job-like opportunities against a saved profile and can draft editable materials, resume reviews, and interview prep.
 - Tracks application status, notes, reminders, recordings metadata, and generated artifacts.
 - **Conversational AI agent** with streaming chat, tool-calling intent classification, follow-up suggestions, and **cross-session agent memory** that recalls user facts across conversations.
 - **Usage monitoring dashboard** with per-task-type AI cost breakdown, daily budget enforcement, and rate-limit status.
+- **Multi-tenant** with organizations, workspaces, role-based access control (RBAC), and resource sharing.
 
 ## Local Setup
 
-Requires **MongoDB** (agent memory, rate-limit counters, AI generation logs) and optionally **Redis** (rate-limit backend). SQLite stores core business data (users, profiles, jobs).
+Requires **MongoDB** (primary datastore for all business data, agent memory, rate-limit counters, AI generation logs) and optionally **Redis** (rate-limit backend).
 
 ### MongoDB
 
@@ -53,7 +54,6 @@ Backend essentials:
 ```bash
 ENVIRONMENT=dev
 DEPLOYMENT_PROFILE=local
-APP_DB_PATH=backend/data/job_assistant.sqlite3
 APP_DATA_DIR=backend/data
 JWT_SECRET_KEY=replace-with-a-long-random-secret
 APP_ENCRYPTION_KEY=replace-with-a-fernet-key
@@ -62,9 +62,9 @@ CORS_ALLOW_CREDENTIALS=true
 SESSION_COOKIE_SECURE=false
 SESSION_COOKIE_SAMESITE=lax
 
-# MongoDB (required)
+# MongoDB (required — primary datastore)
 MONGODB_URL=mongodb://localhost:27017
-MONGODB_DB_NAME=job_assistant
+MONGODB_DB_NAME=career_assistant
 ```
 
 Frontend essentials:
@@ -104,7 +104,7 @@ It deletes evaluations, application materials, applications/statuses, reminders,
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Render backend and Vercel frontend setup.
 
-SQLite remains the default. On Render, SQLite requires a persistent disk and is suitable only for small or single-user deployments. Do not enable PostgreSQL unless the backend has been verified end-to-end for it.
+MongoDB is the sole datastore. On Render, use MongoDB Atlas (free M0 tier) or a self-hosted instance.
 
 ## Key Features
 
@@ -126,13 +126,14 @@ SQLite remains the default. On Render, SQLite requires a persistent disk and is 
 
 ### Deduplication
 
-Every job entry point (auto-discovery, manual import, scraper sources) runs a three-key dedup pipeline before inserting:
+Every job entry point (auto-discovery, manual import, scraper sources) runs a four-key dedup pipeline before inserting:
 
 1. **URL** — exact match on `job_url` catches the same listing revisited.
 2. **Content hash** — SHA-256 of `lowercase(strip(title|company|description))` catches the same job posted on different boards with different URLs.
 3. **Title + company** — exact match on the normalized pair catches re-posted jobs with new URLs and dates.
+4. **Fuzzy title+company** — `SequenceMatcher`-based fuzzy matching normalizes abbreviations (e.g. "Sr." → "Senior") and catches near-duplicates.
 
-A match on any key rejects insertion. Within a single batch, the same in-memory checks prevent importing the same item twice. *Near-duplicate fuzzy matching (e.g. "Sr. Engineer" vs "Senior Engineer") is a known gap.*
+A match on any key rejects insertion. Within a single batch, the same in-memory checks prevent importing the same item twice.
 
 ### Human-in-the-Loop Design
 - Scores are prioritization hints, not decisions — the user always reviews before acting.
@@ -159,8 +160,8 @@ A match on any key rejects insertion. Within a single batch, the same in-memory 
 - AI provider/API failures: keep fallback scoring visible, show provider errors clearly, and avoid blocking manual review.
 - Fallback scoring quality: treat scores as prioritization hints, not decisions; review low-confidence matches manually.
 - Bad filtering/classification: keep manual import/status controls and inspect skipped items before deleting.
-- Empty or dirty database states: use `/api/v1/health`, the dry-run cleanup command, and SQLite backup/restore before destructive cleanup.
-- Render persistent disk misconfiguration: set `APP_DB_PATH` under the mounted disk and confirm `/api/v1/health/storage` after deploy.
+- Empty or dirty database states: use `/api/v1/health`, the dry-run cleanup command, and the backup scheduler before destructive cleanup.
+- Render persistent disk misconfiguration: confirm MongoDB is accessible and `/api/v1/health/storage` is ok after deploy.
 - Vercel/backend CORS or API URL issues: set `NEXT_PUBLIC_API_URL` to the Render API origin and include the exact Vercel origin in `CORS_ORIGINS`.
 - Slow discovery/scoring: keep scheduler disabled on small Render instances unless needed; score in smaller batches.
 - Missing resume/profile data: scoring and tailored outputs require profile context, so complete the profile before evaluating jobs.

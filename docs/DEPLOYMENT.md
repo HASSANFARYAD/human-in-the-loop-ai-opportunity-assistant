@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-A **MongoDB** instance is required for agent memory, AI generation logs, rate-limit counters, and conversation data. Options:
+A **MongoDB** instance is required. All business data, agent memory, AI generation logs, rate-limit counters, and conversation data are stored in MongoDB. Options:
 
 - **MongoDB Atlas** (free M0 tier is sufficient for small deployments)
 - **Render MongoDB** (add via Render dashboard)
@@ -18,7 +18,6 @@ Required environment variables:
 ENVIRONMENT=prod
 DEPLOYMENT_PROFILE=mvp
 APP_DATA_DIR=/var/data/job-assistant
-APP_DB_PATH=/var/data/job-assistant/job_assistant.sqlite3
 LOG_DIR=/var/data/job-assistant/logs
 FRONTEND_BASE_URL=https://your-app.vercel.app
 APP_BASE_URL=https://your-app.vercel.app
@@ -31,7 +30,7 @@ APP_ENCRYPTION_KEY=<fernet-key>
 
 # MongoDB (required)
 MONGODB_URL=mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority
-MONGODB_DB_NAME=job_assistant
+MONGODB_DB_NAME=career_assistant
 ```
 
 Health checks:
@@ -39,8 +38,6 @@ Health checks:
 - `/api/v1/health`
 - `/api/v1/health/db`
 - `/api/v1/health/storage`
-
-SQLite stores core business data (users, profiles, jobs). On Render, mount a persistent disk and keep `APP_DB_PATH` on that disk. Without the disk, database contents can be lost when the service restarts or redeploys. SQLite is acceptable for small or single-user MVP deployments, but it is not a strong fit for multi-user production concurrency.
 
 ## Frontend On Vercel
 

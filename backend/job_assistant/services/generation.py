@@ -39,27 +39,31 @@ def generate_materials(
         "job_highlights": context["highlights"],
         "job_keywords": context["keywords"],
     }
+    import json as _json
     system = "You create truthful, editable job application drafts. Return only JSON. Use the job-specific details to make each output distinct."
+    profile_safe = {k: v for k, v in (profile or {}).items() if k != "cv_text"}
+    profile_safe["cv_text_snippet"] = (profile.get("cv_text") or "")[:4000]
+    eval_safe = _json.dumps(evaluation, default=str)[:4000] if evaluation else ""
     user = f"""
 Generate tailored materials for this specific job. Return JSON with: professional_summary, cover_letter, resume_bullets, screening_answers, linkedin_message, why_fit.
 Keep content concise, professional, editable, and grounded only in the supplied profile/CV and job.
 Do not reuse generic language across jobs. Make the company, role, responsibilities, and fit analysis visibly specific to this posting.
 
 PROFILE:
-{profile}
+{_json.dumps(profile_safe, default=str)[:8000]}
 
 JOB SNAPSHOT:
 title: {job.get("title", "")}
 company: {job.get("company", "")}
 location: {job.get("location", "")}
 remote_type: {job.get("remote_type", "")}
-description: {job.get("description") or job.get("raw_text") or ""}
-job_keywords: {context["keywords"]}
-job_focus_areas: {context["focus_areas"]}
-job_highlights: {context["highlights"]}
+description: {(job.get("description") or job.get("raw_text") or "")[:4000]}
+job_keywords: {context["keywords"][:20]}
+job_focus_areas: {context["focus_areas"][:10]}
+job_highlights: {context["highlights"][:5]}
 
 EVALUATION:
-{evaluation}
+{eval_safe}
 """
     data = ask_json(system, user, fallback, user_id=user_id, task_type="materials_generation", workspace_id=workspace_id)
     for k, v in fallback.items():

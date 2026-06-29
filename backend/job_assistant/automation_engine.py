@@ -35,8 +35,46 @@ class AutomationEngine:
             message = (rule.get("action_config") or {}).get("message") or f"Automation rule '{rule.get('name')}' triggered."
             add_activity_event(user_id, "Automation notification", message, level="info", metadata={"rule_id": rule.get("id"), "payload": payload})
             return {"status": "completed", "action_type": "notify", "message": message}
+        if action_type in ("easy_apply", "linkedin_easy_apply"):
+            return self._execute_easy_apply(user_id, rule, payload)
         add_activity_event(user_id, "Automation skipped", f"Unsupported action type: {action_type}", level="warning", metadata={"rule_id": rule.get("id")})
         return {"status": "completed", "action_type": action_type, "message": "Unsupported action skipped safely."}
+
+    def _execute_easy_apply(self, user_id: int, rule: Dict[str, Any], payload: Dict[str, Any]) -> dict[str, Any]:
+        import asyncio
+        from job_assistant.db import get_integration_settings
+        from job_assistant.services.linkedin_easy_apply import easy_apply_for_job
+
+        config = rule.get("action_config") or {}
+        browser_settings = get_integration_settings(user_id, "linkedin_browser")
+        browser_config = browser_settings.get("config", {}) if browser_settings else {}
+        li_at = browser_config.get("li_at", "")
+        jsessionid = browser_config.get("jsessionid", "")
+
+        if not li_at:
+            add_activity_event(user_id, "Easy Apply failed", "LinkedIn browser cookies not configured.", level="error", metadata={"rule_id": rule.get("id"), "payload": payload})
+            return {"status": "failed", "message": "LinkedIn browser cookies not configured"}
+
+        job_urls = payload.get("job_urls", []) or config.get("default_job_urls", [])
+        if not job_urls and payload.get("job_url"):
+            job_urls = [payload["job_url"]]
+
+        results = []
+        for url in job_urls:
+            try:
+                result = asyncio.run(easy_apply_for_job(
+                    user_id, url, li_at=li_at, jsessionid=jsessionid,
+                    application_data=payload.get("application_data"),
+                    dry_run=config.get("dry_run", True),
+                ))
+                results.append(result)
+            except Exception as exc:
+                results.append({"url": url, "status": "error", "reason": str(exc)})
+
+        submitted = [r for r in results if r.get("status") == "submitted"]
+        message = f"Easy Apply: {len(submitted)}/{len(results)} submitted"
+        add_activity_event(user_id, "Easy Apply completed", message, level="info", metadata={"rule_id": rule.get("id"), "results": results})
+        return {"status": "completed", "action_type": "easy_apply", "message": message, "results": results}
 
 
 automation_engine = AutomationEngine()

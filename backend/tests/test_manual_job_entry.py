@@ -278,8 +278,9 @@ def test_same_job_reposted_with_new_id_date_caught_by_tc(monkeypatch):
 
 
 def test_near_duplicate_title_not_caught(monkeypatch):
-    """Near-duplicate with slightly different title/description is NOT caught
-    by current exact-match dedup — documents this as a known gap."""
+    """Near-duplicate with different descriptions across separate batches
+    is only caught if job_exists returns True. This test uses fake_job_exists=False
+    to document that cross-batch dedup depends on DB-level fuzzy checking."""
     from job_assistant.services import job_import
 
     inserted: list[dict] = []

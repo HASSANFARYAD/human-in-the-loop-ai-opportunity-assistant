@@ -50,7 +50,7 @@ const SERVICES = [
   { service: "ai_provider", label: "AI Provider", icon: Bot, description: "Model, provider, base URL, Azure deployment, and provider API key." },
   { service: "gmail", label: "Gmail", icon: Mail, description: "Google OAuth client settings and user connection status." },
   { service: "recording_storage", label: "Recording Storage", icon: Database, description: "Local audio storage path, limits, and allowed MIME types." },
-  { service: "linkedin", label: "LinkedIn Posting", icon: KeyRound, description: "Official LinkedIn post API token, author URN, and API version." },
+  { service: "linkedin", label: "LinkedIn", icon: KeyRound, description: "OAuth connect or manual token for LinkedIn API access (publishing + job search)." },
   { service: "rapidapi_linkedin", label: "RapidAPI LinkedIn Jobs", icon: KeyRound, description: "RapidAPI LinkedIn jobs host, endpoint, and default automated search filters." },
   { service: "apify", label: "Apify Scraping", icon: Database, description: "Apify token, actor id, and input JSON template." },
 ] as const;
@@ -199,14 +199,7 @@ function ServiceForm({
   }
 
   if (service === "linkedin") {
-    return (
-      <div className="grid gap-4 md:grid-cols-2">
-        <Field label="LinkedIn OAuth access token"><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={selected?.has_api_key ? "Leave blank to keep saved token" : "Paste LinkedIn token"} /></Field>
-        <Field label="Author URN"><Input value={config.author_urn ?? ""} onChange={(event) => update("author_urn", event.target.value)} placeholder="urn:li:person:... or urn:li:organization:..." /></Field>
-        <Field label="LinkedIn API version"><Input value={config.linkedin_version ?? "202604"} onChange={(event) => update("linkedin_version", event.target.value)} /></Field>
-        <SaveButton disabled={saving || (!apiKey && !selected?.has_api_key)} onClick={() => onSave({ author_urn: config.author_urn || "", linkedin_version: config.linkedin_version || "202604" })} />
-      </div>
-    );
+    return <LinkedinForm selected={selected} form={form} onSave={onSave} saving={saving} />;
   }
 
   if (service === "rapidapi_linkedin") {
@@ -271,6 +264,72 @@ function GmailForm({ selected, form, onSave, saving }: { selected?: Integration;
         <Badge>{status.data?.connected ? `connected${status.data.connected_email ? `: ${status.data.connected_email}` : ""}` : status.data?.status ?? "not connected"}</Badge>
         <Button variant="outline" disabled={connect.isPending || !status.data?.configured} onClick={() => connect.mutate()}><Mail className="h-4 w-4" /> Connect Gmail</Button>
         <Button variant="destructive" disabled={disconnect.isPending || !status.data?.connected} onClick={() => disconnect.mutate()}>Disconnect Gmail</Button>
+      </div>
+    </div>
+  );
+}
+
+function LinkedinForm({ selected, form, onSave, saving }: { selected?: Integration; form: IntegrationFormState; onSave: (config: Record<string, unknown>) => void; saving: boolean }) {
+  const { apiKey, setApiKey, config, setConfig } = form;
+  const update = (key: string, value: string) => setConfig((current) => ({ ...current, [key]: value }));
+  const status = useQuery({ queryKey: ["linkedin-status"], queryFn: () => opportunityService.linkedinStatus() });
+  const connect = useMutation({
+    mutationFn: () => opportunityService.linkedinAuthUrl(),
+    onSuccess: (data) => { window.location.href = data.url; },
+    onError: (error) => toast.error(error.message),
+  });
+  const disconnect = useMutation({
+    mutationFn: () => opportunityService.linkedinDisconnect(),
+    onSuccess: () => { toast.success("LinkedIn disconnected"); status.refetch(); },
+    onError: (error) => toast.error(error.message),
+  });
+  const [liAt, setLiAt] = useState("");
+  const [jsessionId, setJsessionId] = useState("");
+  const cookiesStatus = useQuery({ queryKey: ["linkedin-cookies"], queryFn: () => opportunityService.linkedinCookiesStatus() });
+  const saveCookies = useMutation({
+    mutationFn: () => opportunityService.linkedinSaveCookies({ li_at: liAt, jsessionid: jsessionId }),
+    onSuccess: () => { toast.success("LinkedIn browser cookies saved"); cookiesStatus.refetch(); setLiAt(""); setJsessionId(""); },
+    onError: (error) => toast.error(error.message),
+  });
+  return (
+    <div className="space-y-6">
+      <div className="rounded-lg border p-4 space-y-4">
+        <h3 className="font-medium text-sm text-muted-foreground uppercase tracking-wide">OAuth Connect</h3>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="LinkedIn client ID"><Input value={config.client_id ?? ""} onChange={(event) => update("client_id", event.target.value)} /></Field>
+          <Field label="LinkedIn client secret"><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={selected?.has_api_key ? "Leave blank to keep saved secret" : "Paste client secret"} /></Field>
+          <Field label="Redirect URI"><Input value={config.redirect_uri ?? ""} onChange={(event) => update("redirect_uri", event.target.value)} placeholder="http://localhost:8000/api/v1/linkedin/oauth/callback" /></Field>
+          <Field label="LinkedIn API version"><Input value={config.linkedin_version ?? "202604"} onChange={(event) => update("linkedin_version", event.target.value)} /></Field>
+          <SaveButton disabled={saving || (!apiKey && !selected?.has_api_key)} onClick={() => onSave({ client_id: config.client_id || "", redirect_uri: config.redirect_uri || "", linkedin_version: config.linkedin_version || "202604" })} />
+          <div className="flex flex-wrap items-end gap-3">
+            <Badge>{status.data?.connected ? `connected${status.data.connected_name ? `: ${status.data.connected_name}` : ""}` : status.data?.status ?? "not connected"}</Badge>
+            <Button variant="outline" disabled={connect.isPending || !status.data?.configured} onClick={() => connect.mutate()}><KeyRound className="h-4 w-4" /> Connect LinkedIn</Button>
+            <Button variant="destructive" disabled={disconnect.isPending || !status.data?.connected} onClick={() => disconnect.mutate()}>Disconnect LinkedIn</Button>
+          </div>
+        </div>
+      </div>
+      <div className="rounded-lg border p-4 space-y-4">
+        <h3 className="font-medium text-sm text-muted-foreground uppercase tracking-wide">Manual Token</h3>
+        <p className="text-xs text-muted-foreground">Alternative: paste your LinkedIn API token directly. Used when OAuth is not set up.</p>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="Access token"><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={selected?.has_api_key ? "Leave blank to keep saved token" : "Paste LinkedIn token"} /></Field>
+          <Field label="Author URN"><Input value={config.author_urn ?? ""} onChange={(event) => update("author_urn", event.target.value)} placeholder="urn:li:person:... or urn:li:organization:..." /></Field>
+          <SaveButton disabled={saving || (!apiKey && !selected?.has_api_key)} onClick={() => onSave({ author_urn: config.author_urn || "" })} />
+        </div>
+      </div>
+      <div className="rounded-lg border p-4 space-y-4">
+        <h3 className="font-medium text-sm text-muted-foreground uppercase tracking-wide">Browser Automation — Easy Apply</h3>
+        <p className="text-xs text-muted-foreground">Paste your LinkedIn <code className="text-xs bg-muted px-1 py-0.5 rounded">li_at</code> and <code className="text-xs bg-muted px-1 py-0.5 rounded">JSESSIONID</code> cookies so the system can auto-fill and submit Easy Apply forms. Extract them from your browser&apos;s developer tools (Application → Cookies → linkedin.com).</p>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="li_at cookie"><Input type="password" value={liAt} onChange={(event) => setLiAt(event.target.value)} placeholder="Paste li_at cookie value" /></Field>
+          <Field label="JSESSIONID (optional)"><Input value={jsessionId} onChange={(event) => setJsessionId(event.target.value)} placeholder="Paste JSESSIONID value" /></Field>
+          <div className="flex flex-wrap items-end gap-3">
+            <Badge>{cookiesStatus.data?.has_cookies ? "cookies saved" : "no cookies"}</Badge>
+            <Button variant="outline" disabled={saveCookies.isPending || !liAt} onClick={() => saveCookies.mutate()}>
+              <KeyRound className="h-4 w-4" /> Save Cookies
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );

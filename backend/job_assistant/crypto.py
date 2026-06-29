@@ -20,6 +20,9 @@ _PREFIX = "enc:v1:"
 def _fernet() -> Fernet:
     raw_key = os.getenv("APP_ENCRYPTION_KEY", "").strip()
     if not raw_key:
+        from job_assistant.config import settings as _st
+        raw_key = (_st.app_encryption_key or "").strip()
+    if not raw_key:
         raise RuntimeError(
             "APP_ENCRYPTION_KEY is not set. "
             "Run: python scripts/generate_secrets.py and add the result to your .env file."

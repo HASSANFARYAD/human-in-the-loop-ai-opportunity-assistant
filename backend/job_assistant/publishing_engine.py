@@ -5,7 +5,7 @@ from typing import Any
 
 from job_assistant.config import settings
 from job_assistant.db import _next_id, add_audit_log, get_collection, utc_now
-from job_assistant.provider_registry import provider_registry
+from job_assistant.provider_registry import BaseProvider, ProviderExecutionResult, provider_registry
 
 
 PLATFORM_LIMITS = {
@@ -71,6 +71,27 @@ def approve_post(user_id: int, post_id: int) -> None:
         {"$set": {"status": "approved", "updated_at": now}},
     )
     add_audit_log(user_id, "post.approve", "post", str(post_id), {}, workspace_id=post.get("workspace_id"), organization_id=post.get("organization_id"))
+
+
+class LinkedInProvider(BaseProvider):
+    provider_name = "linkedin"
+    platform = "linkedin"
+    supported_actions = {"publish_post"}
+
+    def execute(self, action: str, payload: dict[str, Any]) -> Any:
+        from job_assistant.services.linkedin_integration import publish_text_post
+        api_token = (self.credentials.get("api_key") or self.credentials.get("access_token") or "").strip()
+        author_urn = (self.config.get("author_urn") or "").strip()
+        if not api_token:
+            raise ValueError("LinkedIn API token is not configured.")
+        if not author_urn:
+            raise ValueError("LinkedIn author URN is not configured.")
+        content = str(payload.get("content") or "")
+        result = publish_text_post(api_token, author_urn, content)
+        return {"status": "published", "platform": "linkedin", "post_id": result.get("post_id", "")}
+
+
+provider_registry.register("linkedin", "linkedin", LinkedInProvider)
 
 
 def publish_post(user_id: int, post_id: int, *, dry_run: bool | None = None) -> dict[str, Any]:

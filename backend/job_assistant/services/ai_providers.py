@@ -188,10 +188,16 @@ def _azure_openai(api_key: str, model: str, system: str, user: str, config: dict
         name = (deployment or model or "").lower()
         api_style = "responses" if any(tag in name for tag in ("codex", "gpt-5", "o1", "o3", "o4")) else "chat"
     client = AzureOpenAI(api_key=api_key, azure_endpoint=endpoint, api_version=api_version)
+    name = (deployment or model or "").lower()
+    kwargs = {"model": deployment, "temperature": 0.2}
+    if any(tag in name for tag in ("o1", "o3", "o4", "o5", "gpt-5")):
+        kwargs["max_completion_tokens"] = MAX_TOKENS
+    else:
+        kwargs["max_tokens"] = MAX_TOKENS
     if api_style == "responses":
         response = client.responses.create(model=deployment, instructions=system, input=user, max_output_tokens=MAX_TOKENS)
         return response.output_text or ""
-    response = client.chat.completions.create(model=deployment, messages=_messages(system, user), temperature=0.2, max_tokens=MAX_TOKENS)
+    response = client.chat.completions.create(messages=_messages(system, user), **kwargs)
     return response.choices[0].message.content or ""
 
 

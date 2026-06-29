@@ -1,27 +1,37 @@
-.Ds_Store
+# --- Environment & secrets ---
 .env
-data/
 credentials.json
 token.json
+
+# --- Python ---
 __pycache__/
 *.pyc
 .venv/
+*.sqlite3
+data/
+
+# --- Node.js / Frontend ---
 node_modules/
-.next/
-/deploy/
-/styles/
-/pages/
 frontend/node_modules/
+.next/
 frontend/.next/
 frontend/tsconfig.tsbuildinfo
+
+# --- IDE / Editor ---
+.DS_Store
 .qodo
-.streamlit/*
-deploy/*
-logs/*
-.cache/
-.pytest_cache/
-*.sqlite3
-.opencode/*
-.claude/*
+.opencode/
+.claude/
+
+# --- Build / deploy output ---
+deploy/
+.streamlit/
+
+# --- Logs ---
 logs/
 *.log
+
+# --- Caches ---
+.cache/
+.pytest_cache/
+.pytest-tmp/

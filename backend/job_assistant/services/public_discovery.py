@@ -23,6 +23,7 @@ the database.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List
 from urllib.parse import urlencode
 
@@ -100,6 +101,29 @@ def _dedupe(opportunities: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
             seen_fuzzy.append((title, company))
         unique.append(opportunity)
     return unique
+
+
+def _freshness_filter(
+    opportunities: List[Dict[str, Any]],
+    max_age_days: int | None,
+) -> List[Dict[str, Any]]:
+    if max_age_days is None or max_age_days <= 0:
+        return opportunities
+    cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+    filtered: list[dict[str, Any]] = []
+    for item in opportunities:
+        date_str = item.get("date_received") or ""
+        if not date_str:
+            filtered.append(item)
+            continue
+        try:
+            item_date = datetime.strptime(str(date_str)[:10], "%Y-%m-%d")
+        except (ValueError, TypeError):
+            filtered.append(item)
+            continue
+        if item_date >= cutoff:
+            filtered.append(item)
+    return filtered
 
 
 def fetch_remotejobs(query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
@@ -357,6 +381,7 @@ def discover_public_opportunities(
     query: str = "",
     sources: Iterable[str] | None = None,
     limit_per_source: int = 20,
+    max_age_days: int | None = None,
 ) -> List[Dict[str, Any]]:
     selected = set(sources or ["RemoteJobs.org", "Arbeitnow", "Remotive", "Jobicy", "Hacker News Who is hiring", "RemoteOK", "The Muse"])
     found: list[dict[str, Any]] = []
@@ -374,4 +399,5 @@ def discover_public_opportunities(
         found.extend(fetch_remoteok(query=query, limit=limit_per_source))
     if "The Muse" in selected:
         found.extend(fetch_muse(query=query, limit=limit_per_source))
-    return _dedupe(found)
+    deduped = _dedupe(found)
+    return _freshness_filter(deduped, max_age_days)

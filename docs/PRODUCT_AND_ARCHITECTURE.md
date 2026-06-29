@@ -72,7 +72,7 @@ Concrete value: less context-switching, higher-signal targeting (scoring + learn
   1. **URL** — exact match on `job_url` (handles the same source listing revisited).
   2. **Content hash** — SHA-256 of `lowercase(strip(title + "|" + company + "|" + description))` — catches the same job posted on different boards with different URLs.
   3. **Title + company** — exact match on the normalized pair — catches re-posted jobs (same role, same employer, new URL and date).
-  All three checks are evaluated; a match on any one rejects the insertion. In-memory dedup within a single batch prevents importing the same item twice in one run. *Near-duplicate fuzzy matching (e.g. "Sr. Software Engineer" vs "Senior Software Engineer") is a known gap and is not yet implemented.*
+  All three checks are evaluated; a match on any one rejects the insertion. In-memory dedup within a single batch prevents importing the same item twice in one run. Fuzzy matching catches near-duplicates (e.g. "Sr. Software Engineer" vs "Senior Software Engineer") using `difflib.SequenceMatcher` with abbreviation expansion, token-level scoring, and a configurable threshold of 0.85.
 
 ### Scoring & matching
 - **Match scoring** of each opportunity against the selected profile — overall score plus component breakdown (skills, title, seniority, location, salary, industry, work authorization, deal-breakers).
@@ -106,7 +106,7 @@ Concrete value: less context-switching, higher-signal targeting (scoring + learn
 - **Resource sharing** across a workspace.
 - **Audit logs** of user actions (with IP/user-agent), **activity feed**, and **feedback/bug submission**.
 - **Compliance** — GDPR-style data export, deletion request/approval, retention policies.
-- **Observability** — Prometheus metrics, latency tracking, alerts; **automated SQLite backups** (with optional S3); **per-resource-type rate limiting** with sliding-window counters (Redis or MongoDB); **daily AI generation budget** with per-task-type cost breakdown.
+- **Observability** — Prometheus metrics, latency tracking, alerts; **automated MongoDB backups** (with optional S3); **per-resource-type rate limiting** with sliding-window counters (Redis or MongoDB); **daily AI generation budget** with per-task-type cost breakdown.
 - **Usage monitoring** — `GET /ai/usage` returns daily budget, today/week/month totals by task type, and 30-day daily history; rate-limit status endpoint `GET /rate-limits` with color-coded thresholds in the settings dashboard (`?tab=usage`).
 
 ---
@@ -120,7 +120,7 @@ Concrete value: less context-switching, higher-signal targeting (scoring + learn
 | **Email** | Gmail (OAuth) — ingest job-alert emails. |
 | **Email delivery** | SMTP — password reset & notifications. |
 | **Publishing** | Social platform targets (e.g. LinkedIn/Twitter) via the publishing engine. |
-| **Ops** | Sentry (error monitoring), Prometheus (metrics), S3 (optional backup storage), Redis (optional, for rate limiting; SQLite fallback otherwise). |
+| **Ops** | Sentry (error monitoring), Prometheus (metrics), S3 (optional backup storage), Redis (optional, for rate limiting; MongoDB fallback otherwise). |
 
 Provider credentials are stored **encrypted at rest** and never returned to the client — the UI only shows a "key saved" indicator.
 
@@ -164,7 +164,7 @@ The conversational **assistant** can drive steps 2–4 directly ("find me backen
 
 ---
 
-## 7. System architecture
+ ## 7. System architecture
 
 ### High-level
 
@@ -175,17 +175,17 @@ The conversational **assistant** can drive steps 2–4 directly ("find me backen
 │  React 19 · TS · Tailwind │ ◄───────────────────────────  │                                │
 │  TanStack Query · Zustand │      SSE (agent streaming)    │  Routers → Services → DB       │
 └──────────────────────────┘                               └───────────────┬───────────────┘
-                                                                            │
-        ┌──────────────────────────────┬───────────────────┬───────────────┼────────────────┐
+                                                                             │
+        ┌──────────────────────────────┬───────────────────┬───────────────┬────────────────┐
         ▼                              ▼                   ▼               ▼                ▼
  ┌─────────────┐              ┌────────────────┐   ┌──────────────┐ ┌────────────┐  ┌──────────────┐
- │ AI Orchestr.│              │ Discovery /    │   │  Scheduler / │ │  SQLite    │  │ Observability│
- │ + providers │              │ scrapers /     │   │  worker queue│ │ (data +    │  │ metrics /    │
- │ (multi-LLM) │              │ Gmail ingest   │   │  / followups │ │  queue)    │  │ alerts /     │
+ │ AI Orchestr.│              │ Discovery /    │   │  Scheduler / │ │  MongoDB   │  │ Observability│
+ │ + providers │              │ scrapers /     │   │  worker queue│ │ (all data) │  │ metrics /    │
+ │ (multi-LLM) │              │ Gmail ingest   │   │  / followups │ │            │  │ alerts /     │
  └──────┬──────┘              └────────────────┘   └──────────────┘ └────────────┘  │ backups      │
-        ▼                                                                            └──────────────┘
- OpenAI · Azure · Claude · Gemini · HF · Ollama · local fallback
-```
+         ▼                                                                            └──────────────┘
+  OpenAI · Azure · Claude · Gemini · HF · Ollama · local fallback
+ ```
 
 ### Backend (FastAPI)
 
@@ -199,7 +199,7 @@ The conversational **assistant** can drive steps 2–4 directly ("find me backen
   - `resume_builder` — renders structured resumes to DOCX per country template.
   - `job_context` — keyword/focus-area extraction used to ground AI prompts.
   - `public_discovery`, `job_source_scrapers`, `rapidapi_linkedin`, `apify_integration`, `job_import`, `opportunity_classifier`, `gmail_ingest` — the discovery pipeline.
-- **Cross-cutting modules**: `automation_engine`, `publishing_engine`, `scheduler` (APScheduler), `followups`, `worker_queue` (SQLite-backed), `rate_limits` (Redis or SQLite), `compliance`, `backup`, `observability`, `provider_registry`, `auth` (PBKDF2 + JWT sessions), `crypto` (encrypts stored secrets), `email_delivery`, `config`, `runtime`.
+- **Cross-cutting modules**: `automation_engine`, `publishing_engine`, `scheduler` (APScheduler), `followups`, `worker_queue` (MongoDB-backed), `rate_limits` (Redis or MongoDB), `compliance`, `backup`, `observability`, `provider_registry`, `auth` (PBKDF2 + JWT sessions), `crypto` (encrypts stored secrets), `email_delivery`, `config`, `runtime`.
 
 ### Frontend (Next.js)
 
@@ -224,25 +224,18 @@ Every AI feature (scoring, extraction, tailoring, resume building, interview pre
 
 ---
 
-## 8. Data model (SQLite + MongoDB)
+## 8. Data model (MongoDB)
 
-**SQLite** stores core business data. **MongoDB** stores high-volume/transient data for the AI assistant, usage monitoring, and rate limiting.
+MongoDB is the sole datastore. All collections are in the configured database (default: `career_assistant`).
 
-### SQLite tables
+### MongoDB collections
 
 - **Identity & tenancy**: `users`, `user_sessions`, `password_reset_tokens`, `organizations`, `workspaces`, `workspace_members`, `roles`, `permissions`, `role_permissions`, `shared_resources`.
 - **Career data**: `profile` (multiple per user, one default), `jobs` (workspace-scoped, unique per user+workspace+url), `evaluations` (scores), `application_materials`, `applications` (status), `reminders`, `resume_reviews`, `interview_prep_sessions`, `recordings`.
 - **Integrations & AI**: `integration_settings` (encrypted), `provider_configs`, `gmail_messages`, `prompt_versions`.
 - **Automation & publishing**: `automation_rules`, `automation_runs`, `automation_errors`, `automation_preferences`, `posts`, `post_targets`.
 - **Governance & ops**: `audit_logs`, `activity_events`, `feedback`, `system_metrics`, `alert_events`, `worker_jobs`, `compliance_exports`, `schema_migrations`.
-
-### MongoDB collections
-
-- `ai_generations` — every AI call logged with provider, model, tokens, latency, status, estimated cost, and task type.
-- `agent_memory` — per-user key-value facts that the agent remembers across sessions; unique index on `(user_id, key)`, max 50 per user.
-- `usage_counters` — sliding-window counters for per-resource-type rate limiting.
-- `conversations` — chat conversation metadata (title, state, timestamps).
-- `conversation_messages` — individual chat turns with role, content, sections, feedback.
+- **AI & agent**: `ai_generations`, `agent_memory`, `conversations`, `conversation_messages`, `usage_counters`.
 
 > The data layer ships with **incremental, idempotent migrations** (e.g. the single-profile → multi-profile migration preserves existing data and marks it the default).
 
@@ -260,7 +253,7 @@ Every AI feature (scoring, extraction, tailoring, resume building, interview pre
 
 ## 10. Technology stack
 
-**Backend**: Python · FastAPI · SQLite · MongoDB (PyMongo) · APScheduler · python-jose (JWT) · pypdf + python-docx · OpenAI/Azure/Anthropic/Gemini/Hugging Face/LangChain SDKs · Prometheus client · Sentry · (optional Redis, S3).
+**Backend**: Python · FastAPI · MongoDB (PyMongo) · APScheduler · python-jose (JWT) · pypdf + python-docx · OpenAI/Azure/Anthropic/Gemini/Hugging Face/LangChain SDKs · Prometheus client · Sentry · (optional Redis, S3).
 
 **Frontend**: Next.js 15 (App Router) · React 19 · TypeScript 5 · TanStack Query 5 · Zustand 5 · Axios · Tailwind CSS 3 · Recharts · React Hook Form + Zod · Radix UI · lucide-react · sonner · next-themes.
 
@@ -283,7 +276,7 @@ Every AI feature (scoring, extraction, tailoring, resume building, interview pre
 
 ## 12. Notes & current limitations
 
-- Default datastore is **SQLite** (a Postgres migration path exists via `scripts/sqlite_to_postgres.py`).
+- Default datastore is **MongoDB** (no SQLite anywhere in the stack).
 - `linkedin_integration` is a placeholder for a future official SDK; LinkedIn discovery today goes through **RapidAPI** / Apify.
 - Azure reasoning/codex deployments (e.g. `gpt-5.x`, `*-codex`, o-series) require the **Responses API** — this is auto-detected by deployment name.
 - AI quality depends on the configured provider; with no provider, features fall back to local heuristics (simpler, but functional).

@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = _bool_env("SCHEDULER_ENABLED", True)
     rate_limits_enabled: bool = _bool_env("RATE_LIMITS_ENABLED", True)
 
+    discovery_freshness_days: int = int(os.getenv("DISCOVERY_FRESHNESS_DAYS", "30"))
+
     # Automated database backups (runs on its own scheduler, independent of SCHEDULER_ENABLED).
     backup_enabled: bool = _bool_env("BACKUP_ENABLED", False)
     backup_dir: str = os.getenv("BACKUP_DIR", str(Path(os.getenv("APP_DATA_DIR", "data")) / "backups"))
@@ -95,7 +97,7 @@ class Settings(BaseSettings):
     worker_max_attempts: int = int(os.getenv("WORKER_MAX_ATTEMPTS", "3"))
 
     publishing_require_approval: bool = _bool_env("PUBLISHING_REQUIRE_APPROVAL", True)
-    publishing_dry_run: bool = _bool_env("PUBLISHING_DRY_RUN", True)
+    publishing_dry_run: bool = _bool_env("PUBLISHING_DRY_RUN", False)
 
     audit_retention_days: int = int(os.getenv("AUDIT_RETENTION_DAYS", "365"))
     export_retention_days: int = int(os.getenv("EXPORT_RETENTION_DAYS", "7"))
@@ -129,6 +131,24 @@ class Settings(BaseSettings):
 
     cors_origins: str = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001")
     cors_allow_credentials: bool = _bool_env("CORS_ALLOW_CREDENTIALS", True)
+
+    # Security headers
+    security_headers_enabled: bool = _bool_env("SECURITY_HEADERS_ENABLED", True)
+    hsts_max_age: int = int(os.getenv("HSTS_MAX_AGE", "31536000" if os.getenv("ENVIRONMENT") == "prod" else "0"))
+    content_security_policy: str = os.getenv(
+        "CONTENT_SECURITY_POLICY",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+    )
+
+    # CSRF protection
+    csrf_enabled: bool = _bool_env("CSRF_ENABLED", True)
+    csrf_exempt_paths: str = os.getenv("CSRF_EXEMPT_PATHS", "/api/v1/auth/login,/api/v1/auth/register,/api/v1/auth/refresh,/api/v1/health")
+
+    # Browser automation (Playwright)
+    browser_headless: bool = _bool_env("BROWSER_HEADLESS", True)
+    browser_screenshot_dir: str = os.getenv("BROWSER_SCREENSHOT_DIR", str(Path(os.getenv("APP_DATA_DIR", "data")) / "screenshots"))
+    easy_apply_dry_run: bool = _bool_env("EASY_APPLY_DRY_RUN", True)
+    easy_apply_max_per_session: int = int(os.getenv("EASY_APPLY_MAX_PER_SESSION", "10"))
 
     model_config = ConfigDict(
         case_sensitive=False,

@@ -104,6 +104,18 @@ export const opportunityService = {
   gmailAuthUrl: async () => (await apiClient.get<{ url: string }>("/gmail/auth-url")).data,
   gmailDisconnect: async () => (await apiClient.post("/gmail/disconnect")).data,
   gmailMessages: () => getJson<{ id: string; from?: string; subject?: string; snippet?: string; received_at?: string }[]>("/gmail/messages"),
+  linkedinStatus: () => getJson<{ connected: boolean; configured?: boolean; status: string; connected_name?: string; connected_email?: string; author_urn?: string }>("/linkedin/status"),
+  linkedinAuthUrl: async () => (await apiClient.get<{ url: string }>("/linkedin/auth-url")).data,
+  linkedinDisconnect: async () => (await apiClient.post("/linkedin/disconnect")).data,
+  linkedinSearchJobs: async (payload: { title_filter: string; location_filter?: string; offset?: number; count?: number; workspace_id?: number }) =>
+    (await apiClient.post<{ status: string; opportunities: Opportunity[]; raw_count: number }>("/linkedin/jobs/search", payload)).data,
+  linkedinCookiesStatus: () => getJson<{ has_cookies: boolean }>("/linkedin/cookies-status"),
+  linkedinSaveCookies: async (payload: { li_at: string; jsessionid?: string }) =>
+    (await apiClient.post<{ status: string; has_cookies: boolean }>("/linkedin/cookies", payload)).data,
+  linkedinEasyApply: async (payload: { job_url: string; dry_run?: boolean }) =>
+    (await apiClient.post<{ status: string; result: Record<string, unknown> }>("/linkedin/easy-apply", payload)).data,
+  linkedinBulkEasyApply: async (payload: { job_ids: number[]; dry_run?: boolean }) =>
+    (await apiClient.post<{ status: string; results: Record<string, unknown>[]; dry_run: boolean }>("/linkedin/bulk-easy-apply", payload)).data,
   updateStatus: async (id: number, status: string, notes = "") =>
     (await apiClient.patch(`/jobs/${id}/status`, undefined, { params: { status, notes } })).data,
   reminders: () => getJson<Reminder[]>("/reminders"),
@@ -118,8 +130,9 @@ export const opportunityService = {
     location: string;
     keywords: string;
     country?: string;
+    max_age_days?: number;
   }) => (await apiClient.post<{ status: string; opportunities: Opportunity[] }>("/discovery/public", payload)).data,
-  discoverFromProfile: async (payload: { sources?: string[]; limit_per_source?: number; save_results?: boolean; score_results?: boolean } = {}) =>
+  discoverFromProfile: async (payload: { sources?: string[]; limit_per_source?: number; save_results?: boolean; score_results?: boolean; max_age_days?: number } = {}) =>
     (await apiClient.post<ProfileJobDiscoveryResult>("/discovery/from-profile", payload)).data,
   discoverRapidApiLinkedIn: async (payload: { title_filter: string; location_filter: string; offset: number; workspace_id?: number }) =>
     (await apiClient.post<{ status: string; opportunities: Opportunity[]; raw_count: number }>("/discovery/rapidapi-linkedin", payload)).data,

@@ -515,10 +515,12 @@ function PublicDiscoveryView() {
   const [opportunityType, setOpportunityType] = useState("auto");
   const [sources, setSources] = useState<string[]>(PUBLIC_SOURCES);
   const [limit, setLimit] = useState(20);
+  const [maxAgeDays, setMaxAgeDays] = useState(0);
   const [results, setResults] = useState<Opportunity[]>([]);
   const [profileResult, setProfileResult] = useState<ProfileJobDiscoveryResult | null>(null);
+  const freshness = maxAgeDays || undefined;
   const discover = useMutation({
-    mutationFn: () => opportunityService.discoverPublic({ query, keywords, location, country, remote_type: remoteType, opportunity_type: opportunityType, sources, limit_per_source: limit }),
+    mutationFn: () => opportunityService.discoverPublic({ query, keywords, location, country, remote_type: remoteType, opportunity_type: opportunityType, sources, limit_per_source: limit, max_age_days: freshness }),
     onSuccess: (data) => {
       setResults(data.opportunities);
       setProfileResult(null);
@@ -527,7 +529,7 @@ function PublicDiscoveryView() {
     onError: (error) => toast.error(error.message),
   });
   const profileDiscover = useMutation({
-    mutationFn: () => opportunityService.discoverFromProfile({ sources, limit_per_source: limit, score_results: true }),
+    mutationFn: () => opportunityService.discoverFromProfile({ sources, limit_per_source: limit, score_results: true, max_age_days: freshness }),
     onSuccess: (data) => {
       setResults(data.opportunities);
       setProfileResult(data);
@@ -561,6 +563,14 @@ function PublicDiscoveryView() {
         <select className="h-10 rounded-md border bg-background/70 px-3 text-sm" value={opportunityType} onChange={(e) => setOpportunityType(e.target.value)}>{OPPORTUNITY_TYPES.map((item) => <option key={item} value={item}>{item}</option>)}</select>
         <select className="h-10 rounded-md border bg-background/70 px-3 text-sm" value={remoteType} onChange={(e) => setRemoteType(e.target.value)}><option value="all">All work modes</option><option value="remote">Remote</option><option value="hybrid">Hybrid</option><option value="onsite">On-site</option></select>
         <Input type="number" min={1} max={50} value={limit} onChange={(e) => setLimit(Number(e.target.value || 20))} />
+        <select className="h-10 rounded-md border bg-background/70 px-3 text-sm" value={maxAgeDays} onChange={(e) => setMaxAgeDays(Number(e.target.value))}>
+          <option value={0}>Any age</option>
+          <option value={7}>Past 7 days</option>
+          <option value={14}>Past 14 days</option>
+          <option value={30}>Past 30 days</option>
+          <option value={60}>Past 60 days</option>
+          <option value={90}>Past 90 days</option>
+        </select>
         <div className="flex flex-wrap gap-2 md:col-span-3">{PUBLIC_SOURCES.map((item) => <button key={item} type="button" className={`rounded-md border px-3 py-1.5 text-sm ${sources.includes(item) ? "glass-subtle text-foreground" : "text-muted-foreground"}`} onClick={() => toggleSource(item)}>{item}</button>)}</div>
         <div className="flex flex-wrap gap-2 md:col-span-3">
           <Button disabled={!sources.length || discover.isPending || profileDiscover.isPending} onClick={() => discover.mutate()}><Search className="h-4 w-4" /> Fetch jobs</Button>

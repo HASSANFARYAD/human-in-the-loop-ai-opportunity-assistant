@@ -29,6 +29,7 @@ from job_assistant.services.rapidapi_linkedin import (
     rapidapi_items_to_opportunities,
     search_linkedin_jobs,
 )
+from job_assistant.services.linkedin_integration import search_linkedin_jobs_official
 from job_assistant.services.scoring import score_job
 
 logger = logging.getLogger(__name__)
@@ -73,12 +74,22 @@ class JobAssistantScheduler:
             max_instances=1,
         )
 
-        # Pull LinkedIn jobs from the configured API on the user's preferred interval
+        # Pull LinkedIn jobs from RapidAPI on the user's preferred interval
         self.scheduler.add_job(
             self._check_linkedin_api,
             trigger=IntervalTrigger(hours=linkedin_hours),
             id="linkedin_api_check",
-            name="Check LinkedIn jobs API",
+            name="Check RapidAPI LinkedIn jobs",
+            replace_existing=True,
+            max_instances=1,
+        )
+
+        # Pull LinkedIn jobs from the official LinkedIn API on the user's preferred interval
+        self.scheduler.add_job(
+            self._check_linkedin_official_api,
+            trigger=IntervalTrigger(hours=linkedin_hours),
+            id="linkedin_official_api_check",
+            name="Check official LinkedIn Jobs API",
             replace_existing=True,
             max_instances=1,
         )
@@ -257,6 +268,51 @@ class JobAssistantScheduler:
         except Exception as e:
             add_activity_event(self.user_id, "LinkedIn API import failed", str(e), level="error")
             logger.error(f"LinkedIn API import failed: {e}")
+
+
+    def _check_linkedin_official_api(self):
+        try:
+            prefs = get_automation_preferences(self.user_id)
+            if not prefs.get("enabled") or not prefs.get("linkedin_api_enabled"):
+                logger.info("LinkedIn Official API automation disabled")
+                return
+
+            from job_assistant.services.linkedin_integration import _credentials_for_user as _li_creds
+            try:
+                credentials = _li_creds(self.user_id)
+            except RuntimeError:
+                return
+            access_token = credentials.get("access_token", "")
+            if not access_token:
+                return
+
+            profile = get_profile(self.user_id) or {}
+            title_filter = profile.get("target_roles") or profile.get("skills") or "software engineer"
+            location_filter = profile.get("locations") or "Remote"
+
+            items = search_linkedin_jobs_official(access_token, title_filter, location_filter, 0, 25)
+            imported = 0
+            for item in items:
+                self._process_new_opportunity(item)
+                imported += 1
+
+            if imported:
+                add_activity_event(
+                    self.user_id,
+                    "LinkedIn Official API import complete",
+                    f"Imported {imported} opportunities for '{title_filter}' in '{location_filter}'.",
+                )
+                logger.info("Imported %s from LinkedIn Official API", imported)
+        except RuntimeError as e:
+            if "Recruiter" in str(e) or "license" in str(e):
+                logger.info("LinkedIn Official Jobs API not available for this user: %s", e)
+            else:
+                add_activity_event(self.user_id, "LinkedIn Official API import failed", str(e)[:200], level="error")
+                logger.error("LinkedIn Official API import failed: %s", e)
+        except Exception as e:
+            add_activity_event(self.user_id, "LinkedIn Official API import failed", str(e)[:200], level="error")
+            logger.error("LinkedIn Official API import failed: %s", e)
+
 
     def _check_reminders(self):
         try:
