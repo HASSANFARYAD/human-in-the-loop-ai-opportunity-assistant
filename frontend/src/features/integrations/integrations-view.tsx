@@ -199,14 +199,7 @@ function ServiceForm({
   }
 
   if (service === "linkedin") {
-    return (
-      <div className="grid gap-4 md:grid-cols-2">
-        <Field label="LinkedIn OAuth access token"><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={selected?.has_api_key ? "Leave blank to keep saved token" : "Paste LinkedIn token"} /></Field>
-        <Field label="Author URN"><Input value={config.author_urn ?? ""} onChange={(event) => update("author_urn", event.target.value)} placeholder="urn:li:person:... or urn:li:organization:..." /></Field>
-        <Field label="LinkedIn API version"><Input value={config.linkedin_version ?? "202604"} onChange={(event) => update("linkedin_version", event.target.value)} /></Field>
-        <SaveButton disabled={saving || (!apiKey && !selected?.has_api_key)} onClick={() => onSave({ author_urn: config.author_urn || "", linkedin_version: config.linkedin_version || "202604" })} />
-      </div>
-    );
+    return <LinkedinForm selected={selected} form={form} onSave={onSave} saving={saving} />;
   }
 
   if (service === "rapidapi_linkedin") {
@@ -271,6 +264,36 @@ function GmailForm({ selected, form, onSave, saving }: { selected?: Integration;
         <Badge>{status.data?.connected ? `connected${status.data.connected_email ? `: ${status.data.connected_email}` : ""}` : status.data?.status ?? "not connected"}</Badge>
         <Button variant="outline" disabled={connect.isPending || !status.data?.configured} onClick={() => connect.mutate()}><Mail className="h-4 w-4" /> Connect Gmail</Button>
         <Button variant="destructive" disabled={disconnect.isPending || !status.data?.connected} onClick={() => disconnect.mutate()}>Disconnect Gmail</Button>
+      </div>
+    </div>
+  );
+}
+
+function LinkedinForm({ selected, form, onSave, saving }: { selected?: Integration; form: IntegrationFormState; onSave: (config: Record<string, unknown>) => void; saving: boolean }) {
+  const { apiKey, setApiKey, config, setConfig } = form;
+  const update = (key: string, value: string) => setConfig((current) => ({ ...current, [key]: value }));
+  const status = useQuery({ queryKey: ["linkedin-status"], queryFn: () => opportunityService.linkedinStatus() });
+  const connect = useMutation({
+    mutationFn: () => opportunityService.linkedinAuthUrl(),
+    onSuccess: (data) => { window.location.href = data.url; },
+    onError: (error) => toast.error(error.message),
+  });
+  const disconnect = useMutation({
+    mutationFn: () => opportunityService.linkedinDisconnect(),
+    onSuccess: () => { toast.success("LinkedIn disconnected"); status.refetch(); },
+    onError: (error) => toast.error(error.message),
+  });
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
+      <Field label="LinkedIn client ID"><Input value={config.client_id ?? ""} onChange={(event) => update("client_id", event.target.value)} /></Field>
+      <Field label="LinkedIn client secret"><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={selected?.has_api_key ? "Leave blank to keep saved secret" : "Paste client secret"} /></Field>
+      <Field label="Redirect URI"><Input value={config.redirect_uri ?? ""} onChange={(event) => update("redirect_uri", event.target.value)} placeholder="http://localhost:8000/api/v1/linkedin/oauth/callback" /></Field>
+      <Field label="LinkedIn API version"><Input value={config.linkedin_version ?? "202604"} onChange={(event) => update("linkedin_version", event.target.value)} /></Field>
+      <SaveButton disabled={saving || (!apiKey && !selected?.has_api_key)} onClick={() => onSave({ client_id: config.client_id || "", redirect_uri: config.redirect_uri || "", linkedin_version: config.linkedin_version || "202604" })} />
+      <div className="flex flex-wrap items-end gap-3">
+        <Badge>{status.data?.connected ? `connected${status.data.connected_name ? `: ${status.data.connected_name}` : ""}` : status.data?.status ?? "not connected"}</Badge>
+        <Button variant="outline" disabled={connect.isPending || !status.data?.configured} onClick={() => connect.mutate()}><KeyRound className="h-4 w-4" /> Connect LinkedIn</Button>
+        <Button variant="destructive" disabled={disconnect.isPending || !status.data?.connected} onClick={() => disconnect.mutate()}>Disconnect LinkedIn</Button>
       </div>
     </div>
   );

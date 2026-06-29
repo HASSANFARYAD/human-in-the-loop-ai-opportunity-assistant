@@ -14,6 +14,7 @@ from job_assistant.routes.feedback import router as feedback_router
 from job_assistant.routes.publishing import router as publishing_router
 from job_assistant.routes.compliance import router as compliance_router
 from job_assistant.routes.monitoring import router as monitoring_router
+from job_assistant.routes.linkedin import router as linkedin_router
 
 all_routers = [
     health_router,
@@ -32,4 +33,5 @@ all_routers = [
     publishing_router,
     compliance_router,
     monitoring_router,
+    linkedin_router,
 ]

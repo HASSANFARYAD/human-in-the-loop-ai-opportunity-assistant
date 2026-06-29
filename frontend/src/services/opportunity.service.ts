@@ -104,6 +104,11 @@ export const opportunityService = {
   gmailAuthUrl: async () => (await apiClient.get<{ url: string }>("/gmail/auth-url")).data,
   gmailDisconnect: async () => (await apiClient.post("/gmail/disconnect")).data,
   gmailMessages: () => getJson<{ id: string; from?: string; subject?: string; snippet?: string; received_at?: string }[]>("/gmail/messages"),
+  linkedinStatus: () => getJson<{ connected: boolean; configured?: boolean; status: string; connected_name?: string; connected_email?: string; author_urn?: string }>("/linkedin/status"),
+  linkedinAuthUrl: async () => (await apiClient.get<{ url: string }>("/linkedin/auth-url")).data,
+  linkedinDisconnect: async () => (await apiClient.post("/linkedin/disconnect")).data,
+  linkedinSearchJobs: async (payload: { title_filter: string; location_filter?: string; offset?: number; count?: number; workspace_id?: number }) =>
+    (await apiClient.post<{ status: string; opportunities: Opportunity[]; raw_count: number }>("/linkedin/jobs/search", payload)).data,
   updateStatus: async (id: number, status: string, notes = "") =>
     (await apiClient.patch(`/jobs/${id}/status`, undefined, { params: { status, notes } })).data,
   reminders: () => getJson<Reminder[]>("/reminders"),
