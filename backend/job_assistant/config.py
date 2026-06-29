@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     worker_max_attempts: int = int(os.getenv("WORKER_MAX_ATTEMPTS", "3"))
 
     publishing_require_approval: bool = _bool_env("PUBLISHING_REQUIRE_APPROVAL", True)
-    publishing_dry_run: bool = _bool_env("PUBLISHING_DRY_RUN", True)
+    publishing_dry_run: bool = _bool_env("PUBLISHING_DRY_RUN", False)
 
     audit_retention_days: int = int(os.getenv("AUDIT_RETENTION_DAYS", "365"))
     export_retention_days: int = int(os.getenv("EXPORT_RETENTION_DAYS", "7"))

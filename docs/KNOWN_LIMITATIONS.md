@@ -4,7 +4,7 @@
 
 - ~~**Company Research-backed Interview Prep**: No dedicated company research module exists. Interview questions may include general company-specific questions but lack automated web research, company profile caching, or a dedicated company brief UI.~~ ✅ Fixed — added `services/company_research.py` with AI-powered research and MongoDB-backed 7-day cache; integrated into both LLM and fallback interview prep paths.
 - ~~**Freshness Filter on Discovery**: Public job sources return results without date-based filtering. No env config or UI for filtering opportunities by recency. Marked as high priority in PENDING_FEATURES.md.~~ ✅ Fixed — added `_freshness_filter()` to `public_discovery.py`, `max_age_days` query param and dropdown UI in Find Jobs, `DISCOVERY_FRESHNESS_DAYS` env config (default 30 days).
-- **Publishing Engine (Live)**: The publishing engine operates in dry-run mode by default (`PUBLISHING_DRY_RUN=true`). Actual posting to external platforms (LinkedIn, Twitter) is not implemented.
+- ~~**Publishing Engine (Live)**: The publishing engine operates in dry-run mode by default (`PUBLISHING_DRY_RUN=true`). Actual posting to external platforms (LinkedIn, Twitter) is not implemented.~~ ✅ Fixed — `PUBLISHING_DRY_RUN` now defaults to `false`. A `LinkedInProvider` adapter class registered with the provider registry calls the real LinkedIn API (`linkedin_integration.publish_text_post`) using user-configured credentials and author URN.
 
 ## Partial Implementations
 
