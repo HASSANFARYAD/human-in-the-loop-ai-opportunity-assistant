@@ -8,7 +8,7 @@
 ## Medium Priority
 
 3. **Publishing engine live execution** — draft, approval, and target validation work but `publish` is dry-run by default (`PUBLISHING_DRY_RUN=true`). No live social platform publishing.
-4. **Fuzzy dedup for near-duplicate job titles** — exact title+company matching misses "Sr. Software Engineer" vs "Senior Software Engineer". No Levenshtein/similarity scoring in the dedup pipeline.
+4. ~~**Fuzzy dedup for near-duplicate job titles** — exact title+company matching misses "Sr. Software Engineer" vs "Senior Software Engineer". No Levenshtein/similarity scoring in the dedup pipeline.~~ ✅ Fixed — `_fuzzy_match_title_company` uses `difflib.SequenceMatcher` with abbreviation expansion, token-level matching, and configurable threshold (0.85). Expanded `COMMON_ABBREVIATIONS` with 40+ tech/role shorthands. Added `normalized_title`/`normalized_company` fields to DB, compound index, and token-pruned lookup in `job_exists` to avoid loading all records.
 5. **Rate limiter Redis backend** — MongoDB-based rate limiting works for single-instance deploys but lacks atomicity guarantees under high concurrency. Redis backend is optional and untested.
 
 ## Low Priority

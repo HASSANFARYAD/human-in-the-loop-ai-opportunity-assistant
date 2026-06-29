@@ -96,6 +96,7 @@ def _ensure_indexes() -> None:
     coll.jobs.create_index([("user_id", pymongo.ASCENDING), ("workspace_id", pymongo.ASCENDING), ("url", pymongo.ASCENDING)], unique=True)
     coll.jobs.create_index("user_id")
     coll.jobs.create_index("workspace_id")
+    coll.jobs.create_index([("user_id", pymongo.ASCENDING), ("workspace_id", pymongo.ASCENDING), ("normalized_title", pymongo.ASCENDING)])
     coll.evaluations.create_index("job_id", unique=True)
     coll.application_materials.create_index("job_id", unique=True)
     coll.applications.create_index("job_id", unique=True)

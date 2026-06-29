@@ -51,12 +51,16 @@ def insert_job(job: Dict[str, Any], user_id: int = 1, workspace_id: int | None =
         classification = "unknown"
 
     scoped_workspace_id, organization_id = _workspace_scope_for_user(user_id, workspace_id)
+    raw_title = job.get("title") or "Untitled role"
+    raw_company = job.get("company", "")
     payload = {
-        "title": job.get("title") or "Untitled role",
+        "title": raw_title,
+        "normalized_title": _normalize_for_fuzzy(raw_title),
+        "normalized_company": _normalize_for_fuzzy(raw_company) if raw_company else "",
         "user_id": user_id,
         "workspace_id": scoped_workspace_id,
         "organization_id": organization_id,
-        "company": job.get("company", ""),
+        "company": raw_company,
         "location": job.get("location", ""),
         "remote_type": job.get("remote_type", ""),
         "url": job.get("url") or None,
@@ -139,6 +143,31 @@ COMMON_ABBREVIATIONS = {
     "admin": "administrator",
     "sys": "system",
     "temp": "temporary",
+    "swe": "softwareengineer",
+    "sde": "softwaredevelopmentengineer",
+    "fe": "frontend",
+    "be": "backend",
+    "ds": "datascientist",
+    "da": "dataanalyst",
+    "de": "dataengineer",
+    "ml": "machinelearning",
+    "mlops": "machinelearningoperations",
+    "pm": "productmanager",
+    "tpm": "technicalprogrammanager",
+    "po": "productowner",
+    "ba": "businessanalyst",
+    "ux": "userexperience",
+    "ui": "userinterface",
+    "qa": "qualityassurance",
+    "sd": "softwaredesign",
+    "tl": "techlead",
+    "ic": "individualcontributor",
+    "arch": "architect",
+    "infra": "infrastructure",
+    "sec": "security",
+    "re": "researchengineer",
+    "pr": "pullrequest",
+    "api": "applicationprogramminginterface",
 }
 
 
@@ -200,13 +229,21 @@ def job_exists(job: dict[str, Any], user_id: int = 1, workspace_id: int | None =
     if exact:
         return True
     if title and company:
-        existing = list(get_collection("jobs").find(
-            {"user_id": user_id, "workspace_id": scoped_workspace_id},
-            {"title": 1, "company": 1},
-        ))
+        norm_title = _normalize_for_fuzzy(title)
+        norm_company = _normalize_for_fuzzy(company)
+        tokens = norm_title.split()
+        if tokens:
+            token_queries = [{"normalized_title": {"$regex": t, "$options": "i"}} for t in tokens[:5]]
+            candidates = get_collection("jobs").find(
+                {"user_id": user_id, "workspace_id": scoped_workspace_id, "$or": token_queries},
+                {"title": 1, "company": 1},
+            ).limit(100)
+            candidates_list = list(candidates)
+        else:
+            candidates_list = []
         existing_pairs = [
             (str(e.get("title") or "").strip(), str(e.get("company") or "").strip())
-            for e in existing
+            for e in candidates_list
             if e.get("title") and e.get("company")
         ]
         if _fuzzy_match_title_company(title, company, existing_pairs):
