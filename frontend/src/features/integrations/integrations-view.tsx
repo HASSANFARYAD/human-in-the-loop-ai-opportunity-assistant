@@ -319,7 +319,7 @@ function LinkedinForm({ selected, form, onSave, saving }: { selected?: Integrati
       </div>
       <div className="rounded-lg border p-4 space-y-4">
         <h3 className="font-medium text-sm text-muted-foreground uppercase tracking-wide">Browser Automation — Easy Apply</h3>
-        <p className="text-xs text-muted-foreground">Paste your LinkedIn <code className="text-xs bg-muted px-1 py-0.5 rounded">li_at</code> and <code className="text-xs bg-muted px-1 py-0.5 rounded">JSESSIONID</code> cookies so the system can auto-fill and submit Easy Apply forms. Extract them from your browser's developer tools (Application → Cookies → linkedin.com).</p>
+        <p className="text-xs text-muted-foreground">Paste your LinkedIn <code className="text-xs bg-muted px-1 py-0.5 rounded">li_at</code> and <code className="text-xs bg-muted px-1 py-0.5 rounded">JSESSIONID</code> cookies so the system can auto-fill and submit Easy Apply forms. Extract them from your browser&apos;s developer tools (Application → Cookies → linkedin.com).</p>
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="li_at cookie"><Input type="password" value={liAt} onChange={(event) => setLiAt(event.target.value)} placeholder="Paste li_at cookie value" /></Field>
           <Field label="JSESSIONID (optional)"><Input value={jsessionId} onChange={(event) => setJsessionId(event.target.value)} placeholder="Paste JSESSIONID value" /></Field>
