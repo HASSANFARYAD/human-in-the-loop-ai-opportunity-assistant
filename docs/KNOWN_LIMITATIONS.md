@@ -29,8 +29,8 @@
 
 ## Security Limitations
 
-- **No CSRF protection**: API endpoints accept cookies without CSRF tokens. Session cookies are scoped to `/api/v1/auth` to mitigate.
-- **No security headers in response**: No `Content-Security-Policy`, `X-Frame-Options`, or `Strict-Transport-Security` headers.
+- ~~**No CSRF protection**: API endpoints accept cookies without CSRF tokens. Session cookies are scoped to `/api/v1/auth` to mitigate.~~ ✅ Fixed — added Origin/Referer header validation via `setup_csrf_protection()` in `security.py`, with configurable exempt paths (`CSRF_EXEMPT_PATHS`), toggled by `CSRF_ENABLED`.
+- ~~**No security headers in response**: No `Content-Security-Policy`, `X-Frame-Options`, or `Strict-Transport-Security` headers.~~ ✅ Fixed — `SecurityHeadersMiddleware` in `security.py` sets `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `Strict-Transport-Security` (HSTS), and `Content-Security-Policy`, toggled by `SECURITY_HEADERS_ENABLED`.
 - **No brute-force protection on login**: Rate limiting applies per-IP but no exponential backoff or account lockout on failed login attempts.
 - **No audit of admin actions**: Admin configuration changes are not separately audited.
 - **No role elevation validation**: No MFA or additional verification for role changes.
