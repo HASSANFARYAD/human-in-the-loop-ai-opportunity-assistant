@@ -32,6 +32,7 @@ from job_assistant.db import (
     update_status,
 )
 from job_assistant.services.generation import generate_materials
+from job_assistant.services.company_research import build_company_context
 from job_assistant.services.job_context import build_job_context, choose_primary_focus_area, extract_profile_skills
 from job_assistant.services.opportunity_classifier import (
     annotate_opportunity,
@@ -222,12 +223,16 @@ def _generate_interview_prep(profile: dict[str, Any], job: dict[str, Any], evalu
     third_focus = other_focuses[1] if len(other_focuses) > 1 else primary_focus
     skill_line = ", ".join(skills[:4] or context["keywords"][:4] or ["your stack"])
     highlight_line = highlights[0] if highlights else f"the requirements for {role}"
+    company_context = build_company_context(company)
+    company_brief = company_context or ""
     return {
         "summary": f"Interview preparation for {role} at {company}.",
+        "company_research_brief": company_brief,
         "behavioral_questions": [
             f"Tell me about a time you delivered {primary_focus.lower()} under a tight timeline.",
             f"Describe a situation where you had to balance {secondary_focus.lower()} with quality or stakeholder expectations.",
             f"Give an example of improving a process or system similar to the work described in this posting.",
+            f"How does your experience align with {company}'s culture or industry?" if company_brief else "",
         ],
         "technical_questions": [
             f"Walk through how your skills in {skill_line} apply to {primary_focus.lower()} for this role.",
@@ -274,6 +279,7 @@ def _generate_interview_prep(profile: dict[str, Any], job: dict[str, Any], evalu
             "What would success look like in the first 90 days?",
             f"Which team priorities are driving this opening at {company}?",
         ],
+        "company_research_brief": company_brief,
         "generation_source": "local_fallback",
     }
 
@@ -309,14 +315,17 @@ def _llm_interview_prep(profile: dict[str, Any], job: dict[str, Any], evaluation
     fallback = _generate_interview_prep(profile, job, evaluation)
     latest_reviews = list_resume_reviews(user_id, job_id=int(job["id"]), limit=1)
     job_context = build_job_context(profile, job)
+    company_name = str(job.get("company") or "").strip()
+    company_context = build_company_context(company_name, user_id=user_id) if company_name else ""
     system = (
         "You are an expert interview coach. Return JSON only with keys: behavioral_questions, technical_questions, "
         "role_specific_questions, company_job_specific_questions, suggested_answer_outlines, star_format_guidance, "
-        "weakness_improvement_prompts, candidate_questions, final_preparation_checklist."
+        "weakness_improvement_prompts, candidate_questions, final_preparation_checklist, company_research_brief."
     )
     context = {
         "user_profile": profile, "resume_text": profile.get("cv_text") or "",
-        "selected_opportunity": job, "company_name": job.get("company"),
+        "selected_opportunity": job, "company_name": company_name,
+        "company_research": company_context,
         "role_title": job.get("title"), "job_description": job.get("description"),
         "required_skills": job.get("raw_text") or job.get("description"),
         "job_keywords": job_context["keywords"], "job_focus_areas": job_context["focus_areas"],
