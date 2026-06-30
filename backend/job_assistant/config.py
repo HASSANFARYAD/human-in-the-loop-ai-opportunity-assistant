@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     worker_poll_interval_seconds: int = int(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "5"))
     worker_max_attempts: int = int(os.getenv("WORKER_MAX_ATTEMPTS", "3"))
 
+    # Brute-force login protection
+    lockout_max_attempts: int = int(os.getenv("LOCKOUT_MAX_ATTEMPTS", "5"))
+    lockout_base_delay_minutes: int = int(os.getenv("LOCKOUT_BASE_DELAY_MINUTES", "1"))
+    lockout_max_minutes: int = int(os.getenv("LOCKOUT_MAX_MINUTES", "15"))
+
     publishing_require_approval: bool = _bool_env("PUBLISHING_REQUIRE_APPROVAL", True)
     publishing_dry_run: bool = _bool_env("PUBLISHING_DRY_RUN", False)
 

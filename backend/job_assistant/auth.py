@@ -18,6 +18,8 @@ from job_assistant.db import (
     get_user_by_email,
     get_user_by_session_token,
     get_password_reset_token,
+    increment_failed_login,
+    reset_failed_login,
     revoke_session_token,
     revoke_user_sessions,
     update_user_password,
@@ -93,16 +95,46 @@ def validate_password_policy(password: str, email: str = "") -> None:
         raise ValueError("Password must include at least three of: lowercase, uppercase, number, symbol")
 
 
+def _is_account_locked(user: dict[str, Any]) -> bool:
+    locked_until = user.get("locked_until")
+    if not locked_until:
+        return False
+    try:
+        return datetime.fromisoformat(locked_until) > datetime.now(timezone.utc)
+    except (ValueError, TypeError):
+        return False
+
+
+def _apply_lockout(user_id: int, attempts: int) -> None:
+    if attempts < settings.lockout_max_attempts:
+        return
+    over = attempts - settings.lockout_max_attempts
+    delay = min(settings.lockout_max_minutes, settings.lockout_base_delay_minutes * (2**over))
+    locked_until = (datetime.now(timezone.utc) + timedelta(minutes=delay)).isoformat(timespec="seconds")
+    from job_assistant.db.core import get_collection, utc_now
+    get_collection("users").update_one(
+        {"user_id": user_id},
+        {"$set": {"locked_until": locked_until, "updated_at": utc_now()}},
+    )
+
+
 def authenticate_user(email: str, password: str) -> dict[str, Any]:
     try:
         email = normalize_email(email)
     except ValueError:
         return {}
     user = get_user_by_email(email)
+    if user and _is_account_locked(user):
+        return {}
     if not user or not verify_password(password, user.get("password_hash", "")):
+        if user:
+            user_id = user["user_id"]
+            attempts = increment_failed_login(user_id)
+            _apply_lockout(user_id, attempts)
         return {}
     if not user.get("is_active"):
         return {}
+    reset_failed_login(user["user_id"])
     return user
 
 
