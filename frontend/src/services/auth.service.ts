@@ -1,6 +1,6 @@
-import { apiClient, ensureAccessToken, getJson, tokenStorage } from "@/services/client";
+import { apiClient, refreshSession, tokenStorage } from "@/services/client";
 import type { AxiosRequestConfig } from "axios";
-import type { AuthResponse, User } from "@/types/api";
+import type { AuthResponse } from "@/types/api";
 
 const skipAuthRefreshConfig: AxiosRequestConfig & { skipAuthRefresh?: boolean } = { skipAuthRefresh: true };
 
@@ -23,11 +23,9 @@ export const authService = {
     const { data } = await apiClient.post<{ status: string; message: string }>("/auth/reset-password", payload, skipAuthRefreshConfig);
     return data;
   },
-  async refresh() {
-    const token = await ensureAccessToken();
-    return Boolean(token);
+  async refresh(): Promise<AuthResponse | null> {
+    return refreshSession();
   },
-  me: () => getJson<User>("/auth/me"),
   async logout() {
     try {
       await apiClient.post("/auth/logout");
