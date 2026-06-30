@@ -415,6 +415,102 @@ export interface Reminder {
   created_at?: string;
 }
 
+export interface Loop {
+  id: number;
+  loop_id: number;
+  name: string;
+  search_query: string;
+  sources: string[];
+  platforms: string[];
+  is_active: boolean;
+  auto_apply_enabled: boolean;
+  daily_budget: number;
+  max_applications_per_run: number;
+  min_score_threshold: number;
+  channels: string[];
+  schedule_interval_hours: number;
+  last_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LoopRun {
+  id: number;
+  loop_run_id: number;
+  loop_id: number;
+  status: string;
+  jobs_discovered: number;
+  jobs_qualified: number;
+  applications_sent: number;
+  applications_failed: number;
+  budget_consumed: number;
+  started_at: string;
+  completed_at: string | null;
+  error_message: string | null;
+}
+
+export interface AutoApplyLog {
+  id: number;
+  auto_apply_log_id: number;
+  job_id: number;
+  channel: string;
+  status: string;
+  score: number | null;
+  error_message: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface LoopStatus {
+  loop: Loop;
+  daily_usage: number;
+  daily_budget: number;
+  budget_remaining: number;
+  recent_runs: LoopRun[];
+}
+
+export interface AutoApplyStats {
+  total: number;
+  submitted: number;
+  failed: number;
+  skipped: number;
+  pending: number;
+  needs_approval: number;
+  budget_exceeded: number;
+  period_days: number;
+}
+
+export interface AutoApplyHealth {
+  status: string;
+  timestamp: string;
+  warnings: string[];
+  circuit_breaker: {
+    total_sources: number;
+    open: number;
+    degraded: number;
+    open_sources: { source: string; cooldown_remaining_s: number }[];
+    degraded_sources: { source: string; failures: number }[];
+  };
+  loops: {
+    total: number;
+    active: number;
+    today_budget: number;
+    today_usage: number;
+    budget_remaining: number;
+  };
+  runs: {
+    total_last_7d: number;
+    success: number;
+    failed: number;
+    errors: number;
+    success_rate_pct: number;
+  };
+  auto_apply: {
+    applications_today: number;
+    stats_7d: AutoApplyStats;
+  };
+}
+
 export interface Recording {
   id: number;
   job_id?: number;

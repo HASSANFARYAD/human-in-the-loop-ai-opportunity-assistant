@@ -139,6 +139,14 @@ def _ensure_indexes() -> None:
     coll.agent_memory.create_index([("user_id", pymongo.ASCENDING), ("key", pymongo.ASCENDING)], unique=True)
     coll.agent_memory.create_index([("user_id", pymongo.ASCENDING), ("updated_at", pymongo.DESCENDING)])
 
+    # Loops & auto-apply
+    coll.loops.create_index([("user_id", pymongo.ASCENDING), ("workspace_id", pymongo.ASCENDING)])
+    coll.loops.create_index([("user_id", pymongo.ASCENDING), ("is_active", pymongo.ASCENDING), ("auto_apply_enabled", pymongo.ASCENDING)])
+    coll.loop_runs.create_index([("loop_id", pymongo.ASCENDING), ("user_id", pymongo.ASCENDING), ("workspace_id", pymongo.ASCENDING)])
+    coll.auto_apply_logs.create_index([("user_id", pymongo.ASCENDING), ("workspace_id", pymongo.ASCENDING)])
+    coll.auto_apply_logs.create_index([("loop_id", pymongo.ASCENDING), ("user_id", pymongo.ASCENDING)])
+    coll.auto_apply_logs.create_index([("user_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING)])
+
 
 def _ensure_default_user() -> dict[str, Any]:
     users = get_collection("users")

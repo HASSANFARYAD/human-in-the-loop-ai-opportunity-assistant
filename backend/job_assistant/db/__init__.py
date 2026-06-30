@@ -17,3 +17,5 @@ from job_assistant.db.publishing import *  # noqa: F401, F403
 from job_assistant.db.compliance import *  # noqa: F401, F403
 from job_assistant.db.seeding import *  # noqa: F401, F403
 from job_assistant.db.company_research import *  # noqa: F401, F403
+from job_assistant.db.loops import *  # noqa: F401, F403
+from job_assistant.db.auto_apply import *  # noqa: F401, F403
