@@ -16,6 +16,7 @@ import {
   Gauge,
   Inbox,
   Mail,
+  Repeat,
   Settings,
   Sparkles,
   Upload,
@@ -35,6 +36,7 @@ const groups = [
       { href: "/opportunities?import=manual", label: "Add Job", icon: Upload },
       { href: "/opportunities?materials=true", label: "Application Materials", icon: ClipboardList },
       { href: "/opportunities?reminders=true", label: "Reminders", icon: Inbox },
+      { href: "/loops", label: "Auto-Pilot", icon: Repeat },
     ],
   },
   {

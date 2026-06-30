@@ -252,19 +252,48 @@ def fetch_jobicy(query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
     return opportunities
 
 
-def fetch_remoteok(query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
-    params: dict[str, Any] = {}
-    if query.strip():
-        params["search"] = query.strip()
-    url = f"https://remoteok.com/api?{urlencode(params)}" if params else "https://remoteok.com/api"
+def fetch_remoteok(
+    query: str = "",
+    limit: int = 20,
+    location: str = "",
+    min_salary: int = 0,
+) -> List[Dict[str, Any]]:
+    url = "https://remoteok.com/api"
     response = requests.get(url, timeout=DEFAULT_TIMEOUT_SECONDS)
     response.raise_for_status()
     data = response.json()
+
+    raw_tags = [t.strip().lower() for t in query.replace("+", " ").split()] if query.strip() else []
+    loc_filter = location.strip().lower() if location else ""
 
     opportunities: list[dict[str, Any]] = []
     for row in data:
         if not isinstance(row, dict) or not row.get("id") or not row.get("position"):
             continue
+
+        pos = (row.get("position") or "").lower()
+        comp = (row.get("company") or "").lower()
+        desc = (row.get("description") or "").lower()
+        tags = " ".join(row.get("tags") or []).lower()
+
+        if raw_tags:
+            if not all(
+                t in pos or t in comp or t in desc or t in tags
+                for t in raw_tags
+            ):
+                continue
+
+        if loc_filter and loc_filter not in (row.get("location") or "").lower():
+            continue
+
+        sal_min = row.get("salary_min") or 0
+        sal_max = row.get("salary_max") or 0
+        if min_salary and sal_min and sal_max:
+            if sal_max < min_salary:
+                continue
+        elif min_salary and sal_min and sal_min < min_salary:
+            continue
+
         slug = row.get("slug", "")
         opportunities.append(
             {
@@ -276,8 +305,8 @@ def fetch_remoteok(query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
                 "source": "RemoteOK",
                 "date_received": _text(row.get("date"))[:10],
                 "description": _clean_html(row.get("description", "")),
-                "salary_min": None,
-                "salary_max": None,
+                "salary_min": sal_min if sal_min else None,
+                "salary_max": sal_max if sal_max else None,
                 "deadline": "",
                 "opportunity_type": "job",
                 "raw_text": ", ".join(row.get("tags", [])),
@@ -293,7 +322,8 @@ def fetch_muse(query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
     if query.strip():
         params["query"] = query.strip()
     url = f"https://www.themuse.com/api/public/jobs?{urlencode(params)}"
-    response = requests.get(url, timeout=DEFAULT_TIMEOUT_SECONDS)
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    response = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT_SECONDS)
     response.raise_for_status()
     data = response.json()
 

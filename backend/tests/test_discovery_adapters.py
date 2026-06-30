@@ -379,7 +379,7 @@ class TestFetchMuse:
             ]
         }
 
-        def fake_get(url, timeout):
+        def fake_get(url, timeout, **kwargs):
             class FakeResponse:
                 def raise_for_status(self):
                     pass
@@ -416,7 +416,7 @@ class TestFetchMuse:
             ]
         }
 
-        def fake_get(url, timeout):
+        def fake_get(url, timeout, **kwargs):
             class FakeResponse:
                 def raise_for_status(self):
                     pass
@@ -435,7 +435,7 @@ class TestFetchMuse:
         from job_assistant.services import public_discovery
         fake_json = {"results": []}
 
-        def fake_get(url, timeout):
+        def fake_get(url, timeout, **kwargs):
             class FakeResponse:
                 def raise_for_status(self):
                     pass

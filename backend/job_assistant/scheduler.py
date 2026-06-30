@@ -31,6 +31,7 @@ from job_assistant.services.rapidapi_linkedin import (
 )
 from job_assistant.services.linkedin_integration import search_linkedin_jobs_official
 from job_assistant.services.scoring import score_job
+from job_assistant.services.loops import check_and_run_due_loops
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,16 @@ class JobAssistantScheduler:
             trigger=IntervalTrigger(hours=public_hours),
             id="public_source_check",
             name="Check public opportunity sources",
+            replace_existing=True,
+            max_instances=1,
+        )
+
+        # Run due auto-pilot loops every 30 minutes
+        self.scheduler.add_job(
+            self._check_loops,
+            trigger=IntervalTrigger(minutes=30),
+            id="loop_check",
+            name="Check and run due auto-pilot loops",
             replace_existing=True,
             max_instances=1,
         )
@@ -322,6 +333,23 @@ class JobAssistantScheduler:
                 logger.info(f"Found {len(reminders)} due reminder(s)")
         except Exception as e:
             logger.error(f"Reminder check failed: {e}")
+
+    def _check_loops(self):
+        try:
+            prefs = get_automation_preferences(self.user_id)
+            if not prefs.get("enabled"):
+                logger.info("Automation disabled, skipping loop check")
+                return
+            results = check_and_run_due_loops(self.user_id)
+            completed = sum(1 for r in results if r.get("status") == "completed")
+            failed = sum(1 for r in results if r.get("status") in ("error", "failed"))
+            budget_exhausted = sum(1 for r in results if r.get("status") == "budget_exhausted")
+            if results:
+                logger.info("Loop check complete: %d completed, %d failed, %d budget exhausted", completed, failed, budget_exhausted)
+                from job_assistant.db import add_activity_event
+                add_activity_event(self.user_id, "Auto-pilot loop check", f"{completed} loops completed, {failed} failed, {budget_exhausted} budget exhausted")
+        except Exception as e:
+            logger.error("Loop check failed: %s", e)
 
     def _daily_summary(self):
         try:
