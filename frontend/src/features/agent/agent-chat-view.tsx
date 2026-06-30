@@ -453,7 +453,7 @@ export function AgentChatView() {
             rows={1}
             className="max-h-32 min-h-[44px] flex-1 resize-none"
           />
-          <Button type="submit" disabled={!input.trim() || busy} size="icon" className="h-11 w-11 shrink-0">
+          <Button type="submit" disabled={!input.trim() || busy} size="icon" className="h-11 w-11 shrink-0" aria-label="Send message">
             <Send className="h-4 w-4" />
           </Button>
         </form>
