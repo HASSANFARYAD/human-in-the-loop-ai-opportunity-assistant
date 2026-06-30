@@ -165,6 +165,7 @@ def _ensure_default_user() -> dict[str, Any]:
         "password_hash": _hash_default_password(DEFAULT_LOCAL_PASSWORD),
         "full_name": "Local User",
         "is_active": 1,
+        "failed_login_attempts": 0,
         "created_at": now,
         "updated_at": now,
     }

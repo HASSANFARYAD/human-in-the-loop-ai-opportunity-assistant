@@ -4,6 +4,8 @@ import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict
 
+import pymongo
+
 from job_assistant.db.core import _next_id, _token_hash, _strip_id, get_collection, utc_now
 
 __all__ = [
@@ -12,6 +14,7 @@ __all__ = [
     "create_password_reset_token", "get_password_reset_token",
     "consume_password_reset_token",
     "update_user_password", "revoke_user_sessions",
+    "increment_failed_login", "reset_failed_login",
 ]
 
 
@@ -25,6 +28,7 @@ def create_user(email: str, password_hash: str, full_name: str = "") -> int:
         "password_hash": password_hash,
         "full_name": full_name.strip(),
         "is_active": 1,
+        "failed_login_attempts": 0,
         "created_at": now,
         "updated_at": now,
     })
@@ -131,4 +135,24 @@ def revoke_user_sessions(user_id: int) -> None:
     get_collection("user_sessions").update_many(
         {"user_id": user_id, "revoked_at": None},
         {"$set": {"revoked_at": utc_now()}},
+    )
+
+
+def increment_failed_login(user_id: int) -> int:
+    result = get_collection("users").find_one_and_update(
+        {"user_id": user_id},
+        {"$inc": {"failed_login_attempts": 1}},
+        return_document=pymongo.ReturnDocument.AFTER,
+        projection={"failed_login_attempts": 1},
+    )
+    return (result or {}).get("failed_login_attempts", 0)
+
+
+def reset_failed_login(user_id: int) -> None:
+    get_collection("users").update_one(
+        {"user_id": user_id},
+        {
+            "$set": {"failed_login_attempts": 0, "updated_at": utc_now()},
+            "$unset": {"locked_until": ""},
+        },
     )
