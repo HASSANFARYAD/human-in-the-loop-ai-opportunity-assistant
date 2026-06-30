@@ -37,7 +37,7 @@ const MotionButton = motion.button;
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(({ className, variant, size, asChild = false, loading, disabled, children, ...props }, ref) => {
   if (asChild) {
     const Comp = Slot as React.ElementType;
-    return <Comp className={cn(buttonVariants({ variant, size, className }))} ref={ref} disabled={disabled || loading} {...(props as Record<string, unknown>)} />;
+    return <Comp className={cn(buttonVariants({ variant, size, className }))} ref={ref} disabled={disabled || loading} {...(props as Record<string, unknown>)}>{children}</Comp>;
   }
   return (
     <MotionButton
